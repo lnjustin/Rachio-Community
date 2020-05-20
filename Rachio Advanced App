@@ -410,7 +410,7 @@ def uninstalled() {
     //Remove any existing webhooks before uninstall...
     removeAllWebhooks()
     if(addRemoveDevices(true)) {
-        //Revokes Smartthings endpoint token...
+        //Revokes endpoint token...
         revokeAccessToken()
         //Revokes Rachio Auth Token
         if(atomicState?.authToken) {
@@ -661,37 +661,39 @@ def addRemoveDevices(uninst=false) {
                 //Check if the discovered sprinklers are already initiated with corresponding device types.
                 def d = getChildDevice(contDev?.key)
                 if(!d) {
-                    d = addChildDevice("tonesto7", getChildContName(), contDev?.key, null, [label: getDeviceLabelStr(contDev?.value?.name)])
-                    d.completedSetup = true
+                    d = addChildDevice("lnjustin", getChildContName(), contDev?.key, null, [label: getDeviceLabelStr(contDev?.value?.name), completedSetup: true])
+                 //   d.completedSetup = true
                     log.info "Controller Device Created: (${d?.displayName}) with id: [${contDev?.key}]"
                 } else {
-                    //log.debug "found ${d?.displayName} with dni: ${dni?.key} already exists"
+                    log.debug "found ${d?.displayName} with dni: ${dni?.key} already exists"
                 }
                 devsInUse += contDev.key
                 contDev?.value?.zones?.each { zoneDni ->
                     //Check if the discovered sprinklers are already initiated with corresponding device types.
                     def d2 = getChildDevice(zoneDni?.key)
                     if(!d2) {
-                        d2 = addChildDevice("tonesto7", getChildZoneName(), zoneDni?.key, null, [label: getDeviceLabelStr(zoneDni?.value)])
-                        d2.completedSetup = true
+                        d2 = addChildDevice("lnjustin", getChildZoneName(), zoneDni?.key, null, [label: getDeviceLabelStr(zoneDni?.value), completedSetup: true])
+                      //  d2.completedSetup = true
                         log.info "Zone Device Created: (${d2?.displayName}) with id: [${zoneDni?.key}]"
                     } else {
-                        //log.debug "found ${d2?.displayName} with dni: ${zoneDni?.key} already exists"
+                        log.debug "found ${d2?.displayName} with dni: ${zoneDni?.key} already exists"
                     }
                     devsInUse += zoneDni?.key
                 }
             }
             //log.debug "devicesInUse: ${devsInUse}"
-            delete = app.getChildDevices(true).findAll { !(it?.deviceNetworkId in devsInUse) }
+            // delete = app.getChildDevices(true).findAll { !(it?.deviceNetworkId in devsInUse) }
+            delete = app.getChildDevices().findAll { !(it?.deviceNetworkId in devsInUse) }
         } else {
             atomicState?.selectedDevices = []
-            delete = app.getChildDevices(true)
+            // delete = app.getChildDevices(true)
+            delete = app.getChildDevices()
         }
         if(delete?.size() > 0) {
             log.warn "Device Delete: ${delete} | Removing (${delete?.size()}) Devices..."
             delete?.each {
                 cleanupObjects(it?.deviceNetworkId)
-                deleteChildDevice(it?.deviceNetworkId, true)
+                deleteChildDevice(it?.deviceNetworkId)
                 log.warn "Deleted the Device: ${it?.displayName}"
             }
         }
@@ -970,7 +972,8 @@ def sendPushAndFeeds(notificationMessage){
 }
 
 def sendActivityFeeds(notificationMessage) {
-    def devices = app.getChildDevices(true)
+   // def devices = app.getChildDevices(true)
+    def devices = app.getChildDevices()
     devices.each { child ->
            //update(child)
         child.generateActivityFeedsEvent(notificationMessage)
