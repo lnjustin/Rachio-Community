@@ -1,7 +1,8 @@
 /**
  *  Rachio Controller Device Handler
  *
- *  Copyright\u00A9 2018 Anthony Santilli, Justin Leonard
+ *  Copyright\u00A9 2018 Anthony Santilli
+ *  Copyright\u00A9 2020 Justin Leonard
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -12,7 +13,8 @@
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
  *
- *	Modified: 7-11-2018, 5-19-2020
+ * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
+ * V2.0:    Ported to Hubitat; Exposed additional information, including next run, last run, rain sensor state, etc. (05-21-2020) 
  */
 
 import java.text.SimpleDateFormat
@@ -209,6 +211,7 @@ def generateEvent(Map results) {
         state?.deviceId = device?.deviceNetworkId.toString()
         state?.pauseInStandby = (results?.pauseInStandby == true)
         hardwareModelEvent(results?.data?.model)
+        detailsDataEvent(results?.detailsData)
         activeZoneCntEvent(results?.data?.zones)
         controllerOnEvent(results?.data?.on)
         def isOnline = results?.status == "ONLINE" ? true : false
@@ -312,26 +315,32 @@ def hardwareModelEvent(val) {
         case "GENERATION1_8ZONE":
             newModel = "8ZoneV1"
             newDesc = "8-Zone (Gen 1)"
+            state?.controllerDescription = "gen1IrrigationController"
             break
         case "GENERATION1_16ZONE":
             newModel = "16ZoneV1"
             newDesc = "16-Zone (Gen 1)"
+            state?.controllerDescription = "gen1IrrigationController"
             break
         case "GENERATION2_8ZONE":
             newModel = "8ZoneV2"
             newDesc = "8-Zone (Gen 2)"
+            state?.controllerDescription = "gen2IrrigationController"
             break
         case "GENERATION2_16ZONE":
             newModel = "16ZoneV2"
             newDesc = "16-Zone (Gen 2)"
+            state?.controllerDescription = "gen2IrrigationController"
             break
         case "GENERATION3_8ZONE":
             newModel = "8ZoneV3"
             newDesc = "8-Zone (Gen 3)"
+            state?.controllerDescription = "gen3IrrigationController"
             break
         case "GENERATION3_16ZONE":
             newModel = "16ZoneV3"
             newDesc = "16-Zone (Gen 3)"
+            state?.controllerDescription = "gen3IrrigationController"
             break
     }
     if(isStateChange(device, "hardwareModel", newModel.toString())) {
@@ -401,7 +410,12 @@ def stateDataEvent(stateData) {
     sendEvent(name:'lastRun', value: formatUtcDt(stateData.state?.lastRun))
     sendEvent(name:'nextRun', value: formatUtcDt(stateData.state?.nextRun))
 }
-        
+  
+def detailsDataEvent(detailsData) {
+    state?.detailsData = detailsData
+    def controllerDetails = detailsData.get(state?.controllerDescription)
+    state?.locationID = controllerDetails.locationId
+}     
 
 def scheduleDataEvent(sData, zData, rainDelay) {
     //log.trace "scheduleDataEvent($data)..."
