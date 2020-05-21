@@ -617,7 +617,26 @@ def getCurSchedule(devId) {
 
 def getDeviceData(devId) {
     //log.trace "getDeviceData($devId)..."
-    return _httpGet("device_with_current_schedule/${devId}")
+    def result = _httpGet("device_with_current_schedule/${devId}")
+    log.trace "getDeviceData: ${result}"
+    return result
+}
+
+def getDeviceUpcomingEvents(devId, hoursAhead=48) {
+    log.trace "getDeviceUpcomingEvents(${devId})..."
+    def jsonData = new JsonBuilder("device_id":devId, "hours_ahead":hoursAhead)
+    def result = sendJsonGetResponse("events/upcoming", jsonData?.toString(), deviceId, false, "closed", "post")
+    log.trace "Upcoming Events: ${result})"
+    return result
+}
+
+// TO DO: specify default start date and end date?
+def getDeviceWateringSummary(devId, start_date, end_date) {
+    log.trace "getDeviceWateringSummary(${devId})..."
+    def jsonData = new JsonBuilder("device_id":devId, "start_date":start_date, "end_date":end_date)
+    def result = sendJson("events/getWateringSummaryByInterval", jsonData?.toString(), deviceId, false, "closed", "put")
+    log.trace "Watering Summary: ${result})"
+    return result
 }
 
 def cleanupObjects(id){
@@ -754,6 +773,7 @@ void poll(child=null, type=null) {
     def zoneCnt = 0
     selectedDevices?.each { cont->
         def devData = getDeviceData(cont?.key)
+        def devUpcomingEvents = getDeviceUpcomingEvents(cont?.key)
         def cDev = getChildDevice(cont?.key)
         if(cDev) {
             ctrlCnt = ctrlCnt+1
@@ -901,6 +921,56 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
     return returnStatus
 }
 
+def sendJsonGetResponse(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", type=null) {
+    log.trace "Send JSON With Response: ${jsonBody}"
+    def returnStatus = false
+    def returnData = null
+    def response = null
+    def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
+    def cmdParams = [
+        uri: "${baseURI}/${subUri}",
+        requestContentType: "application/x-www-form-urlencoded; charset=utf-8",
+        headers: ["Authorization": "Bearer ${atomicState?.authToken}", "Content-Type": "application/json"],
+        body: jsonBody
+    ]
+
+    try{
+        if(!standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
+            log.debug "Skipping this command while controller is in 'Standby Mode'..."
+            return true
+        }
+        if(type == "post") {
+            httpPost(cmdParams) { resp ->
+                response = resp
+            }
+        }
+        else if(type == "put") {
+            httpPut(cmdParams) { resp ->
+                response = resp
+            }
+        }
+        if(response) {
+            returnData = response?.data
+            if(response?.status in [200, 201, 204]) {
+                returnStatus = true
+                //runIn(4, "poll", [overwrite: true])
+            } else {
+                //refresh the auth token
+                if (response?.status == 401) {
+                    log.debug "Refreshing your authToken!"
+                    // refreshAuthToken()
+                } else {
+                    log.error "Response status: ${response?.status} - Authentication error, invalid authentication method, lack of credentials, etc."
+                }
+            }
+
+        } else { return returnStatus }
+    } catch(Exception e) {
+        log.error "sendJson Exception Error: ${e}"
+    }
+    return returnData
+}
+
 //Section6: helper methods ---------------------------------------------------------------------------------------------
 
 def toJson(Map m) {
@@ -919,7 +989,7 @@ def formatDt(dt) {
     def tf = new SimpleDateFormat("MMM d, yyyy - h:mm:ss a")
     if(location?.timeZone) { tf?.setTimeZone(location?.timeZone) }
     else {
-        log.warn "SmartThings TimeZone is not found or is not set... Please Try to open your ST location and Press Save..."
+        log.warn "Hubitat TimeZone is not found or is not set... Please Try to open your Hubitat location and Press Save..."
         return null
     }
     return tf.format(dt)
@@ -956,7 +1026,7 @@ def getChildZoneName()	{ return "Rachio Zone" }
 def getShardUrl()		{ return getApiServerUrl() }
 def getAppEndpoint()	{ return "https://app.rach.io" }
 def getApiEndpoint()	{ return "https://api.rach.io" }
-def getClosedApiEndpoint()	{ return " https://cloud-rest.rach.io" }
+def getClosedApiEndpoint()	{ return "https://cloud-rest.rach.io" }
 def getSupportUrl() 	{ return "http://support.rachio.com/" }
 def getCommunityUrl() 	{ return "http://community.rachio.com/" }
 def rootApiUrl() { return "https://api.rach.io/1/public" }
