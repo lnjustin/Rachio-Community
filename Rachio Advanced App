@@ -622,11 +622,26 @@ def getDeviceData(devId) {
     return result
 }
 
+def getDeviceDetails(devId) {
+    //log.trace "getDeviceDetails($devId)..."
+    def result = _httpGet("device/getDeviceDetails/${devId}", "closed")
+    log.trace "getDeviceDetails: ${result}"
+    return result
+}
+
 def getDeviceUpcomingEvents(devId, hoursAhead=48) {
     log.trace "getDeviceUpcomingEvents(${devId})..."
     def jsonData = new JsonBuilder("device_id":devId, "hours_ahead":hoursAhead)
-    def result = sendJsonGetResponse("events/upcoming", jsonData?.toString(), deviceId, false, "closed", "post")
+    def result = sendJsonGetResponse("events/upcoming", jsonData?.toString(), "closed", "post")
     log.trace "Upcoming Events: ${result})"
+    return result
+}
+
+def getDeviceAlerts(devId) {
+    log.trace "getDeviceAlerts(${devId})..."
+    def jsonData = new JsonBuilder("device_id":devId)
+    def result = sendJsonGetResponse("device/getActiveAlerts", jsonData?.toString(), "closed", "post")
+    log.trace "Active Alerts: ${result})"
     return result
 }
 
@@ -634,8 +649,24 @@ def getDeviceUpcomingEvents(devId, hoursAhead=48) {
 def getDeviceWateringSummary(devId, start_date, end_date) {
     log.trace "getDeviceWateringSummary(${devId})..."
     def jsonData = new JsonBuilder("device_id":devId, "start_date":start_date, "end_date":end_date)
-    def result = sendJson("events/getWateringSummaryByInterval", jsonData?.toString(), deviceId, false, "closed", "put")
+    def result = sendJsonGetResponse("events/getWateringSummaryByInterval", jsonData?.toString(), deviceId, false, "closed", "put")
     log.trace "Watering Summary: ${result})"
+    return result
+}
+
+def getCalendar(locId, start_time, end_time) {
+    log.trace "getCalendar(${locId})..."
+    def jsonData = new JsonBuilder("location_id":devId, "start_time":start_time, "end_time":end_time)
+    def result = sendJsonGetResponse("location/getCalendarForTimeRange", jsonData?.toString(), "closed", "post")
+    log.trace "Calendar: ${result})"
+    return result
+}
+
+def getWeather(locId, start_date, end_date) {
+    log.trace "getWeather(${locId})..."
+    def jsonData = new JsonBuilder("location_id":devId, "start_date":start_date, "end_date":end_date)
+    def result = sendJsonGetResponse("location/getWeatherByLocation", jsonData?.toString(), "closed", "post")
+    log.trace "Weather: ${result})"
     return result
 }
 
@@ -773,6 +804,7 @@ void poll(child=null, type=null) {
     def zoneCnt = 0
     selectedDevices?.each { cont->
         def devData = getDeviceData(cont?.key)
+        def devDetails = getDeviceDetails(cont?.key)
         def devUpcomingEvents = getDeviceUpcomingEvents(cont?.key)
         def cDev = getChildDevice(cont?.key)
         if(cDev) {
@@ -921,7 +953,7 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
     return returnStatus
 }
 
-def sendJsonGetResponse(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", type=null) {
+def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
     log.trace "Send JSON With Response: ${jsonBody}"
     def returnStatus = false
     def returnData = null
@@ -935,10 +967,7 @@ def sendJsonGetResponse(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="
     ]
 
     try{
-        if(!standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
-            log.debug "Skipping this command while controller is in 'Standby Mode'..."
-            return true
-        }
+
         if(type == "post") {
             httpPost(cmdParams) { resp ->
                 response = resp
