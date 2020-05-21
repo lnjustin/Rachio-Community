@@ -52,6 +52,9 @@ metadata {
         attribute "zoneElapsed", "number"
         attribute "zoneStartDate", "string"
         attribute "zoneCycleCount", "number"
+        
+        attribute "lastRun", "string"
+        attribute "nextRun", "string"
 
         //custom nozzle data
         attribute "nozzleName", "string"
@@ -208,6 +211,8 @@ def generateEvent(Map results) {
 
         zoneNameEvent(results?.data?.name)
         zoneNumEvent(results?.data?.zoneNumber)
+        
+        stateDataEvent(results?.stateData)
 
         state?.zoneImageUrl = results?.data?.imageUrl
         def isOnline = results?.status == "ONLINE" ? true : false
@@ -239,7 +244,7 @@ def generateEvent(Map results) {
         efficiencyEvent(results?.data?.efficiency)
 
         if(!device?.currentState("zoneWaterTime")?.value) {
-            setZoneWaterTime(parent?.settings?.defaultZoneTime.toInteger())
+            setZoneWaterTime(parent?.settings?.defaultZoneTime)
         }
 
         scheduleDataEvent(results?.schedData)
@@ -436,9 +441,15 @@ def zoneNameEvent(val) {
     }
 }
 
+def stateDataEvent(stateData) {
+    state?.stateData = stateData
+    sendEvent(name:'lastRun', value: formatUtcDt(stateData?.lastRun))
+    sendEvent(name:'nextRun', value: formatUtcDt(stateData?.nextRun))
+}
+
 def setZoneWaterTime(timeVal) {
     def curState = device?.currentState("zoneWaterTime")?.value.toString()
-    def newVal = timeVal ? timeVal.toInteger() : parent?.settings?.defaultZoneTime.toInteger()
+    def newVal = timeVal ? timeVal.toInteger() : parent?.settings?.defaultZoneTime
     if(isStateChange(device, "zoneWaterTime", newVal.toString())) {
         log.debug("UPDATED: Manual Zone Water Time (${newVal}) | Previous: (${curState})")
         sendEvent(name: 'zoneWaterTime', value: newVal, displayed: true)
@@ -680,4 +691,17 @@ def getTimeDiffSeconds(strtDate, stpDate=null) {
 		def diff = (int) (long) (stop - start) / 1000
 		return diff
 	} else { return null }
+}
+
+
+def formatUtcDt(utcDt, mdy = true) {
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    
+	//log.trace "formatDt($dt, $mdy)..."
+	def formatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
+	def outFormat = new SimpleDateFormat(formatVal)
+    if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
+    
+	return outFormat.format(inFormat.parse(utcDt))
 }
