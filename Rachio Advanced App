@@ -181,7 +181,9 @@ void settingUpdate(name, value, type=null) {
 
 void settingRemove(name) {
 	log.trace "settingRemove($name)..."
-	if(name) { app?.deleteSetting("$name") }
+    
+     // if(name) { app?.deleteSetting("$name") }
+	if(name) { app?.removeSetting("$name") }  // ported line
 }
 
 void appCleanup() {
@@ -327,11 +329,12 @@ def getHardwareInfo(val) {
 
 def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/tonesto7/rachio-manager/master/images/$imgName" }
 
-def _httpGet(subUri) {
+def _httpGet(subUri, endpoint="open") {
     //log.debug "_httpGet($subUri)"
     try {
+        def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
         def params = [
-            uri: "${apiEndpoint}/1/public/${subUri}",
+            uri: "${baseURI}/${subUri}",
             headers: ["Authorization": "Bearer ${atomicState.authToken}"]
         ]
         httpGet(params) { resp ->
@@ -389,7 +392,7 @@ def initialize() {
     subscribe(app, onAppTouch)
     updateDevZoneStates() //Creates the selectedDevices maps in state
     runIn(2, "initStep2", [overwrite: true])
-    sendActivityFeeds("is connected to SmartThings")
+    sendActivityFeeds("is connected to Hubitat")
     atomicState.timeSendPush = null
 }
 
@@ -411,7 +414,9 @@ def uninstalled() {
     removeAllWebhooks()
     if(addRemoveDevices(true)) {
         //Revokes endpoint token...
-        revokeAccessToken()
+              //  revokeAccessToken()
+        state.accessToken = null   // ported line
+        
         //Revokes Rachio Auth Token
         if(atomicState?.authToken) {
           atomicState?.authToken = null
@@ -502,8 +507,9 @@ void removeAllWebhooks() {
 
 //Returns the available event types to subscribe to.
 def webhookEvtTypes() {
+    log.debug "Updating webhook event types"
     def typeIds = []
-    def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT"] //, "WEATHER_INTELLIGENCE_EVENT", "RAIN_DELAY_EVENT"]
+    def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT"]   // , "WEATHER_INTELLIGENCE_EVENT", "RAIN_DELAY_EVENT"]
     def data = _httpGet("notification/webhook_event_type")
     if(data) {
         typeIds = data?.findAll { it?.name in okTypes }.collect { ["id":it?.id?.toString()] }
@@ -518,6 +524,7 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
     def response = null
     def cmdParams = [
         uri: url,
+        requestContentType: "application/x-www-form-urlencoded; charset=utf-8",
         headers: ["Authorization": "Bearer ${atomicState?.authToken}", "Content-Type": "application/json"],
         body: jsonBody
     ]
@@ -612,8 +619,6 @@ def getDeviceData(devId) {
     //log.trace "getDeviceData($devId)..."
     return _httpGet("device_with_current_schedule/${devId}")
 }
-
-def rootApiUrl() { return "https://api.rach.io/1/public" }
 
 def cleanupObjects(id){
     if(settings?."${id}_zones") { settingRemove("${id}_zones") }
@@ -856,11 +861,14 @@ def setValue(child, deviceId, newValue) {
     return result
 }
 
-def sendJson(subUri, jsonBody, deviceId, standbyCmd=false) {
+def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
     //log.trace "Sending: ${jsonBody}"
     def returnStatus = false
+    
+    def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
     def cmdParams = [
-        uri: "${apiEndpoint}/1/public/${subUri}",
+        uri: "${baseURI}/${subUri}",
+        requestContentType: "application/x-www-form-urlencoded; charset=utf-8",
         headers: ["Authorization": "Bearer ${atomicState?.authToken}", "Content-Type": "application/json"],
         body: jsonBody
     ]
@@ -944,12 +952,14 @@ def GetTimeValDiff(timeVal) {
 
 def getChildContName()	{ return "Rachio Controller" }
 def getChildZoneName()	{ return "Rachio Zone" }
-def getServerUrl()		{ return "https://graph.api.smartthings.com" }
+// def getServerUrl()		{ return "https://graph.api.smartthings.com" }    // commented out in port - doesn't seem to be needed?
 def getShardUrl()		{ return getApiServerUrl() }
 def getAppEndpoint()	{ return "https://app.rach.io" }
 def getApiEndpoint()	{ return "https://api.rach.io" }
+def getClosedApiEndpoint()	{ return " https://cloud-rest.rach.io" }
 def getSupportUrl() 	{ return "http://support.rachio.com/" }
 def getCommunityUrl() 	{ return "http://community.rachio.com/" }
+def rootApiUrl() { return "https://api.rach.io/1/public" }
 
 def debugEventFromParent(child, message) {
     child.sendEvent("name":"debugEventFromParent", "value":message, "description":message, displayed: true, isStateChange: true)
