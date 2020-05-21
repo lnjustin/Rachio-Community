@@ -455,7 +455,7 @@ def initWebhook(controlId) {
     def whId = atomicState?.webhookIds ?: [:]
     def cmdType = whId[controlId] == null ? "post" : "put"
     def apiWebhookUrl = "${rootApiUrl()}/notification/webhook"
-    def endpointUrl = apiServerUrl("/api/token/${atomicState?.accessToken}/smartapps/installations/${app.id}/rachioReceiver")
+    def endpointUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/rachioReceiver?access_token=${atomicState?.accessToken}"
     def bodyData
     if(!whId[controlId]) { 
         bodyData = new JsonOutput().toJson([device:[id: controlId], externalId: app.id, url: endpointUrl, eventTypes: webhookEvtTypes()])
