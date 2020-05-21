@@ -1,9 +1,9 @@
 /**
- *  Rachio Advanced
+ *  Rachio Community
  *
  *  Copyright\u00A9 2018 Rachio Inc.
  *  SmartThings version written by Anthony Santilli (@tonesto7)
- *  Ported to Hubitat by Justin Leonard (@JustinL)
+ *  Ported to Hubitat and Enhanced by Justin Leonard (@JustinL)
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -14,6 +14,8 @@
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
  *
+ * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
+ * V2.0:    Ported to Hubitat; Added closed API calls to pull in additional information (05-21-2020)     
  */
 
 import groovy.json.*
@@ -24,7 +26,7 @@ definition(
     name: "Rachio Advanced",
     namespace: "lnjustin",
     author: "Anthony Santilli, Justin Leonard",
-    description: "Advanced version of Rachio Integration.",
+    description: "Community version of Rachio Integration.",
     category: "Green Living",
     iconUrl: "https://s3-us-west-2.amazonaws.com/rachio-media/smartthings/Rachio-logo-100px.png",
     iconX2Url: "https://s3-us-west-2.amazonaws.com/rachio-media/smartthings/Rachio-logo-200px.png",
@@ -622,6 +624,15 @@ def getDeviceData(devId) {
     return result
 }
 
+
+def getDeviceState(devId) {
+    //log.trace "getDeviceState($devId)..."
+    def result = _httpGet("device/getDeviceState/${devId}", "closed")
+    log.trace "getDeviceState: ${result}"
+    return result
+}
+
+// Gets location id for device
 def getDeviceDetails(devId) {
     //log.trace "getDeviceDetails($devId)..."
     def result = _httpGet("device/getDeviceDetails/${devId}", "closed")
@@ -804,8 +815,6 @@ void poll(child=null, type=null) {
     def zoneCnt = 0
     selectedDevices?.each { cont->
         def devData = getDeviceData(cont?.key)
-        def devDetails = getDeviceDetails(cont?.key)
-        def devUpcomingEvents = getDeviceUpcomingEvents(cont?.key)
         def cDev = getChildDevice(cont?.key)
         if(cDev) {
             ctrlCnt = ctrlCnt+1
@@ -835,6 +844,8 @@ def pollChildren(childDev, devData) {
             String devLabel = childDev?.label
             def schedData = devData.currentSchedule
             def devStatus = devData
+            
+            // TO DO: check rain delay - I don't think this rain delay info is in the devData result
             def rainDelay = getCurrentRainDelay(devStatus)
             def status = devStatus?.status
             def onlStatus = status?.toString()?.toLowerCase() == "online" ? "online" : "offline"
@@ -856,7 +867,12 @@ def pollChildren(childDev, devData) {
                         childDev?.label = newLabel
                         log.info "Controller Label has changed from (${devLabel}) to [${newLabel}]"
                     }
-                    data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby]
+                    
+                    def devUpcomingEvents = getDeviceUpcomingEvents(contDev?.key)
+                    def devDetails = getDeviceDetails(contDev?.key)
+                    def devState = getDeviceState(contDev?.key)
+                    
+                    data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: devState]
                 } else {
                     contDev?.value?.zones?.each { zone ->
                         if (dni == zone?.key) {
