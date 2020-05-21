@@ -52,6 +52,10 @@ metadata {
         attribute "rainDelayStr", "string"
         attribute "standbyMode", "string"
 
+        attribute "lastRun", "string"
+        attribute "nextRun", "string"
+        attribute "rainSensorTripped", "boolean"
+        
         attribute "lastUpdatedDt", "string"
 
         command "stopWatering"
@@ -104,6 +108,9 @@ metadata {
             state "default", label: 'Online Status:\n${currentValue}'
         }
         valueTile("controllerRunStatus", "device.controllerRunStatus", inactiveLabel: true, width: 4, height: 2, decoration: "flat") {
+            state "default", label: '${currentValue}'
+        }
+        valueTile("upcomingEvent", "device.upcomingEvent", inactiveLabel: true, width: 4, height: 2, decoration: "flat") {
             state "default", label: '${currentValue}'
         }
         valueTile("blank", "device.blank", width: 2, height: 1, decoration: "flat") {
@@ -217,9 +224,10 @@ def generateEvent(Map results) {
                 markStandby()
             } else { isWateringEvent(results?.schedData?.status, results?.schedData?.zoneId) }
         }
-        if(!device?.currentState("curZoneWaterTime")?.value) { setZoneWaterTime(parent?.settings?.defaultZoneTime.toInteger()) }
+        if(!device?.currentState("curZoneWaterTime")?.value) { setZoneWaterTime(parent?.settings?.defaultZoneTime) }
         scheduleDataEvent(results?.schedData, results?.data.zones, results?.rainDelay)
         rainDelayValEvent(results?.rainDelay)
+        stateDataEvent(results?.stateData)
         if(isOnline) { lastUpdatedEvent() }
     }
     return "Controller"
@@ -380,12 +388,20 @@ def rainDelayValEvent(val) {
 
 def setZoneWaterTime(timeVal) {
     def curState = device?.currentState("curZoneWaterTime")?.value.toString()
-    def newVal = timeVal ? timeVal.toInteger() : parent?.settings?.defaultZoneTime.toInteger()
+    def newVal = timeVal ? timeVal.toInteger() : parent?.settings?.defaultZoneTime
     if(isStateChange(device, "curZoneWaterTime", newVal.toString())) {
         log.debug("UPDATED: Manual Zone Water Time (${newVal}) | Previous: (${curState})")
         sendEvent(name: 'curZoneWaterTime', value: newVal, displayed: true)
     }
 }
+
+def stateDataEvent(stateData) {
+    state?.stateData = stateData
+    sendEvent(name:'rainSensorTripped', value: stateData.state?.rainSensorTripped)
+    sendEvent(name:'lastRun', value: stateData.state?.lastRun)
+    sendEvent(name:'nextRun', value: stateData.state?.nextRun)
+}
+        
 
 def scheduleDataEvent(sData, zData, rainDelay) {
     //log.trace "scheduleDataEvent($data)..."
@@ -616,6 +632,7 @@ def stopWatering() {
     close()
 }
 
+// TO DO: Check to see if this setRainDelay function is used and if it is why it uses "value" - seems like a bug
 def setRainDelay(rainDelay) {
     sendEvent("name":"rainDelay", "value": value)
     def res = parent?.setRainDelay(this, value);
