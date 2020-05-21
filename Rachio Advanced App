@@ -1,7 +1,9 @@
 /**
  *  Rachio Community
  *
- *  Copyright\u00A9 2018 Rachio Inc.
+ *  Copyright\u00A9 2018 Anthony Santilli
+ *  Copyright\u00A9 2020 Justin Leonard
+ *
  *  SmartThings version written by Anthony Santilli (@tonesto7)
  *  Ported to Hubitat and Enhanced by Justin Leonard (@JustinL)
  *
@@ -15,7 +17,7 @@
  *  for the specific language governing permissions and limitations under the License.
  *
  * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
- * V2.0:    Ported to Hubitat; Added closed API calls to pull in additional information (05-21-2020)     
+ * V2.0:    Ported to Hubitat; Added closed API calls to expose additional information, including next run, last run, rain sensor state, etc. (05-21-2020)     
  */
 
 import groovy.json.*
@@ -640,6 +642,13 @@ def getDeviceDetails(devId) {
     return result
 }
 
+def getZoneDetails(devId) {
+    //log.trace "getZoneDetails($devId)..."
+    def result = _httpGet("device/listZones/${devId}", "closed")
+    log.trace "getZoneDetails: ${result}"
+    return result
+}
+
 def getDeviceUpcomingEvents(devId, hoursAhead=48) {
     log.trace "getDeviceUpcomingEvents(${devId})..."
     def jsonData = new JsonBuilder("device_id":devId, "hours_ahead":hoursAhead)
@@ -815,14 +824,19 @@ void poll(child=null, type=null) {
     def zoneCnt = 0
     selectedDevices?.each { cont->
         def devData = getDeviceData(cont?.key)
+        def devDetails = getDeviceDetails(cont?.key)
+        def devState = getDeviceState(cont?.key)
+        def devUpcomingEvents = getDeviceUpcomingEvents(cont?.key)
+        def devZoneDetails = getZoneDetails(cont?.key)
+        
         def cDev = getChildDevice(cont?.key)
         if(cDev) {
             ctrlCnt = ctrlCnt+1
-            pollChild(cDev, devData)
+            pollChild(cDev, devData, devDetails, devState, devUpcomingEvents, devZoneDetails)
             cont?.value?.zones?.each { zone->
                 zoneCnt = zoneCnt+1
                 def zDev = getChildDevice(zone?.key)
-                if(zDev) { pollChild(zDev, devData) }
+                if(zDev) { pollChild(zDev, devData, devDetails, devState, devUpcomingEvents, devZoneDetails) }
             }
         }
     }
@@ -830,13 +844,13 @@ void poll(child=null, type=null) {
     atomicState?.lastPollDt = now()
 }
 
-def pollChild(child, devData) {
-    if (pollChildren(child, devData)){
+def pollChild(child, devData, devDetails, devState, devUpcomingEvents, devZoneDetails) {
+    if (pollChildren(child, devData, devDetails, devState, devUpcomingEvents, devZoneDetails)){
         //generate event for each (child) device type identified by different dni
     }
 }
 
-def pollChildren(childDev, devData) {
+def pollChildren(childDev, devData, devDetails, devState, devUpcomingEvents, devZoneDetails) {
     //log.trace "updating child device (${child?.label})" // | ${child?.device?.deviceNetworkId})"
     try {
         if(childDev && devData) {
@@ -847,6 +861,7 @@ def pollChildren(childDev, devData) {
             
             // TO DO: check rain delay - I don't think this rain delay info is in the devData result
             def rainDelay = getCurrentRainDelay(devStatus)
+            
             def status = devStatus?.status
             def onlStatus = status?.toString()?.toLowerCase() == "online" ? "online" : "offline"
             if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
@@ -868,21 +883,22 @@ def pollChildren(childDev, devData) {
                         log.info "Controller Label has changed from (${devLabel}) to [${newLabel}]"
                     }
                     
-                    def devUpcomingEvents = getDeviceUpcomingEvents(contDev?.key)
-                    def devDetails = getDeviceDetails(contDev?.key)
-                    def devState = getDeviceState(contDev?.key)
-                    
-                    data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: devState]
+                //    def devUpcomingEvents = getDeviceUpcomingEvents(contDev?.key)
+                //    def devDetails = getDeviceDetails(contDev?.key)
+                //    def devState = getDeviceState(contDev?.key)
+
+                    data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails]
                 } else {
                     contDev?.value?.zones?.each { zone ->
                         if (dni == zone?.key) {
                             def zoneData = findZoneData(zone?.key, devData)
+                            def zoneState = findZoneState(zone?.key, devZoneDetails)
                             def newLabel = getDeviceLabelStr(zone?.value).toString()
                             if(devLabel != newLabel) {
                                 childDev?.label = newLabel
                                 log.info "Zone Label has changed from (${devLabel}) to [${newLabel}]"
                             }
-                            data = [data: zoneData, schedData: schedData, devId: contDev?.key, status: status, standby: inStandby, pauseInStandby: pauseInStandby]
+                            data = [data: zoneData, schedData: schedData, devId: contDev?.key, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: zoneState]
                         }
                     }
                 }
@@ -920,6 +936,21 @@ void handleWateringSched(devId, val=false) {
 def findZoneData(devId, devData) {
     if(!devId || !devData) { return null }
     if(devData?.zones) { return devData?.zones.find { it?.id == devId } }
+    return null
+}
+
+def findZoneState(zoneId, zoneDetails) {
+    if(!zoneId || !zoneDetails) { return null }
+    if(zoneDetails?.zoneSummary) {
+        def zone = zoneDetails?.zoneSummary.find { it?.zoneDetail.id == zoneId } 
+        if (zone) {
+            if (zone.zoneState != null) {
+                zoneState = zone.zoneState
+                log.trace("Found Zone State: ${zoneState}")
+                return zoneState
+            }
+        }
+    }
     return null
 }
 
