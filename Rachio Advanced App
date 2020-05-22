@@ -17,7 +17,15 @@
  *  for the specific language governing permissions and limitations under the License.
  *
  * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
- * V2.0:    Ported to Hubitat; Added closed API calls to expose additional information, including next run, last run, rain sensor state, etc. (05-21-2020)     
+ * V2.0:    Ported to Hubitat; Added closed API calls to expose additional information, including next run, last run, rain sensor state, next upcoming event, weather intelligence info (05-21-2020)    
+
+
+ * TO DO:
+    - implement pause zone (e.g., pause if in shower, or if motion in yard)
+    - check rain delay info in existing code - suspicious of error
+    - track amount of rain last X days?
+    - track amount of rain forecasted in Y days?
+    - skip next run if amount of rain within Z days is greater than threshold? (but only if fixed schedule - don't mess up flex scheduling)
  */
 
 import groovy.json.*
@@ -166,6 +174,10 @@ def devicePage() {
                 paragraph "Select the Duration time to be used for manual Zone Runs (This can be changed under each zones device page)"
                 input(name: "defaultZoneTime", title: "Default Zone Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
             }
+            section("Dashboard Settings"){
+                input "numPastDaysDashboard", "number", title: "Number of Days in Past to Display on Dashboard", required: false, defaultValue: 1, submitOnChange: true
+                input "numFutureDaysDashboard", "number", title: "Number of Days in Future to Display on Dashboard", required: false, defaultValue: 3, submitOnChange: true
+            }
         }
         section() {
             href "supportPage", title: "Rachio Support", description: ""
@@ -313,20 +325,27 @@ def getDevGeneration(devId) {
     return null
 }
 
+def getDevJsonTag(devId) {
+    if(devId && atomicState?.modelInfo[devId] && atomicState?.modelInfo[devId]?.jsonTag) {
+        return atomicState?.modelInfo[devId]?.jsonTag
+    } 
+    return null
+}
+
 def getHardwareInfo(val) {
     switch(val) {
         case "GENERATION1_8ZONE":
-            return [model: "8ZoneV1", desc: "8-Zone (Gen 1)", img: getAppImg("rachio_gen1.png"), gen: "Gen1"]
+            return [model: "8ZoneV1", desc: "8-Zone (Gen 1)", img: getAppImg("rachio_gen1.png"), gen: "Gen1", jsonTag: "gen1IrrigationController"]
         case "GENERATION1_16ZONE":
-            return [model: "16ZoneV1", desc: "16-Zone (Gen 1)", img: getAppImg("rachio_gen1.png"), gen: "Gen1"]
+            return [model: "16ZoneV1", desc: "16-Zone (Gen 1)", img: getAppImg("rachio_gen1.png"), gen: "Gen1", jsonTag: "gen1IrrigationController"]
         case "GENERATION2_8ZONE":
-            return [model: "8ZoneV2", desc: "8-Zone (Gen 2)", img: getAppImg("rachio_gen2.png"), gen: "Gen2"]
+            return [model: "8ZoneV2", desc: "8-Zone (Gen 2)", img: getAppImg("rachio_gen2.png"), gen: "Gen2", jsonTag: "gen2IrrigationController"]
         case "GENERATION2_16ZONE":
-            return [model: "16ZoneV2", desc: "16-Zone (Gen 2)", img: getAppImg("rachio_gen2.png"), gen: "Gen2"]
+            return [model: "16ZoneV2", desc: "16-Zone (Gen 2)", img: getAppImg("rachio_gen2.png"), gen: "Gen2", jsonTag: "gen2IrrigationController"]
         case "GENERATION3_8ZONE":
-            return [model: "8ZoneV3", desc: "8-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3"]
+            return [model: "8ZoneV3", desc: "8-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_16ZONE":
-            return [model: "16ZoneV3", desc: "16-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3"]
+            return [model: "16ZoneV3", desc: "16-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
     }
     return [desc: null, model: null, img: "", gen: null]
 }
@@ -683,11 +702,44 @@ def getCalendar(locId, start_time, end_time) {
 }
 
 def getWeather(locId, start_date, end_date) {
+    // start_date and end_date are Date objects
     log.trace "getWeather(${locId})..."
-    def jsonData = new JsonBuilder("location_id":devId, "start_date":start_date, "end_date":end_date)
+    def jsonData = new JsonBuilder("location_id":locId, "start_date":getDateMap(start_date), "end_date":getDateMap(end_date))
     def result = sendJsonGetResponse("location/getWeatherByLocation", jsonData?.toString(), "closed", "post")
     log.trace "Weather: ${result})"
     return result
+}
+
+def getLocationId(devId, detailsData) {
+    def controllerDetails = detailsData.get(getDevJsonTag(devId))
+    if (controllerDetails) return controllerDetails.locationId   
+    return null
+}
+
+def getDashboardWeatherData(devId, detailsData) {
+    log.trace "getDashboardWeatherData(${devId})..."
+    def locationId = getLocationId(devId, detailsData)
+    if (locationId) {
+        return getWeather(locationId, getDashboardStartDate(), getDashboardEndDate())
+    }
+    return null
+}
+
+def getDashboardStartDate() {
+    def today = new Date()
+    def intDays = (int) numPastDaysDashboard
+    return today-intDays
+}
+
+def getDashboardEndDate() {
+    def today = new Date()
+    def intDays = (int) numFutureDaysDashboard
+    return today+intDays
+}
+
+def getDateMap(date) {
+    log.trace "date is: ${date} MONTH is ${date[Calendar.MONTH]+1}"
+    return [year: date[Calendar.YEAR], month: date[Calendar.MONTH]+1, day: date[Calendar.DATE]]
 }
 
 def cleanupObjects(id){
@@ -828,6 +880,7 @@ void poll(child=null, type=null) {
         def devState = getDeviceState(cont?.key)
         def devUpcomingEvents = getDeviceUpcomingEvents(cont?.key)
         def devZoneDetails = getZoneDetails(cont?.key)
+        def devDashboardWeatherData = getDashboardWeatherData(cont?.key, devDetails)
         
         def cDev = getChildDevice(cont?.key)
         if(cDev) {
@@ -887,7 +940,7 @@ def pollChildren(childDev, devData, devDetails, devState, devUpcomingEvents, dev
                 //    def devDetails = getDeviceDetails(contDev?.key)
                 //    def devState = getDeviceState(contDev?.key)
 
-                    data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails]
+                    data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails, upcomingEventsData: devUpcomingEvents]
                 } else {
                     contDev?.value?.zones?.each { zone ->
                         if (dni == zone?.key) {
@@ -1246,6 +1299,7 @@ def runAllZones(child, deviceId, mins) {
     return res
 }
 
+// TO DO: update this method with the latest API that includes pause zone
 def pauseScheduleRun(child) {
     log.trace "pauseScheduleRun..."
     def schedData = getCurSchedule(atomicState?.deviceId)
