@@ -27,6 +27,7 @@
 
  * TO DO:
     - implement pause zone (e.g., pause if in shower, or if motion in yard)
+    - check scheduleType field
  */
 
 import groovy.json.*
@@ -201,7 +202,7 @@ def devicePage() {
                     section("") {
                     def localUri = getFullLocalApiServerUrl() + "/rachioDashboard/${contID}?access_token=${state.accessToken}"
                     def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${contID}?access_token=${state.accessToken}"
-                        paragraph("Use the following URIs to access the Dashboard for Controller ${contID}(output as SVG image): <ul><li><strong>Local</strong>:<br /><a href='${localUri}'>${localUri}</a></li><li><strong>Cloud</strong>:<br/><a href='${cloudUri}'>${cloudUri}</a></li></ul>")
+                        paragraph("Use the following URIs to access the Dashboard for Controller ${contID} (output as SVG image): <ul><li><strong>Local</strong>:<br /><a href='${localUri}'>${localUri}</a></li><li><strong>Cloud</strong>:<br/><a href='${cloudUri}'>${cloudUri}</a></li></ul>")
                     }
                 }
             }
@@ -769,6 +770,15 @@ def getDeviceFutureEvents(devId, end_time) {
     return result
 }
 
+
+def getDeviceNextEvent(devId) {
+    //log.trace "getDeviceNextEvent(${devId})..."
+    def jsonData = new JsonBuilder("device_id":devId)
+    def result = sendJsonGetResponse("events/next", jsonData?.toString(), "closed", "post")
+    log.trace "Next Event: ${result})"
+    return result
+}
+
 def getDeviceAlerts(devId) {
     //log.trace "getDeviceAlerts(${devId})..."
     def jsonData = new JsonBuilder("device_id":devId)
@@ -947,18 +957,18 @@ void poll(child=null, type=null) {
         def devDetails = getDeviceDetails(cont?.key)
         def devState = getDeviceState(cont?.key)
         def devZoneDetails = getZoneDetails(cont?.key)
-        log.trace "Right before call watering summary"
+        def devNextEvent = getDeviceNextEvent(cont?.key)
         def devMonthlyWateringSummary = getDeviceWateringSummary(cont?.key, getMonthStart(), getMonthEnd()) 
         
         def cDev = getChildDevice(cont?.key)
         if(cDev) {
             ctrlCnt = ctrlCnt+1
-            pollChild(cDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary)
+            pollChild(cDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent)
             cont?.value?.zones?.each { zone->
                 zoneCnt = zoneCnt+1
                 def zDev = getChildDevice(zone?.key)
                // def zoneWateringJournal = getDashboardWateringJournalData(zone?.key)
-                if(zDev) { pollChild(zDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary) }
+                if(zDev) { pollChild(zDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent) }
             }
         }
     }
@@ -966,13 +976,13 @@ void poll(child=null, type=null) {
     atomicState?.lastPollDt = now()
 }
 
-def pollChild(child, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary) {
-    if (pollChildren(child, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary)){
+def pollChild(child, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent) {
+    if (pollChildren(child, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent)){
         //generate event for each (child) device type identified by different dni
     }
 }
 
-def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary) {
+def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent) {
     //log.trace "updating child device (${child?.label})" // | ${child?.device?.deviceNetworkId})"
     try {
         if(childDev && devData) {
@@ -1004,7 +1014,7 @@ def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMon
                         log.info "Controller Label has changed from (${devLabel}) to [${newLabel}]"
                     }
 
-                    data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails, wateringSummaryData: devMonthlyWateringSummary]
+                    data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails, wateringSummaryData: devMonthlyWateringSummary, nextEvent: devNextEvent]
                 } else {
                     contDev?.value?.zones?.each { zone ->
                         if (dni == zone?.key) {
