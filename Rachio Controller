@@ -14,7 +14,7 @@
  *  for the specific language governing permissions and limitations under the License.
  *
  * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
- * V2.0:    Ported to Hubitat; Exposed additional information, including next run, last run, rain sensor state, etc. (05-21-2020) 
+ * V2.0:    Ported to Hubitat; Exposed next run, last run, rain sensor state, next upcoming event, weather intelligence info (05-21-2020) 
  */
 
 import java.text.SimpleDateFormat
@@ -54,11 +54,22 @@ metadata {
         attribute "rainDelayStr", "string"
         attribute "standbyMode", "string"
 
+        attribute "lastRunStr", "string"
         attribute "lastRun", "string"
+        attribute "nextRunStr", "string"
         attribute "nextRun", "string"
+        attribute "upcomingEvent", "string"
+        attribute "upcomingEventType", "string"
+        attribute "weatherIntelligenceInfo", "string"
+        attribute "thresholdInfo", "string"
         attribute "rainSensorTripped", "boolean"
         
+        attribute "monthlyMinutesUsed", "number"
+        attribute "monthlyMinutesSaved", "number"
+        attribute "monthlyWeatherIntelligenceCount", "number"
+        
         attribute "lastUpdatedDt", "string"
+        attribute "notificationMessage", "string"
 
         command "stopWatering"
         command "setRainDelay", ["number"]
@@ -70,6 +81,8 @@ metadata {
         command "decZoneWaterTime"
         command "incZoneWaterTime"
         command "runAllZones"
+        command "pauseZoneRun"
+        command "resumeZoneRun"
         command "standbyOn"
         command "standbyOff"
         //command "pauseScheduleRun"
@@ -156,6 +169,9 @@ metadata {
         valueTile("runAllZonesTile", "device.curZoneWaterTime", inactiveLabel: false, width: 2 , height: 1, decoration: "flat") {
             state("default", label: 'Run All Zones\n${currentValue} Minutes', action:'runAllZones')
         }
+        valueTile("pauseZoneRunTile", "device.curZoneWaterTime", inactiveLabel: false, width: 2 , height: 1, decoration: "flat") {
+            state("default", label: 'Pause Zone Run', action:'pauseZoneRun')
+        }
         standardTile("standbyMode", "device.standbyMode", decoration: "flat", wordWrap: true, width: 2, height: 2) {
             state "on", label:'Turn Standby Off', action:"standbyOff", nextState: "false", icon: "http://cdn.device-icons.smartthings.com/sonos/play-icon@2x.png"
             state "off", label:'Turn Standby On', action:"standbyOn", nextState: "true", icon: "http://cdn.device-icons.smartthings.com/sonos/pause-icon@2x.png"
@@ -167,7 +183,7 @@ metadata {
     }
     main "valveTile"
     details(["valveTile", "hardwareModel", "hardwareDesc", "activeZoneCnt", "curZoneIsCyclingTile", "leftButtonControl", "rainDelay", "rightButtonControl", "applyRainDelay",
-            "leftZoneTimeButton", "curZoneWaterTime", "rightZoneTimeButton", "runAllZonesTile", "lastUpdatedDt", "standbyMode", "refresh"])
+            "leftZoneTimeButton", "curZoneWaterTime", "rightZoneTimeButton", "runAllZonesTile", "pauseZoneRunTile", "lastUpdatedDt", "standbyMode", "refresh"])
 }
 
 def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/tonesto7/rachio-manager/master/images/$imgName" }
@@ -231,6 +247,7 @@ def generateEvent(Map results) {
         scheduleDataEvent(results?.schedData, results?.data.zones, results?.rainDelay)
         rainDelayValEvent(results?.rainDelay)
         stateDataEvent(results?.stateData)
+        wateringSummaryDataEvent(results?.wateringSummaryData)
         if(isOnline) { lastUpdatedEvent() }
     }
     return "Controller"
@@ -405,14 +422,21 @@ def setZoneWaterTime(timeVal) {
 }
 
 def stateDataEvent(stateData) {
-    state?.stateData = stateData
+    //state?.stateData = stateData
     sendEvent(name:'rainSensorTripped', value: stateData.state?.rainSensorTripped)
-    sendEvent(name:'lastRun', value: formatUtcDt(stateData.state?.lastRun))
-    sendEvent(name:'nextRun', value: formatUtcDt(stateData.state?.nextRun))
+    sendEvent(name:'lastRunStr', value: formatUtcDt(stateData.state?.lastRun))
+    sendEvent(name:'lastRun', value: getUnixDtFromUTCDt(stateData.state?.lastRun))
+    sendEvent(name:'nextRunStr', value: formatUtcDt(stateData.state?.nextRun))
+    sendEvent(name:'nextRun', value: getUnixDtFromUTCDt(stateData.state?.nextRun))
 }
-  
+
+def wateringSummaryDataEvent(wateringSummaryData) {
+    sendEvent(name: 'monthlyMinutesUsed', value: wateringSummaryData.used.minutes)
+    sendEvent(name: 'monthlyMinutesSaved', value: wateringSummaryData.savings.minutes)
+    sendEvent(name: 'monthlyWeatherIntelligenceCount', value: wateringSummaryData.wiEventCount)
+}
+
 def detailsDataEvent(detailsData) {
-    state?.detailsData = detailsData
     def controllerDetails = detailsData.get(state?.controllerDescription)
     state?.locationID = controllerDetails.locationId
 }     
@@ -569,6 +593,22 @@ def runAllZones() {
     }
 }
 
+def pauseZoneRun(duration) {
+    if(!isCmdOk2Run()) { return }
+    def res = parent?.pauseZoneRun(this, state?.deviceId, duration)
+    if (!res) {
+        markOffLine()
+    }
+}
+
+def resumeZoneRun() {
+    if(!isCmdOk2Run()) { return }
+    def res = parent?.resumeZoneRun(this, state?.deviceId)
+    if (!res) {
+        markOffLine()
+    }
+}
+
 def pauseScheduleRun() {
     log.trace "pauseScheduleRun... NOT AVAILABLE YET!!!"
     if(state?.curSchedType == "automatic") {
@@ -670,12 +710,28 @@ def formatDt(dt, mdy = true) {
 	return tf.format(dt)
 }
 
+def getUnixDtFromUTCDt(utcDt) {
+    return Date.parse("yyyy-MM-dd'T'HH:mm:ss'Z'", utcDt).getTime()
+}
+
 def formatUtcDt(utcDt, mdy = true) {
     def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
     inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
     
 	//log.trace "formatDt($dt, $mdy)..."
 	def formatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
+	def outFormat = new SimpleDateFormat(formatVal)
+    if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
+    
+	return outFormat.format(inFormat.parse(utcDt))
+}
+
+def formatUtcDtNoTime(utcDt) {
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    
+	//log.trace "formatDt($dt, $mdy)..."
+	def formatVal = "MMM d, yyyy"
 	def outFormat = new SimpleDateFormat(formatVal)
     if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
     
@@ -706,4 +762,9 @@ def getTimeDiffSeconds(strtDate, stpDate=null) {
 		def diff = (int) (long) (stop - start) / 1000
 		return diff
 	} else { return null }
+}
+
+// generate custom mobile activity feeds event
+void generateActivityFeedsEvent(notificationMessage) {
+	sendEvent(name: "notificationMessage", value: "${device.name} ${notificationMessage}", descriptionText: "${device.name} ${notificationMessage}", isStateChange: true)
 }
