@@ -58,10 +58,11 @@ metadata {
         attribute "lastRun", "string"
         attribute "nextRunStr", "string"
         attribute "nextRun", "string"
-        attribute "upcomingEvent", "string"
-        attribute "upcomingEventType", "string"
-        attribute "weatherIntelligenceInfo", "string"
-        attribute "thresholdInfo", "string"
+        attribute "nextEvent", "string"
+        attribute "nextEventTime", "string"
+        attribute "nextEventType", "string"
+        attribute "nextEventWeatherIntelligence", "string"
+        attribute "nextEventThresholdInfo", "string"
         attribute "rainSensorTripped", "boolean"
         
         attribute "monthlyMinutesUsed", "number"
@@ -248,6 +249,7 @@ def generateEvent(Map results) {
         rainDelayValEvent(results?.rainDelay)
         stateDataEvent(results?.stateData)
         wateringSummaryDataEvent(results?.wateringSummaryData)
+        nextEventDataEvent(results?.nextEvent)
         if(isOnline) { lastUpdatedEvent() }
     }
     return "Controller"
@@ -435,6 +437,15 @@ def wateringSummaryDataEvent(wateringSummaryData) {
     sendEvent(name: 'monthlyMinutesSaved', value: wateringSummaryData.savings.minutes)
     sendEvent(name: 'monthlyWeatherIntelligenceCount', value: wateringSummaryData.wiEventCount)
 }
+
+def nextEventDataEvent(nextEventData) {
+    sendEvent(name: 'nextEvent', value: nextEventData?.entry?.summary)
+    sendEvent(name: 'nextEventTime', value: formatUtcDt(nextEventData?.entry?.timestamp))
+    sendEvent(name: 'nextEventType', value: nextEventData?.entry?.type)
+    sendEvent(name: 'nextEventWeatherIntelligence', value: nextEventData?.entry?.weatherIntelligenceInfo)
+    sendEvent(name: 'nextEventThresholdInfo', value: nextEventData?.entry?.thresholdInfo)
+}
+
 
 def detailsDataEvent(detailsData) {
     def controllerDetails = detailsData.get(state?.controllerDescription)
