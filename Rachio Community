@@ -1,0 +1,1750 @@
+/**
+ *  Rachio Community
+ *
+ *  Copyright\u00A9 2018 Anthony Santilli
+ *  Copyright\u00A9 2020 Justin Leonard
+ *
+ *  SmartThings version written by Anthony Santilli (@tonesto7)
+ *  Ported to Hubitat and Enhanced by Justin Leonard (@JustinL)
+ *
+ * Many thanks to Tom Walling (@tomw) for high-level consultation on architecture and functionality for enhancing the native Rachio app/drivers.
+ * Thanks also to Josh Lyon (@josh) for proof of concept for generating an SVG for output at an Oath endpoint
+ *
+ * Attribution: Rain drop icon, icicle icon, and rain sensor icon made by Freepik from www.flaticon.com, Weather icons originally designed by Ashley Jager and modified by Justin Leonard
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ *  in compliance with the License. You may obtain a copy of the License at:
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+ *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
+ *  for the specific language governing permissions and limitations under the License.
+ *
+ * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
+ * V2.0:    Ported to Hubitat; Added dashboard and exposed additional information in controller/zone, including next run, last run, rain sensor state, next upcoming event, weather intelligence information, and monthly watering summary (05-25-2020)    
+
+
+ * TO DO:
+    - implement pause zone (e.g., pause if in shower, or if motion in yard)
+ */
+
+import groovy.json.*
+import java.text.SimpleDateFormat
+import groovy.json.JsonBuilder
+
+definition(
+    name: "Rachio Community",
+    namespace: "lnjustin",
+    author: "Anthony Santilli, Justin Leonard",
+    description: "Community version of Rachio Integration.",
+    category: "Green Living",
+    iconUrl: "https://s3-us-west-2.amazonaws.com/rachio-media/smartthings/Rachio-logo-100px.png",
+    iconX2Url: "https://s3-us-west-2.amazonaws.com/rachio-media/smartthings/Rachio-logo-200px.png",
+    iconX3Url: "https://s3-us-west-2.amazonaws.com/rachio-media/smartthings/Rachio-logo-300px.png",
+    singleInstance: true,
+    oauth: [displayName: "Rachio"],
+    usesThirdPartyAuthentication: true)
+
+preferences {
+    page(name: "startPage")
+    page(name: "dashboardSettingsPage")
+    page(name: "apiKeyPage")
+    page(name: "authPage")
+    page(name: "noOauthPage")
+    page(name: "devMigrationPage")
+    page(name: "devicePage")
+    page(name: "supportPage")
+}
+
+mappings {
+    path("/rachioReceiver") { action: [ POST: "rachioReceiveHandler" ] }
+    path("/rachioDashboard/:controllerID") { action: [ GET: "buildDashboard"] }
+    // path("/rachioDashboard") { action: [ GET: "buildDashboard"] }
+    
+  /*  if(settings?.controllers) {
+        settings?.controllers?.each { contID ->
+            if(contID) { 
+                path("/rachioDashboard/${contID}") { action: [ GET: "buildDashboard(\"${contID}\")"] }
+            }
+        }
+    }
+*/
+}
+
+String appVer() { return "2.0" }
+
+def appInfoSect()	{
+    section() {
+        def str = ""
+        str += "${app?.name}"
+        str += "\nCopyright\u00A9 Anthony Santilli, Justin Leonard"
+        str += "\nVersion: ${appVer()}"
+        paragraph str, image: "https://s3-us-west-2.amazonaws.com/rachio-media/smartthings/Rachio-logo-100px.png"
+    }
+}
+
+def startPage() {
+    getAccessToken()
+    if(!state?.accessToken) {
+        noOauthPage()
+    } else if(atomicState?.authToken) {
+        devicePage()
+    } else { authPage() }
+}
+
+def noOauthPage() {
+    return dynamicPage(name: "noOauthPage", title: "Oauth Not Enabled", uninstall: true) {
+        appInfoSect()
+        section() {
+            paragraph "Oauth is Not Enabled for this SmartApp.  Please Enable OAuth under App Settings", required: true, state: null
+        }
+        removeSect()
+    }
+}
+
+def authPage()  {
+    //log.debug "authPage()"
+    def description = null
+    def uninstallAllowed = false
+    def oauthTokenProvided = false
+
+    if(settings?.authKey && settings?.authKey.toString()?.length() > 10 && settings?.authKey != atomicState?.authToken) {
+        atomicState?.authToken = settings?.authKey
+        oauthTokenProvided = true
+    }
+    if(atomicState?.authToken) {
+        getRachioDeviceData(true)
+        def usrName = atomicState?.userName ?: ""
+        description = usrName ? "You are signed in as $usrName" : "You are connected."
+        uninstallAllowed = true
+        oauthTokenProvided = true
+    } else {
+        description = "Login to Rachio Web App to get your API Key"
+    }
+    
+    if (!oauthTokenProvided) { log.info "No Rachio AuthToken Found... Please Login to Web App > Account Settings > Get API Key..." }
+    def authPara = !oauthTokenProvided ? "Please Login to Web App\n• Tap on More Tab\n• Click on Account Settings\n• Click Get API Key\n• Tap the Copy Icon\n• Press the back button\n• Paste the key in the input below" : "Tap Next to setup your sprinklers."
+    return dynamicPage(name: "authPage", title: "Auth Page", nextPage: (oauthTokenProvided ? "devicePage" : null), uninstall: uninstallAllowed) {
+        appInfoSect()
+        section() {
+            paragraph authPara
+            href url: "https://app.rach.io", style: "embedded", required: (!oauthTokenProvided), state: (oauthTokenProvided ? "complete" : ""), title: "Rachio", description: description
+            href "apiKeyPage", title: "Enter your API Key", description: (authKey ? "API Key Entered" : "Tap to Enter API Key"), state: (authKey ? "complete" : null), required: true
+        }
+        if(uninstallAllowed) { removeSect() }
+    }
+}
+
+def apiKeyPage() {
+    return dynamicPage(name: "apiKeyPage", title: "API Key", install: false, uninstall: false) {
+        section() {
+            input "authKey", "text", title: "API Key", required: true, description: "Paste the API Key Here...", submitOnChange: true
+        }
+    }
+}
+
+def removeSect() {
+   // paragraph "Remove this App and Devices!", "WARNING!!!", "Last Chance to Stop!\nThis action is not reversible\n\nThis App and All Devices will be removed", required: true, state: null
+}
+
+
+// This method is called after "auth" page is done with Oauth2 authorization, then page "deviceList" with content of devicePage()
+def devicePage() {
+    //log.trace "devicePage()..."
+    if(!atomicState?.authToken) {
+        log.debug "No accesstoken"
+        return
+    }
+    // Step 1: get (list) of available devices associated with the login account.
+    def devData = getRachioDeviceData()
+    def devices = getDeviceInputEnum(devData)
+    log.debug "rachioDeviceList(): ${devices}"
+
+    //step2: render the page for user to select which device
+    return dynamicPage(name: "devicePage", title: "${(atomicState?.authToken && atomicState?.selectedDevices) ? "Select" : "Manage"} Your Devices", install: true, uninstall: true) {
+        appInfoSect()
+        section("Controller Configuration:"){
+            input "controllers", "enum", title: "Select your controllers", description: "Tap to Select", required: true, multiple: true, options: devices, submitOnChange: true, image: (atomicState?.modelInfo ? atomicState?.modelInfo.img : "")
+            atomicState?.controllerIds = settings?.controllers
+        }
+        if(settings?.controllers) {
+            updateHwInfoMap(devData?.devices)
+            devices?.sort { it?.value }?.each { cont->
+                if(cont?.key in settings?.controllers) {
+                    section("${cont?.value} Zones:"){
+                        if(settings?."${cont?.key}_zones") {
+                            def dData = devData?.devices?.find { it?.id == cont?.key }
+                            if(dData) { devDesc(dData) }
+                        }
+                        def zoneData = zoneSelections(devData, cont?.key)
+                        input "${cont?.key}_zones", "enum", title: "Select your zones", description: "Tap to Select", required: true, multiple: true, options: zoneData, submitOnChange: true
+                    }
+                }
+            }
+            section("Preferences:") {
+                input(name: "pauseInStandby", title: "Disable Actions while in Standby?", type: "bool", defaultValue: true, multiple: false, submitOnChange: true,
+                        description: "Allow your device to be disabled in Hubitat when you place your controller in Standby Mode...")
+                paragraph "Select the Duration time to be used for manual Zone Runs (This can be changed under each zones device page)"
+                input(name: "defaultZoneTime", title: "Default Zone Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
+            }
+
+        }
+        section() {
+            href "supportPage", title: "Rachio Support", description: ""
+            href "authPage", title: "Manage Login", description: ""
+            href "dashboardSettingsPage", title: "Dashboard Setup", description: ""
+        }
+        if(settings?.controllers) {
+            settings?.controllers?.each { contID ->
+                if(contID) { 
+                    section("") {
+                    def localUri = getFullLocalApiServerUrl() + "/rachioDashboard/${contID}?access_token=${state.accessToken}"
+                    def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${contID}?access_token=${state.accessToken}"
+                        paragraph("Use the following URIs to access the Dashboard for Controller ${contID}(output as SVG image): <ul><li><strong>Local</strong>:<br /><a href='${localUri}'>${localUri}</a></li><li><strong>Cloud</strong>:<br/><a href='${cloudUri}'>${cloudUri}</a></li></ul>")
+                    }
+                }
+            }
+        }
+        removeSect()
+    }
+}
+
+def dashboardSettingsPage(){
+    if(!state.accessToken){	
+        //enable OAuth in the app settings or this call will fail
+        createAccessToken()	
+    }
+
+    return dynamicPage(name: "dashboardSettings", title: "Dashboard Setup", install: true){
+        section(getSectionTitle("Dashboard Day Settings")){
+                input "numPastDaysDashboard", "number", title: "Number of Days in Past to Display on Dashboard", required: false, defaultValue: 2, submitOnChange: false
+                input "numFutureDaysDashboard", "number", title: "Number of Days in Future to Display on Dashboard", required: false, defaultValue: 2, submitOnChange: false
+        }
+        section(getSectionTitle("Configure Information on Dashboard")) {
+            input "showPrecipPercent", "bool", title: "Show Precipitation %?", defaultValue: true, submitOnChange: false
+            input "showPrecipAmount", "bool", title: "Show Precipitation Amount?", defaultValue: true, submitOnChange: false
+            input "showTemp", "bool", title: "Show High/Low Temperature?", defaultValue: true, submitOnChange: false
+        }
+        section(getSectionTitle("Configure Display Formatting")) {
+            input(name: "colorSchemeSelection", type: "enum", title: "Select Color Scheme:", required: true, multiple: false, options: ["White with Color","Black with Color", "White without Color", "Black without Color", "Custom"], submitOnChange: false, defaultValue: 'White with Color', width: 5)
+            if(colorSchemeSelection == "Custom") {
+                input "cloudColorCustom", "string", title: "Cloud Color (format: #FFFFFF)", submitOnChange: false
+                input "lightColorCustom", "string", title: "Sun and Lightning Color (format: #FFFFFF)", submitOnChange: false
+                input "precipColorCustom", "string", title: "Normal Precipitation Color (format: #FFFFFF)", submitOnChange: false
+                input "frozenPrecipColorCustom", "string", title: "Frozen Precipitation Color (format: #FFFFFF)", submitOnChange: false           
+                input "precipColorCustom", "string", title: "Normal Precipitation Color (format: #FFFFFF)", submitOnChange: false
+                
+                input "rainDropWateringColorCustom", "string", title: "Color of Rain Drop to indicate Watering (format: #FFFFFF)", submitOnChange: false
+                input "rainDropAccentColorCustom", "string", title: "Color of Accent Mark on Rain Drop (format: #FFFFFF)", submitOnChange: false
+                input "rainDropOutlineColorCustom", "string", title: "Color of Rain Drop Outline (format: #FFFFFF)", submitOnChange: false
+                input "rainDropSkipColorCustom", "string", title: "Color of Rain Drop to indicate Watering Skip (format: #FFFFFF)", submitOnChange: false
+                input "windSkipColorCustom", "string", title: "Color of Wind to indicate Wind Skip (format: #FFFFFF)", submitOnChange: false
+                input "rainSensorSkipColorCustom", "string", title: "Color of Rain Sensor to indicate Rain Sensor Skip (format: #FFFFFF)", submitOnChange: false
+                input "freezeSkip0ColorCustom", "string", title: "Back Color of Icicle to indicate Freeze Skip (format: #FFFFFF)", submitOnChange: false
+                input "freezeSkip1ColorCustom", "string", title: "Front Color of Icicle to indicate Freeze Skip (format: #FFFFFF)", submitOnChange: false
+                input "saturatedSoilColorCustom", "string", title: "Color of Soil to indicate Soil Saturation Skip (format: #FFFFFF)", submitOnChange: false
+                input "rainDropsPredictedColorCustom", "string", title: "Color of Small Rain Drops to indicate Predicted Rain Skip (format: #FFFFFF)", submitOnChange: false
+                input "strokeColorCustom", "string", title: "Icon Outline Color (format: #FFFFFF)", submitOnChange: false
+               
+                input "dayTextColorCustom", "string", title: "Day Text Color (format: #FFFFFF)", submitOnChange: false
+                input "precipTextColorCustom", "string", title: "Precipitation Text Color (format: #FFFFFF)", submitOnChange: false
+                input "highTempTextColorCustom", "string", title: "High Temp Text Color (format: #FFFFFF)", submitOnChange: false
+                input "lowTempTextColorCustom", "string", title: "Low Temp Text Color (format: #FFFFFF)", submitOnChange: false
+                
+            }
+            input "fontWeightSetting", "enum", title: "Text Weight", defaultValue: "normal", options:["normal", "bold"], multiple: false, width: 2, submitOnChange: false
+            input "globalScale", "number", title: "Global Scale (in percent)",defaultValue: 100, submitOnChange: false
+            input "extraVerticalSpace", "number", title: "Extra Vertical Spacing (in pts)", defaultValue: 0, submitOnChange: false
+            input "extraHorizontalSpace", "number", title: "Extra Horizontal Spacing (in pts)", defaultValue: 0, submitOnChange: false
+
+        }
+
+
+        section(getSectionTitle("Attribution")) {
+            paragraph("Sprinkler icon made by Freepik from www.flaticon.com")  
+        }
+
+    }
+}
+
+def getSectionTitle(txt) {
+     return '<strong>' + txt + '</strong>'   
+}
+
+void settingUpdate(name, value, type=null) {
+	//log.trace "settingUpdate($name, $value, $type)..."
+	if(name && type) {
+		app?.updateSetting("$name", [type: "$type", value: value])
+	}
+	else if (name && type == null){ app?.updateSetting(name.toString(), value) }
+}
+
+void settingRemove(name) {
+	//log.trace "settingRemove($name)..."
+    
+     // if(name) { app?.deleteSetting("$name") }
+	if(name) { app?.removeSetting("$name") }  // ported line
+}
+
+void appCleanup() {
+  //  log.trace "appCleanup()"
+    def stateItems = ["deviceId", "selectedDevice", "selectedZones", "inStandbyMode", "webhookId", "isWateringMap", "inStandbyModeMap"]
+    def setItems = ["sprinklers", "selectedZones"]
+    stateItems?.each { if(state?.containsKey(it as String)) {state.remove(it)} }
+    setItems?.each { if(settings?.containsKey(it as String)) {settingRemove(it)} }
+}
+
+def devDesc(dev) {
+    if(dev) {
+        def str = ""
+        def zoneCnt = dev?.zones?.findAll { it?.id in settings?."${dev?.id}_zones" }?.size() ?: 0
+        str += "${atomicState?.installed ? "Installed" : "Installing"} Device:\n${atomicState?.modelInfo[dev?.id]?.desc}"
+        str += "\n($zoneCnt) Zone(s) ${atomicState?.installed ? "are selected" :  "will be installed"}"
+        paragraph "${str}", state: "complete", image: (atomicState?.modelInfo[dev?.id]?.img ?: "")
+    }
+}
+
+def supportPage() {
+    return dynamicPage(name: "supportPage", title: "Rachio Support", install: false, uninstall: false) {
+        section() {
+            href url: getSupportUrl(), style:"embedded", title:"Rachio Support (Web)", description:"", state: "complete", image: "http://rachio-media.s3.amazonaws.com/images/icons/icon-support.png"
+            href url: getCommunityUrl(), style:"embedded", title:"Rachio Community (Web)", description:"", state: "complete", image: "http://d33v4339jhl8k0.cloudfront.net/docs/assets/5355b85be4b0d020874de960/images/58333550903360645bfa6cf8/file-Er3y7doeam.png"
+        }
+    }
+}
+
+def zoneSelections(devData, devId=null) {
+    //log.debug "zoneSelections: $devData"
+    def res = [:]
+    if(!devData) { return res }
+    devData?.devices.sort {it?.name}.each { dev ->
+        if(dev?.id == devId) {
+            dev?.zones?.sort {it?.zoneNumber }.each { zone ->
+                def str = (zone?.enabled == true) ? "" : " (Disabled)"
+                //log.debug "zoneId: $zone.id"
+                def adni = [zone?.id].join('.')
+                res[adni] = "${zone?.name}$str"
+            }
+        }
+    }
+    return res
+}
+
+// This was added to handle missing oauth on the app and notifying the user of why it failed.
+def getAccessToken() {
+    try {
+        if(!atomicState?.accessToken) {
+            atomicState?.accessToken = createAccessToken()
+        }
+        else { return true }
+    }
+    catch (ex) {
+        def msg = "Error: OAuth is not Enabled for the Rachio (Connect) application!!!.  Please click remove and Enable Oauth under the App SettingsE..."
+        // sendPush(msg)
+        log.warn "getAccessToken Exception | ${msg}"
+        return false
+    }
+}
+
+def getRachioDeviceData(noData=false) {
+    //log.trace "getRachioDevicesData($noData)..."
+
+    //Step1: GET account info "userId"
+    atomicState.userId = getUserId();
+    if (!atomicState?.userId) {
+        log.error "No user Id found exiting"
+        return
+    }
+    def userInfo = getUserInfo(atomicState?.userId)
+    //log.debug "userInfo: ${userInfo}"
+    atomicState?.userName = userInfo?.username
+
+    if(!noData) { return userInfo }
+}
+
+def getDeviceInputEnum(data) {
+    //Step3: Obtain device information for a location
+    def devices = [:]
+    if(!data) { return devices }
+    data?.devices.sort { it?.name }.each { sid ->
+       //log.info "systemId: ${sid.id}"
+       def dni = sid?.id
+       devices[dni] = sid?.name
+       //log.info "Found sprinkler with dni(locationId.gatewayId.systemId.zoneId): $dni and displayname: ${devices[dni]}"
+    }
+    // log.info "getRachioDevicesData() >> sprinklers: $devices"
+    return devices
+}
+
+def getUserInfo(userId) {
+    //log.trace "getUserInfo ${userId}"
+    return _httpGet("person/${userId}");
+}
+
+def getUserId() {
+    //log.trace "getUserId()"
+    def res = _httpGet("person/info");
+    if (res) {
+        return res?.id;
+    }
+    return null
+}
+
+void updateHwInfoMap(devdata) {
+    def result = [:]
+    if(devdata && settings?.controllers) {
+        def results = null
+        results = devdata?.findAll { it?.id in settings?.controllers }
+        results?.each { dev ->
+            result[dev?.id] = getHardwareInfo(dev?.model)
+        }
+    }
+    atomicState?.modelInfo = result
+}
+
+def getDevGeneration(devId) {
+    if(devId && atomicState?.modelInfo[devId] && atomicState?.modelInfo[devId]?.gen) {
+        return atomicState?.modelInfo[devId]?.gen
+    } 
+    return null
+}
+
+def getDevJsonTag(devId) {
+    if(devId && atomicState?.modelInfo[devId] && atomicState?.modelInfo[devId]?.jsonTag) {
+        return atomicState?.modelInfo[devId]?.jsonTag
+    } 
+    return null
+}
+
+def getHardwareInfo(val) {
+    switch(val) {
+        case "GENERATION1_8ZONE":
+            return [model: "8ZoneV1", desc: "8-Zone (Gen 1)", img: getAppImg("rachio_gen1.png"), gen: "Gen1", jsonTag: "gen1IrrigationController"]
+        case "GENERATION1_16ZONE":
+            return [model: "16ZoneV1", desc: "16-Zone (Gen 1)", img: getAppImg("rachio_gen1.png"), gen: "Gen1", jsonTag: "gen1IrrigationController"]
+        case "GENERATION2_8ZONE":
+            return [model: "8ZoneV2", desc: "8-Zone (Gen 2)", img: getAppImg("rachio_gen2.png"), gen: "Gen2", jsonTag: "gen2IrrigationController"]
+        case "GENERATION2_16ZONE":
+            return [model: "16ZoneV2", desc: "16-Zone (Gen 2)", img: getAppImg("rachio_gen2.png"), gen: "Gen2", jsonTag: "gen2IrrigationController"]
+        case "GENERATION3_8ZONE":
+            return [model: "8ZoneV3", desc: "8-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+        case "GENERATION3_16ZONE":
+            return [model: "16ZoneV3", desc: "16-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+    }
+    return [desc: null, model: null, img: "", gen: null]
+}
+
+def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/tonesto7/rachio-manager/master/images/$imgName" }
+
+def _httpGet(subUri, endpoint="open") {
+    log.debug "_httpGet($subUri)"
+    try {
+        def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
+        def params = [
+            uri: "${baseURI}/${subUri}",
+            headers: ["Authorization": "Bearer ${atomicState.authToken}"]
+        ]
+        httpGet(params) { resp ->
+            if(resp.status == 200) {
+                return resp?.data
+            } else {
+                //refresh the auth token
+                if (resp?.status == 500 && resp?.data?.status?.code == 14) {
+                    log.debug "Storing the failed action to try later"
+                    data.action = "getRachioDeviceData"
+                    log.debug "Refreshing your authToken!"
+                    // refreshAuthToken()
+                } else {
+                    log.error "Authentication error, invalid authentication method, lack of credentials, etc."
+                }
+              return null
+            }
+        }
+    } catch (ex) {
+        if(ex instanceof groovyx.net.http.HttpResponseException) {
+            if(ex?.response) {
+                log.error("httpGet() Response Exception | Status: ${ex?.response?.status} | Data: ${ex?.response?.data}")
+            }
+        } else {
+            log.error "_httpGet exception: ${ex.message}"
+        }
+    }
+}
+
+def getDisplayName(iroName, zname) {
+    if(zname) {
+        return "${iroName}:${zname}"
+    } else {
+        return "Rachio"
+    }
+}
+
+//Section3: installed, updated, initialize methods
+def installed() {
+    log.trace "Installed with settings: ${settings}"
+    initialize()
+    atomicState?.installed = true
+}
+
+def updated() {
+    log.debug "Updated with settings: ${settings}"
+    unsubscribe()
+    initialize()
+}
+
+def initialize() {
+    log.trace "initialized..."
+    unschedule()
+    scheduler()
+    subscribe(app, onAppTouch)
+    updateDevZoneStates() //Creates the selectedDevices maps in state
+    runIn(2, "initStep2", [overwrite: true])
+    sendActivityFeeds("is connected to Hubitat")
+    atomicState.timeSendPush = null
+}
+
+void initStep2() {
+    addRemoveDevices()
+    appCleanup()
+    runIn(3, "initStep3", [overwrite: true])
+}
+
+void initStep3() {
+    initWebhooks()
+    poll()
+}
+
+def uninstalled() {
+  //  log.trace "uninstalled() called... removing smartapp and devices"
+    unschedule()
+    //Remove any existing webhooks before uninstall...
+    removeAllWebhooks()
+    if(addRemoveDevices(true)) {
+        //Revokes endpoint token...
+              //  revokeAccessToken()
+        state.accessToken = null   // ported line
+        
+        //Revokes Rachio Auth Token
+        if(atomicState?.authToken) {
+          atomicState?.authToken = null
+        }
+    }
+}
+
+def onAppTouch(event) {
+    updated()
+}
+
+def scheduler() {
+    // runEvery1Minute("heartbeat")
+    runEvery15Minutes("heartbeat")
+    //runEvery30Minutes("heartbeat")
+}
+
+def heartbeat() {
+   // log.trace "heartbeat 15 minute keep alive poll()..."
+    poll()
+}
+
+void initWebhooks() {
+    settings?.controllers?.each { c->
+        if(c) { 
+            initWebhook(c)
+            // log.debug "webhooks($c): ${getWebhookIdsForDev(c)}"
+        }
+    }
+}
+
+//Subscribes to the selected controllers API events that will be used to trigger a poll
+def initWebhook(controlId) {
+    //log.trace "initWebhook..."
+    def result = false
+    def whId = atomicState?.webhookIds ?: [:]
+    def cmdType = whId[controlId] == null ? "post" : "put"
+    def apiWebhookUrl = "${rootApiUrl()}/notification/webhook"
+    def endpointUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/rachioReceiver?access_token=${atomicState?.accessToken}"
+    def bodyData
+    if(!whId[controlId]) { 
+        bodyData = new JsonOutput().toJson([device:[id: controlId], externalId: app.id, url: endpointUrl, eventTypes: webhookEvtTypes()])
+    } else { 
+        bodyData = new JsonOutput().toJson([id: whId[controlId], externalId: app.id, url: endpointUrl, eventTypes: webhookEvtTypes()])
+    }
+    try {
+        if(webhookHttp(apiWebhookUrl, bodyData, cmdType, controlId)) {
+            log.info "Successfully ${cmdType == "post" ? "Created" : "Updated"} API Webhook Subscription for Controller (${controlId})!!!"
+            result = true
+        }
+    } catch(ex) {
+        log.error "initWebhook Exception: ${ex.message} | Data sent: ${bodyData}"
+    }
+    return result
+}
+
+//This isn't used for anything other than to return the webhooks for the device
+def getWebhookIdsForDev(devId) {
+    if(!devId) { return null }
+    def data = _httpGet("notification/${devId}/webhook")
+    def res = null
+    if(data) { res = data?.findAll { it?.externalId == app?.id }?.collect { it?.id } }
+    return res
+}
+
+void removeWebhookByDevId(devId) {
+    def webhookIds = atomicState?.webhookIds
+    if(webhookIds && webhookIds[devId] != null) {
+        if(webhookHttp("${rootApiUrl()}/notification/webhook/${webhookIds[devId]}", "", "delete")) {
+            log.warn "Removed API Webhook Subscription for (${webhookIds[devId]})"
+        }
+    }
+}
+
+//Removes the webhook subscription for the device.
+void removeAllWebhooks() {
+    def webhookIds = atomicState?.webhookIds
+    if(settings?.controllers && webhookIds) {
+        settings?.controllers?.each { c->
+            if(c) {
+                if(webhookHttp("${rootApiUrl()}/notification/webhook/${webhookIds[c]}", "", "delete")) {
+                    log.warn "Removed API Webhook Subscription for (${webhookIds[c]})"
+                }
+            }
+        }
+    }
+}
+
+//Returns the available event types to subscribe to.
+def webhookEvtTypes() {
+    log.debug "Updating webhook event types"
+    def typeIds = []
+    def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT"]   // , "WEATHER_INTELLIGENCE_EVENT", "RAIN_DELAY_EVENT"]
+    def data = _httpGet("notification/webhook_event_type")
+    if(data) {
+        typeIds = data?.findAll { it?.name in okTypes }.collect { ["id":it?.id?.toString()] }
+    }
+    return typeIds
+}
+
+//Handles the http requests for the webhook methods
+def webhookHttp(url, jsonBody, type=null, ctrlId) {
+    //log.trace "webhookHttp($url, $jsonBody, $type)"
+    def returnStatus = false
+    def response = null
+    def cmdParams = [
+        uri: url,
+        requestContentType: "application/x-www-form-urlencoded; charset=utf-8",
+        headers: ["Authorization": "Bearer ${atomicState?.authToken}", "Content-Type": "application/json"],
+        body: jsonBody
+    ]
+    try {
+        if(type == "post") {
+            httpPost(cmdParams) { resp ->
+                response = resp
+            }
+        }
+        else if(type == "put") {
+            httpPut(cmdParams) { resp ->
+                response = resp
+            }
+        }
+        else if(type == "delete") {
+            httpDelete(cmdParams) { resp ->
+                response = resp
+            }
+        }
+        if(response) {
+            //log.debug "response.status: ${response?.status} | data: ${response?.data}"
+            if(response?.status in [200, 201, 204]) {
+                returnStatus = true
+                if(type in ["put", "post"]) {
+                    def whIds = atomicState?.webhookIds ?: [:]
+                    whIds[ctrlId] = response?.data?.id
+                    atomicState?.webhookIds = whIds
+                } else if(type == "delete") {
+                    def whIds = atomicState?.webhookIds ?: [:]
+                    whIds?.remove(ctrlId)
+                    atomicState?.webhookIds = whIds
+                }
+            } else {
+                //refresh the auth token
+                if (response?.status == 401) {
+                    log.debug "Refreshing your authToken!"
+                    // refreshAuthToken()
+                } else {
+                    log.error "Authentication error, invalid authentication method, lack of credentials, etc."
+                }
+            }
+        } else { return returnStatus }
+    } catch(Exception e) {
+        log.error "webhookHttp Exception Error: ", e
+    }
+    return returnStatus
+}
+
+def getDeviceIds() {
+    return settings?.controllers ?: null
+}
+
+def getZoneIds(devId) {
+    return settings?."${devId}_zones" ?: null
+}
+
+def getZoneData(userId, zoneId) {
+    return _httpGet("person/${userId}/${zoneId}")
+}
+
+void updateDevZoneStates() {
+    def devMap = [:]
+    def userInfo = getUserInfo(atomicState?.userId)
+    userInfo?.devices?.each { dev ->
+        if(dev?.id in settings?.controllers) {
+            devMap[dev?.id] = [:]
+            devMap[dev?.id]["name"] = dev?.name
+            def zoneMap = [:]
+            dev?.zones?.each { zone ->
+               if(zone?.id in settings?."${dev?.id}_zones") {
+                    zoneMap[zone?.id] = [:]
+                    zoneMap[zone?.id] = zone?.name
+                }
+            }
+            devMap[dev?.id]["zones"] = zoneMap
+        }
+    }
+    atomicState?.selectedDevices = devMap
+}
+
+def getDeviceInfo(devId) {
+    //log.trace "getDeviceInfo..."
+    return _httpGet("device/${devId}")
+}
+
+def getCurSchedule(devId) {
+    //log.trace "getCurSchedule..."
+    return _httpGet("device/${devId}/current_schedule")
+}
+
+def getDeviceData(devId) {
+    //log.trace "getDeviceData($devId)..."
+    def result = _httpGet("device_with_current_schedule/${devId}")
+   // log.trace "getDeviceData: ${result}"
+    return result
+}
+
+def getDeviceState(devId) {
+    //log.trace "getDeviceState($devId)..."
+    def result = _httpGet("device/getDeviceState/${devId}", "closed")
+  //  log.trace "getDeviceState: ${result}"
+    return result
+}
+
+// Gets location id for device
+def getDeviceDetails(devId) {
+    //log.trace "getDeviceDetails($devId)..."
+    def result = _httpGet("device/getDeviceDetails/${devId}", "closed")
+  //  log.trace "getDeviceDetails: ${result}"
+    return result
+}
+
+def getZoneDetails(devId) {
+    //log.trace "getZoneDetails($devId)..."
+    def result = _httpGet("device/listZones/${devId}", "closed")
+  //  log.trace "getZoneDetails: ${result}"
+    return result
+}
+
+def getDevicePastEvents(devId, start_time, end_time) {
+    // start_time and end_time are Date objects
+    //log.trace "getDeviceEvents($devId)..."
+    def result = _httpGet("device/${devId}/event?startTime=${start_time.getTime()}&endTime=${end_time.getTime()}", "open")
+  //  log.trace "getDeviceEvents: ${result}"
+    return result
+}
+
+def getDeviceFutureEvents(devId, end_time) {
+    // end_time is a Date object
+   // log.trace "getDeviceUpcomingEvents(${devId})..."
+    def jsonData = new JsonBuilder("device_id":devId, "hours_ahead":GetHoursUntilDate(end_time))
+    def result = sendJsonGetResponse("events/upcoming", jsonData?.toString(), "closed", "post")
+   // log.trace "Upcoming Events: ${result})"
+    return result
+}
+
+def getDeviceAlerts(devId) {
+    //log.trace "getDeviceAlerts(${devId})..."
+    def jsonData = new JsonBuilder("device_id":devId)
+    def result = sendJsonGetResponse("device/getActiveAlerts", jsonData?.toString(), "closed", "post")
+    //log.trace "Active Alerts: ${result})"
+    return result
+}
+
+def getDeviceWateringSummary(devId, start_date, end_date) {
+    // start_date and end_date are Date objects
+    log.trace "getDeviceWateringSummary(${devId})..."
+    def jsonData = new JsonBuilder("device_id":devId, "start_date":getDateMap(start_date), "end_date":getDateMap(end_date))
+    def result = sendJsonGetResponse("events/getWateringSummaryByInterval", jsonData?.toString(), "closed", "put")
+    log.trace "Watering Summary: ${result})"
+    return result
+}
+
+def getCalendar(locId, start_time, end_time) {
+    // start_date and end_date are Date objects
+    //log.trace "getCalendar(${locId})..."
+    def jsonData = new JsonBuilder("location_id":locId, "start_time":formatDateToUtc(start_time), "end_time":formatDateToUtc(end_time))
+    def result = sendJsonGetResponse("location/getCalendarForTimeRange", jsonData?.toString(), "closed", "post")
+    //log.trace "Calendar: ${result})"
+    return result
+}
+
+def getWeather(locId, start_date, end_date) {
+    // start_date and end_date are Date objects
+    //log.trace "getWeather(${locId})..."
+    def jsonData = new JsonBuilder("location_id":locId, "start_date":getDateMap(start_date), "end_date":getDateMap(end_date))
+    def result = sendJsonGetResponse("location/getWeatherByLocation", jsonData?.toString(), "closed", "post")
+    //log.trace "Weather: ${result})"
+    return result
+}
+
+def getLocationId(devId, detailsData) {
+    def controllerDetails = detailsData.get(getDevJsonTag(devId))
+    if (controllerDetails) return controllerDetails.locationId   
+    return null
+}
+
+def cleanupObjects(id){
+    if(settings?."${id}_zones") { settingRemove("${id}_zones") }
+    def whIds = atomicState?.webhookIds
+    if(whIds && whIds[id]) { removeWebhookByDevId(id) }
+}
+
+def isWatering() {
+    def i = atomicState?.isWateringMap?.findAll { it?.value == true }
+    return (i?.size() > 0)
+}
+
+def removeWateringItem(id) {
+    def i = atomicState?.isWateringMap ?: [:]
+    if(id && i[id] != null) { i?.remove(id) }
+    atomicState?.isWateringMap = i
+}
+
+def removeStandbyItem(id) {
+    def i = atomicState?.inStandbyModeMap ?: [:]
+    if(id && i[id] != null) { i?.remove(id) }
+    atomicState?.inStandbyModeMap = i
+}
+
+def updateWateringItem(id, val) {
+    def i = atomicState?.isWateringMap ?: [:]
+    if(id && i != null) { i[id] = val }
+    atomicState?.isWateringMap = i
+}
+
+def updateStandbyItem(String id, Boolean val) {
+    def i = atomicState?.inStandbyModeMap ?: [:]
+    if(id && i != null) { i[id] = val }
+    atomicState?.inStandbyModeMap = i
+}
+
+def addRemoveDevices(uninst=false) {
+    //log.trace "addRemoveDevices($uninst)..."
+    try {
+        def delete = []
+        if(uninst == false) {
+            def devsInUse = []
+            def selectedDevices = atomicState?.selectedDevices
+            selectedDevices?.each { contDev ->
+                //Check if the discovered sprinklers are already initiated with corresponding device types.
+                def d = getChildDevice(contDev?.key)
+                if(!d) {
+                    d = addChildDevice("lnjustin", getChildContName(), contDev?.key, null, [label: getDeviceLabelStr(contDev?.value?.name), completedSetup: true])
+                 //   d.completedSetup = true
+                    log.info "Controller Device Created: (${d?.displayName}) with id: [${contDev?.key}]"
+                } else {
+                    log.debug "found ${d?.displayName} with dni: ${dni?.key} already exists"
+                }
+                devsInUse += contDev.key
+                contDev?.value?.zones?.each { zoneDni ->
+                    //Check if the discovered sprinklers are already initiated with corresponding device types.
+                    def d2 = getChildDevice(zoneDni?.key)
+                    if(!d2) {
+                        d2 = addChildDevice("lnjustin", getChildZoneName(), zoneDni?.key, null, [label: getDeviceLabelStr(zoneDni?.value), completedSetup: true])
+                      //  d2.completedSetup = true
+                        log.info "Zone Device Created: (${d2?.displayName}) with id: [${zoneDni?.key}]"
+                    } else {
+                        log.debug "found ${d2?.displayName} with dni: ${zoneDni?.key} already exists"
+                    }
+                    devsInUse += zoneDni?.key
+                }
+            }
+            //log.debug "devicesInUse: ${devsInUse}"
+            // delete = app.getChildDevices(true).findAll { !(it?.deviceNetworkId in devsInUse) }
+            delete = app.getChildDevices().findAll { !(it?.deviceNetworkId in devsInUse) }
+        } else {
+            atomicState?.selectedDevices = []
+            // delete = app.getChildDevices(true)
+            delete = app.getChildDevices()
+        }
+        if(delete?.size() > 0) {
+            log.warn "Device Delete: ${delete} | Removing (${delete?.size()}) Devices..."
+            delete?.each {
+                cleanupObjects(it?.deviceNetworkId)
+                deleteChildDevice(it?.deviceNetworkId)
+                log.warn "Deleted the Device: ${it?.displayName}"
+            }
+        }
+        return true
+    } catch (ex) {
+        if(ex instanceof hubitat.exception.ConflictException) {
+            def msg = "Error: Can't Delete App because Devices are still in use in other Apps, Routines, or Rules.  Please double check before trying again."
+            log.warn "addRemoveDevices Exception | $msg"
+        }
+   /*     else if(ex instanceof hubitat.app.exception.UnknownDeviceTypeException) {
+            def msg = "Error: Device Handlers are likely Missing or Not Published.  Please verify all device handlers are present before continuing."
+            log.warn "addRemoveDevices Exception | $msg"
+        }
+   */     else { log.error "addRemoveDevices Exception: ${ex}" }
+        return false
+    }
+}
+
+def getDeviceLabelStr(name) {
+    return "Rachio - ${name}"
+}
+
+def getTimeSinceInSeconds(time) {
+    if(!time) { return 10000 }
+    return (int) (now() - time)/1000
+}
+
+// This is the endpoint the webhook sends the events to...
+def rachioReceiveHandler() {
+    def reqData = request.JSON
+    if(reqData?.size() || reqData == [:]) {
+        // log.trace "eventDatas: ${reqData?.summary}"
+       // log.trace "Rachio Device Event | Summary: (${reqData?.summary}) | Requesting Latest Data from API | DeviceID: ${reqData?.deviceId}"
+        if(reqData?.deviceId) {
+            def dev = getChildDevice(reqData?.deviceId)
+            poll(dev, "api")
+        } else { poll() }
+    }
+}
+
+//Section4: polling device info methods
+void poll(child=null, type=null) {
+    def lastPollSec = getTimeSinceInSeconds(atomicState?.lastPollDt)
+    if(child && !type) { type = "device" }
+    log.info "${app.label} -- Polling API for Latest Data -- Last Update was ($lastPollSec seconds ago)${type ? " | Reason: [$type]" : ""}"
+    if(lastPollSec < 2) {
+        runIn(3, "poll", [overwrite: true])
+        //log.warn "Delaying poll... It's too soon to request new data"
+        return
+    }
+    def selectedDevices = atomicState?.selectedDevices
+    def ctrlCnt = 0
+    def zoneCnt = 0
+    selectedDevices?.each { cont->
+        def devData = getDeviceData(cont?.key)
+        def devDetails = getDeviceDetails(cont?.key)
+        def devState = getDeviceState(cont?.key)
+        def devZoneDetails = getZoneDetails(cont?.key)
+        log.trace "Right before call watering summary"
+        def devMonthlyWateringSummary = getDeviceWateringSummary(cont?.key, getMonthStart(), getMonthEnd()) 
+        
+        def cDev = getChildDevice(cont?.key)
+        if(cDev) {
+            ctrlCnt = ctrlCnt+1
+            pollChild(cDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary)
+            cont?.value?.zones?.each { zone->
+                zoneCnt = zoneCnt+1
+                def zDev = getChildDevice(zone?.key)
+               // def zoneWateringJournal = getDashboardWateringJournalData(zone?.key)
+                if(zDev) { pollChild(zDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary) }
+            }
+        }
+    }
+    log.info "Updating (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices..."
+    atomicState?.lastPollDt = now()
+}
+
+def pollChild(child, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary) {
+    if (pollChildren(child, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary)){
+        //generate event for each (child) device type identified by different dni
+    }
+}
+
+def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary) {
+    //log.trace "updating child device (${child?.label})" // | ${child?.device?.deviceNetworkId})"
+    try {
+        if(childDev && devData) {
+            String dni = childDev?.device?.deviceNetworkId
+            String devLabel = childDev?.label
+            def schedData = devData.currentSchedule
+            def devStatus = devData
+            
+            def rainDelay = getCurrentRainDelay(devStatus)
+            
+            def status = devStatus?.status
+            def onlStatus = status?.toString()?.toLowerCase() == "online" ? "online" : "offline"
+            if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
+            Boolean pauseInStandby = settings?.pauseInStandby == false ? false : true
+            Boolean inStandby = devData?.on.toString() != "true" ? true : false
+            Boolean schedRunning = (schedData?.status == "PROCESSING") ? true : false
+            def data = []
+            Map selectedDevices = atomicState?.selectedDevices ?: [:]
+            selectedDevices?.each { contDev ->
+                if(dni == contDev?.key) {
+                    updateStandbyItem(dni, inStandby)
+                    // log.debug "schedRunning: ${schedRunning} | isWatering: ${isWatering()}"
+                    if (isWatering() && !schedRunning) {
+                        handleWateringSched(dni, false)
+                    }
+                    def newLabel = getDeviceLabelStr(devData?.name).toString()
+                    if(devLabel != newLabel) {
+                        childDev?.label = newLabel
+                        log.info "Controller Label has changed from (${devLabel}) to [${newLabel}]"
+                    }
+
+                    data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails, wateringSummaryData: devMonthlyWateringSummary]
+                } else {
+                    contDev?.value?.zones?.each { zone ->
+                        if (dni == zone?.key) {
+                            def zoneData = findZoneData(zone?.key, devData)
+                            def zoneState = findZoneState(zone?.key, devZoneDetails)
+                            def newLabel = getDeviceLabelStr(zone?.value).toString()
+                            if(devLabel != newLabel) {
+                                childDev?.label = newLabel
+                                log.info "Zone Label has changed from (${devLabel}) to [${newLabel}]"
+                            }
+                            data = [data: zoneData, schedData: schedData, devId: contDev?.key, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: zoneState]
+                        }
+                    }
+                }
+            }
+            if (childDev && data != []) {
+                childDev?.generateEvent(data)
+                childDev?.sendEvent(name: "DeviceWatch-DeviceStatus", value: onlStatus, displayed: false)
+            }
+        } else { log.warn "pollChildren cannot update children because it is missing the required parameters..." }
+    } catch(Exception ex) {
+        log.error "exception polling children:", ex
+        //refreshAuthToken()
+    }
+    return result
+}
+
+void setWateringDeviceState(devId, val) {
+    // log.trace "setWateringDeviceState($devId, $val)"
+    updateWateringItem(devId, val)
+}
+
+void handleWateringSched(devId, val=false) {
+    // log.trace "handleWateringSched($devId, $val)"
+    if(val == true) {
+        log.trace "Watering is Active... Scheduling poll for every 1 minute"
+        runEvery1Minute("poll")
+    } else {
+        log.trace "Watering has finished... 1 minute Poll has been unscheduled"
+        unschedule("poll")
+        runIn(60, "poll") // This is here just to make sure that the schedule actually stopped and that the data is really current.
+    }
+    updateWateringItem(devId, val)
+}
+
+def findZoneData(devId, devData) {
+    if(!devId || !devData) { return null }
+    if(devData?.zones) { return devData?.zones.find { it?.id == devId } }
+    return null
+}
+
+def findZoneState(zoneId, zoneDetails) {
+    if(!zoneId || !zoneDetails) { return null }
+    if(zoneDetails?.zoneSummary) {
+        def zone = zoneDetails?.zoneSummary.find { it?.zoneDetail.id == zoneId } 
+        if (zone) {
+            if (zone.zoneState != null) {
+                zoneState = zone.zoneState
+               // log.trace("Found Zone State: ${zoneState}")
+                return zoneState
+            }
+        }
+    }
+    return null
+}
+
+def setValue(child, deviceId, newValue) {
+    def jsonRequestBody = '{"value":'+ newValue+'}'
+    def result = sendJson(child, jsonRequestBody, deviceId)
+    return result
+}
+
+def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
+    //log.trace "Sending: ${jsonBody}"
+    def returnStatus = false
+    
+    def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
+    def cmdParams = [
+        uri: "${baseURI}/${subUri}",
+        requestContentType: "application/x-www-form-urlencoded; charset=utf-8",
+        headers: ["Authorization": "Bearer ${atomicState?.authToken}", "Content-Type": "application/json"],
+        body: jsonBody
+    ]
+
+    try{
+        if(!standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
+            log.debug "Skipping this command while controller is in 'Standby Mode'..."
+            return true
+        }
+
+        httpPut(cmdParams) { resp ->
+            returnStatus = resp
+            if(resp.status == 201 || resp.status == 204) {
+                returnStatus = true
+                //runIn(4, "poll", [overwrite: true])
+            } else {
+                //refresh the auth token
+                if (resp.status == 401) {
+                    log.debug "Refreshing your authToken!"
+                    // refreshAuthToken()
+                } else {
+                    log.error "Authentication error, invalid authentication method, lack of credentials, etc."
+                }
+            }
+
+        }
+    } catch(Exception e) {
+        log.error "sendJson Exception Error: ${e}"
+    }
+    return returnStatus
+}
+
+def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
+   // log.trace "Send JSON With Response: ${jsonBody}"
+    def returnStatus = false
+    def returnData = null
+    def response = null
+    def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
+    def cmdParams = [
+        uri: "${baseURI}/${subUri}",
+        requestContentType: "application/x-www-form-urlencoded; charset=utf-8",
+        headers: ["Authorization": "Bearer ${atomicState?.authToken}", "Content-Type": "application/json"],
+        body: jsonBody
+    ]
+
+    try{
+
+        if(type == "post") {
+            httpPost(cmdParams) { resp ->
+                response = resp
+            }
+        }
+        else if(type == "put") {
+            httpPut(cmdParams) { resp ->
+                response = resp
+            }
+        }
+        if(response) {
+            returnData = response?.data
+            if(response?.status in [200, 201, 204]) {
+                returnStatus = true
+                //runIn(4, "poll", [overwrite: true])
+            } else {
+                //refresh the auth token
+                if (response?.status == 401) {
+                    log.debug "Refreshing your authToken!"
+                    // refreshAuthToken()
+                } else {
+                    log.error "Response status: ${response?.status} - Authentication error, invalid authentication method, lack of credentials, etc."
+                }
+            }
+
+        } else { return returnStatus }
+    } catch(Exception e) {
+        log.error "sendJson Exception Error: ${e}"
+    }
+    return returnData
+}
+
+//Section6: helper methods ---------------------------------------------------------------------------------------------
+
+def toJson(Map m) {
+    return new groovy.json.JsonBuilder(m).toString()
+}
+
+def toQueryString(Map m) {
+    return m.collect { k, v -> "${k}=${URLEncoder.encode(v.toString())}" }.sort().join("&")
+}
+
+def epochToDt(val) {
+    return formatDt(new Date(val))
+}
+
+def formatDt(dt) {
+    def tf = new SimpleDateFormat("MMM d, yyyy - h:mm:ss a")
+    if(location?.timeZone) { tf?.setTimeZone(location?.timeZone) }
+    else {
+        log.warn "Hubitat TimeZone is not found or is not set... Please Try to open your Hubitat location and Press Save..."
+        return null
+    }
+    return tf.format(dt)
+}
+
+def getDurationDesc(long secondsCnt) {
+    int seconds = secondsCnt %60
+    secondsCnt -= seconds
+    long minutesCnt = secondsCnt / 60
+    long minutes = minutesCnt % 60
+    minutesCnt -= minutes
+    long hoursCnt = minutesCnt / 60
+
+    return "${minutes} min ${(seconds >= 0 && seconds < 10) ? "0${seconds}" : "${seconds}"} sec"
+}
+
+//Returns time differences is seconds
+def GetTimeValDiff(timeVal) {
+    try {
+        def start = new Date(timeVal).getTime()
+        def now = new Date().getTime()
+        def diff = (int) (long) (now - start) / 1000
+        //log.debug "diff: $diff"
+        return diff
+    } catch (ex) {
+        log.error "GetTimeValDiff Exception: ${ex}"
+        return 1000
+    }
+}
+
+//Returns time differences is hours
+def GetHoursUntilDate(futureDate) {
+    // futureDate is a Date object
+    try {
+        def currentTime = new Date()
+        def difference = futureDate.getTime() - currentTime.getTime()
+        return Math.round(difference/3600000)
+    } catch (ex) {
+        log.error "GetTimeValDiffHours Exception: ${ex}"
+        return 1000
+    }
+}
+
+def formatDateToUtc(date) {
+    def outFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    outFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+  //  if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
+       
+    def formattedDate = outFormat.format(date)
+   // log.trace "formatted date = ${formattedDate}"
+	return formattedDate
+}
+
+def getDateObjectFromUTCDt(utcDt) {
+    return Date.parse("yyyy-MM-dd'T'HH:mm:ss'Z'", utcDt)
+}
+
+def getDateMap(date) {
+    return [year: date[Calendar.YEAR], month: date[Calendar.MONTH]+1, day: date[Calendar.DATE]]
+}
+
+def getMonthStart() {
+    def today = new Date()
+    def monthStart = today.copyWith(date: 1, hourOfDay: 0, minute: 0, second: 0)
+    return monthStart
+}
+
+def getMonthEnd() {
+    def date = getMonthStart()
+    Calendar calendar = GregorianCalendar.instance
+    calendar.set(date[Calendar.YEAR], date[Calendar.MONTH], date[Calendar.DATE])
+    def lastDayOfMonth = calendar.getActualMaximum(GregorianCalendar.DAY_OF_MONTH)
+    def monthEnd = date.copyWith(date: lastDayOfMonth, hourOfDay: 23, minute: 59, second: 59)
+    log.trace "last day of month: ${monthEnd}"
+    return monthEnd
+}
+
+def getChildContName()	{ return "Rachio Controller" }
+def getChildZoneName()	{ return "Rachio Zone" }
+// def getServerUrl()		{ return "https://graph.api.smartthings.com" }    // commented out in port - doesn't seem to be needed?
+def getShardUrl()		{ return getApiServerUrl() }
+def getAppEndpoint()	{ return "https://app.rach.io" }
+def getApiEndpoint()	{ return "https://api.rach.io" }
+def getClosedApiEndpoint()	{ return "https://cloud-rest.rach.io" }
+def getSupportUrl() 	{ return "http://support.rachio.com/" }
+def getCommunityUrl() 	{ return "http://community.rachio.com/" }
+def rootApiUrl() { return "https://api.rach.io/1/public" }
+
+def debugEventFromParent(child, message) {
+    child.sendEvent("name":"debugEventFromParent", "value":message, "description":message, displayed: true, isStateChange: true)
+}
+
+//send both push notification and mobile activity feeds
+def sendPushAndFeeds(notificationMessage){
+    if (atomicState.timeSendPush){
+        if (now() - atomicState.timeSendPush > 86400000){
+            sendPush("Rachio " + notificationMessage)
+            sendActivityFeeds(notificationMessage)
+            atomicState.timeSendPush = now()
+        }
+    } else {
+        sendPush("Rachio " + notificationMessage)
+        sendActivityFeeds(notificationMessage)
+        atomicState.timeSendPush = now()
+    }
+    atomicState.authToken = null
+}
+
+def sendActivityFeeds(notificationMessage) {
+   // def devices = app.getChildDevices(true)
+    def devices = app.getChildDevices()
+    devices.each { child ->
+           //update(child)
+        child.generateActivityFeedsEvent(notificationMessage)
+    }
+}
+
+def standbyOn(child, deviceId) {
+    log.debug "standbyOn() command received from ${child?.device?.displayName}"
+    if(deviceId) {
+        def jsonData = new JsonBuilder("id":deviceId)
+        def res = sendJson("device/off", jsonData.toString(), deviceId, true)
+        // poll()
+        // child?.log("${child?.device.displayName} Standby OFF (Result: $res)")
+        return res
+    }
+}
+
+def standbyOff(child, deviceId) {
+    log.debug "standbyOff() command received from ${child?.device?.displayName}"
+    if(deviceId) {
+        def jsonData = new JsonBuilder("id":deviceId)
+        def res = sendJson("device/on", jsonData.toString(), deviceId, true)
+        // // poll()
+        // child?.log("${child?.device.displayName} Standby OFF (Result: $res)")
+        return res
+    }
+}
+
+def on(child, deviceId) {
+    //log.trace "App on()..."
+}
+
+def off(child, deviceId) {
+    //log.trace "Received off() command from (${child?.device?.displayName})..."
+    // child?.log("Stop Watering - Received from (${child?.device.displayName})")
+    if(deviceId) {
+        def jsonData = new JsonBuilder("id":deviceId)
+        def res = sendJson("device/stop_water", jsonData.toString(), deviceId)
+        // poll()
+        return res
+    }
+    return false
+}
+
+def setRainDelay(child, deviceId, delayVal) {
+    if (delayVal) {
+        def secondsPerDay = 24*60*60;
+        def duration = delayVal * secondsPerDay;
+        def jsonData = new JsonBuilder("id":child?.device?.deviceNetworkId, "duration":duration)
+        def res = sendJson("device/rain_delay", jsonData?.toString(), deviceId)
+
+        if (res) { child?.sendEvent(name: 'rainDelay', value: delayVal) }
+        return res
+    }
+    return false
+}
+
+def isWatering(devId) {
+    //log.debug "isWatering()..."
+    def res = _httpGet("device/${devId}/current_schedule");
+    def result = (res && res?.status) ? true : false
+    return result
+}
+
+def getDeviceStatus(devId) {
+    return _httpGet("device/${devId}")
+}
+
+def getControlLblById(id) {
+    def dev = getChildDevice(id)
+    return dev ? dev?.displayName : null
+}
+
+def getCurrentRainDelay(res) {
+    //log.debug("getCurrentRainDelay($devId)...")
+    // convert to configured rain delay to days.
+    def ret =  (res?.rainDelayExpirationDate || res?.rainDelayStartDate) ? (res?.rainDelayExpirationDate - res?.rainDelayStartDate)/(26*60*60*1000) : 0
+    def value = (long) Math.floor(ret + 0.5d)
+    return value
+}
+
+def startZone(child, deviceId, zoneNum, mins) {
+    def res = false
+    def ctrlLbl = getControlLblById(deviceId)
+    log.trace "Starting to Water on ${ctrlLbl ? "$ctrlLbl: " : ""}(ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})"
+    //child?.log("Starting to water on (ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})...")
+    def zoneId = child?.device?.deviceNetworkId
+    if (zoneId && zoneNum && mins) {
+        def duration = mins.toInteger() * 60
+        def jsonData = new JsonBuilder("id":zoneId, "duration":duration)
+        //log.debug "startZone jsonData: ${jsonData}"
+        res = sendJson("zone/start", jsonData?.toString(), deviceId)
+    } else { log.error "startZone Missing ZoneId or duration... ${zoneId} | ${mins}" }
+    return res
+}
+
+def runAllZones(child, deviceId, mins) {
+    def res = false
+    //log.trace "runAllZones(ZoneName: ${child?.device?.displayName}, Duration: ${mins})..."
+    //child?.log("runAllZones(ZoneName: ${child?.device?.displayName} | Duration: ${mins})")
+    def selectedDevices = atomicState?.selectedDevices ?: [:]
+    if (deviceId && selectedDevices[deviceId] && selectedDevices[deviceId]?.zones && mins) {
+        def zoneData = []
+        def sortNum = 1
+        def duration = mins.toInteger() * 60
+        selectedDevices[deviceId]?.zones?.each { z ->
+            zoneData << ["id":z?.key, "duration":duration, "sortOrder": sortNum]
+            sortNum = sortNum+1
+        }
+        def jsonData = new JsonBuilder("zones":zoneData)
+        //child?.log("runAllZones  jsonData: ${jsonData}")
+        res = sendJson("zone/start_multiple", jsonData?.toString(), deviceId)
+    } else { log.error "runAllZones Missing ZoneIds or Duration... ${selectedDevices[deviceId]?.zones} | ${mins}" }
+    return res
+}
+
+// TO DO: update this method with the latest API that includes pause zone
+def pauseScheduleRun(child) {
+    //log.trace "pauseScheduleRun..."
+    def schedData = getCurSchedule(atomicState?.deviceId)
+    def schedRuleData = getScheduleRuleInfo(schedData?.scheduleRuleId)
+    child?.log "schedRuleData: $schedRuleData"
+    child?.log "Schedule Started on: ${epochToDt(schedRuleData?.startDate)} | Total Duration: ${getDurationDesc(schedRuleData?.totalDuration.toLong())}"
+
+    if(schedRuleData) {
+        def zones = schedRuleData?.zones?.sort { a , b -> a.sortOrder <=> b.sortOrder }
+        zones?.each { zn ->
+            child?.log "Zone#: ${zn?.zoneNumber} | Zone Duration: ${getDurationDesc(zn?.duration.toLong())} | Order#: ${zn?.sortOrder}"
+            if(zn?.zoneId == schedData?.zoneId) {
+                def zoneRunTime = "Elapsed Runtime: ${getDurationDesc(GetTimeValDiff(schedData?.zoneStartDate.toLong()))}"
+                child?.log "Zone Started: ${epochToDt(schedData?.zoneStartDate)} | ${zoneRunTime} | Cycle Count: ${schedData?.cycleCount} | Cycling: ${schedData?.cycling}"
+            }
+        }
+    }
+}
+
+//Required by child devices
+def getZones(device) {
+   // log.trace "getZones(${device.label})..."
+    def res = _httpGet("device/${device?.deviceNetworkId}")
+    return !res ? null : res?.zones
+}
+
+def getScheduleRuleInfo(schedId) {
+    def res = _httpGet("schedulerule/${schedId}")
+    return res
+}
+
+// Dashboard
+
+def getDashboardStartDate() {
+    def today = new Date()
+    today.set(hourOfDay: 0, minute: 0, second: 0)
+    def intDays = (int) numPastDaysDashboard
+    return today-intDays
+}
+
+def getDashboardEndDate() {
+    def today = new Date()
+    today.set(hourOfDay: 23, minute: 59, second: 59)
+    def intDays = (int) numFutureDaysDashboard
+    return today+intDays
+}
+
+
+def buildDashboard() {
+   
+    def devId = params.controllerID
+    def startDate = getDashboardStartDate()
+    def endDate = getDashboardEndDate()
+    
+    def detailsData = getDeviceDetails(devId)
+    def locationId = getLocationId(devId, detailsData)
+    
+    def rainSensorState = getDeviceState(devId)?.state?.rainSensorTripped
+    
+    def jsonSlurper = new JsonSlurper()
+    def weatherData = getWeather(locationId, startDate, endDate).weatherReadings
+    def pastEventsData = getDevicePastEvents(devId, startDate, endDate)
+    def futureEventsData = getDeviceFutureEvents(devId, endDate).entries
+    
+    colorScheme = getColorScheme(colorSchemeSelection)
+    
+    Integer columnWidth = 64 + extraHorizontalSpace
+    Integer numDays = 1 + numPastDaysDashboard + numFutureDaysDashboard
+    Integer svgWidth = columnWidth * numDays
+    svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 95" style="enable-background:new 0 0 ' + Integer.toString(svgWidth) + ' 95;" xml:space="preserve">'
+    
+    svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropAccent{fill:' + colorScheme.rainDropAccentColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:none;stroke:' + colorScheme.skipStrikethroughColor + ';stroke-width:3;stroke-miterlimit:10;} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip0{fill:' + colorScheme.freezeSkip0Color + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:7px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style> <defs> <linearGradient id="bicolored"> <stop offset="50%" stop-color="' + colorScheme.highTempTextColor + '"/> <stop offset="50%" stop-color="' + colorScheme.lowTempTextColor + '"/> </linearGradient> </defs>'
+    
+    svg += '<g transform="scale(' + Double.toString(globalScale/100) + ')">'
+    
+    def today = new Date()
+    today.set(hourOfDay: 0, minute: 0, second: 0)
+    def yesterday = today.copyWith(hourOfDay: 23, minute: 59, second: 59)
+    yesterday -= 1
+    def todayDateMap = getDateMap(today)
+    def sevenDaysLater = today.copyWith(hourOfDay: 23, minute: 59, second: 59)
+    sevenDaysLater += 6
+    
+    def i = 0
+    for (date in startDate..endDate) {
+        i += 1
+        def dateMap = getDateMap(date)
+       
+        def dayLabel = ""
+        if (dateMap == todayDateMap) { dayLabel = "Today" }
+        else if (date.after(today) && date.before(sevenDaysLater)) { dayLabel = date.format('EEE') }
+        else { dayLabel = date.format('M/d') }
+
+        def weather = weatherData?.find { it?.date == dateMap }
+        def precipPercent = (weather.precipProbability > 0) ? ((int) (weather.precipProbability * 100)).toString() + "%" : ""
+        def precipAmount = (weather.calculatedPrecip > 0) ? weather.calculatedPrecip + "\"" : ""
+        def highTemp = weather.temperatureMax
+        def lowTemp = weather.temperatureMin
+        def weatherIconText = weather.weatherType
+        def weatherIcon = null
+                            
+        if (weatherIconText == 'CHANCE_FLURRIES') { weatherIcon = chanceflurries }
+        else if (weatherIconText == 'CHANCE_RAIN') { weatherIcon = chancerain }
+        else if (weatherIconText == 'CHANCE_SLEET') { weatherIcon = chancesleet }
+        else if (weatherIconText == 'CHANCE_SNOW') { weatherIcon = chancesnow }
+        else if (weatherIconText == 'CHANCE_TSTORMS') { weatherIcon = chancetstorms }
+        else if (weatherIconText == 'CLEAR') { weatherIcon = clear }
+        else if (weatherIconText == 'CLOUDY') { weatherIcon = cloudy }
+        else if (weatherIconText == 'FLURRIES') { weatherIcon = flurries }
+        else if (weatherIconText == 'FOG') { weatherIcon = fog }
+        else if (weatherIconText == 'HAZY') { weatherIcon = hazy }
+        else if (weatherIconText == 'MOSTLY_CLOUDY') { weatherIcon = mostlycloudy }
+        else if (weatherIconText == 'MOSTLY_SUNNY') { weatherIcon = mostlysunny }
+        else if (weatherIconText == 'RAIN') { weatherIcon = rain }
+        else if (weatherIconText == 'SLEET') { weatherIcon = sleet }
+        else if (weatherIconText == 'SNOW') { weatherIcon = snow }
+        else if (weatherIconText == 'SUNNY') { weatherIcon = sunny }
+        else if (weatherIconText == 'TSTORMS') { weatherIcon = tstorms }
+        else if (weatherIconText == 'PARTLY_CLOUDY') { weatherIcon = partlycloudy }
+        else if (weatherIconText == 'PARTLY_SUNNY') { weatherIcon = partlysunny }
+        
+        def pastEvents = pastEventsData?.findAll { getDateMap(new Date(it?.eventDate)) == dateMap }
+        def futureEvents = futureEventsData?.findAll { getDateMap(getDateObjectFromUTCDt(it?.timestamp)) == dateMap }
+        def eventsList = []
+        irrigationIcon = null
+        if (!pastEvents.isEmpty()) {
+            for (event in pastEvents) {
+                def foundEvent = [:]
+                switch(event.subType) {
+                    // show watering icon if ANY watering is done on this date; else show skip icon
+                    case "SCHEDULE_STARTED":
+                        foundEvent = [eventType : "WATER", eventSubType : null, eventDescription: event.summary]
+                        irrigationIcon = sprinklerWatering
+                        break
+                    case "WEATHER_INTELLIGENCE_SKIP":
+                        foundEvent = [eventType : "SKIP", eventSubType : "RAIN_PREDICTED", eventDescription: event.summary]
+                        if (eventsList.isEmpty()) { irrigationIcon = rainSkip }
+                        break
+                    case "WEATHER_INTELLIGENCE_CLIMATE_SKIP":
+                        foundEvent = [eventType : "SKIP", eventSubType : "SOIL_SATURATED", eventDescription: event.summary]
+                        if (eventsList.isEmpty()) { irrigationIcon = saturationSkip }
+                        break
+                }
+                if(!foundEvent.isEmpty()) { eventsList.add(foundEvent) }
+            }
+        }
+        else if (!futureEvents.isEmpty()) {
+            for (event in futureEvents) {
+                def foundEvent = [:]
+                switch(event.type) {
+                    // show watering icon if ANY watering is done on this date; else show skip icon
+                    case "FUTURE_FEED_SCHEDULE_EVENT":
+                        foundEvent = [eventType : "WATER", eventSubType : null, eventDescription: event.summary]
+                        if (rainSensorState == false) { irrigationIcon = sprinklerWatering }
+                        else if (rainSensorState == true) { irrigationIcon = rainSensorSkip }
+                        break
+                    case "RAIN_FUTURE_FEED_SKIP_EVENT":
+                        foundEvent = [eventType : "SKIP", eventSubType : "RAIN_PREDICTED", eventDescription: event.summary]
+                        if (eventsList.isEmpty()) { irrigationIcon = rainSkip }
+                        break
+                    case "WIND_FUTURE_FEED_SKIP_EVENT":
+                        foundEvent = [eventType : "SKIP", eventSubType : "WIND_PREDICTED", eventDescription: event.summary]
+                        if (eventsList.isEmpty()) { irrigationIcon = windSkip }
+                        break
+                    case "FREEZE_FUTURE_FEED_SKIP_EVENT":
+                        foundEvent = [eventType : "SKIP", eventSubType : "FREEZE_PREDICTED", eventDescription: event.summary]
+                        if (eventsList.isEmpty()) { irrigationIcon = freezeSkip }
+                        break
+                    case "CLIMATE_FUTURE_FEED_SKIP_EVENT":
+                        foundEvent = [eventType : "SKIP", eventSubType : "SOIL_SATURATED", eventDescription: event.summary]
+                        if (eventsList.isEmpty()) { irrigationIcon = saturationSkip }
+                        break
+                }
+                if(!foundEvent.isEmpty()) { eventsList.add(foundEvent) }
+            }
+        }
+        
+        // Build SVG Body      
+        Integer halfColumnWidth = columnWidth / 2
+        columnCenter = Integer.toString(halfColumnWidth*(i+1))
+        
+        svg += '<g transform="translate(' + Integer.toString(columnWidth*i) + ', 0)">'
+        svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="1.5" text-anchor="middle" class="dayText largeFontClass fontWeightClass">' + dayLabel + '</text>'
+        
+        svg += '<g transform="translate(' + Double.toString(extraHorizontalSpace/2) + ', 0)">'
+        svg += weatherIcon
+        svg += '</g>'
+        
+        if (showPrecipPercent && date.after(yesterday)) {  // only show % for dates that are on or after today
+            popBaseY = 69
+            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((popBaseY+extraVerticalSpace)) + '" text-anchor="middle" class="precipText smallFontClass fontWeightClass">' + precipPercent + '</text>'
+        }
+        if (showPrecipAmount) {
+            precipAmountBaseY = showPrecipPercent ? 79 : 69
+            precipAmountExtraVerticalSpacing = showPrecipPercent ? extraVerticalSpace*2 : extraVerticalSpace
+            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((precipAmountBaseY + precipAmountExtraVerticalSpacing)) + '" text-anchor="middle" class="precipText smallFontClass fontWeightClass">' + precipAmount + '</text>'
+        }
+        
+        if (showTemp) {
+            tempBaseY = 72
+            tempExtraVerticalSpacing = extraVerticalSpace
+            if (showPrecipPercent && showPrecipAmount) {
+                tempBaseY = 91 
+                tempExtraVerticalSpacing = extraVerticalSpace*3
+            }
+            else if (showPrecipPercent || showPrecipAmount) {
+                tempBaseY = 82 
+                tempExtraVerticalSpacing = extraVerticalSpace*2
+            }
+            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((tempBaseY+tempExtraVerticalSpacing)) + '" text-anchor="middle" class="tempText largeFontClass fontWeightClass">' + highTemp + ' | ' + lowTemp + '</text>'
+        }
+        
+        irrigationBaseY = 65
+        irrigationExtraVerticalSpacing = extraVerticalSpace
+        if (showPrecipPercent && showPrecipAmount && showTemp) {
+            irrigationBaseY = 100
+            irrigationExtraVerticalSpacing = extraVerticalSpace*4
+        }
+        else if ((showPrecipPercent && showPrecipAmount)) {
+            irrigationBaseY = 86
+            irrigationExtraVerticalSpacing = extraVerticalSpace*3
+        }
+        else if ((showPrecipPercent && showTemp) || (showPrecipAmount && showTemp)) {
+            irrigationBaseY = 91
+            irrigationExtraVerticalSpacing = extraVerticalSpace*3
+        }
+        else if (showPrecipPercent || showPrecipAmount) {
+            irrigationBaseY = 76
+            irrigationExtraVerticalSpacing = extraVerticalSpace*2
+        }
+        else if (showTemp) {
+            irrigationBaseY = 80
+            irrigationExtraVerticalSpacing = extraVerticalSpace*2
+        }
+
+        svg += '<g transform="translate(' + Double.toString((48 + extraHorizontalSpace)/2) + ',' + Long.toString(irrigationBaseY + irrigationExtraVerticalSpacing) + ')">'
+        svg += irrigationIcon
+          
+        svg += '</g>'
+            
+        svg += '</g>'
+    }
+    svg += '</g></svg>'
+    render contentType: "image/svg+xml", data: svg, status: 200
+}
+
+def getColorScheme(schemeSelection) {
+    
+    white = "#FFFFFF"
+    black = "#000000"
+    red = "#cc3333"
+    yellow = "#f4a71d"
+    darkBlue = "#2885c7"
+    lightBlue = "#72b7d4"
+    
+    if (schemeSelection == "White with Color") {
+        return [cloudColor: white, lightColor: yellow, precipColor: darkBlue, frozenPrecipColor: lightBlue, rainDropWateringColor: darkBlue, rainDropAccentColor: white, rainDropSkipColor:red, saturatedSoilColor: darkBlue, rainDropsPredictedColor: darkBlue, freezeSkip0Color: lightBlue, freezeSkip1Color: darkBlue, windSkipColor: lightBlue, rainSensorSkipColor: darkBlue, strokeColor: none, dayTextColor: white, precipTextColor: darkBlue, highTempTextColor: white, lowTempTextColor: white]  
+    }
+    else if (schemeSelection == "Black with Color") {
+        return [cloudColor: black, lightColor: yellow, precipColor: darkBlue, frozenPrecipColor: lightBlue, rainDropWateringColor: darkBlue, rainDropAccentColor: black, rainDropSkipColor:red, saturatedSoilColor: darkBlue, rainDropsPredictedColor: darkBlue, freezeSkip0Color: lightBlue, freezeSkip1Color: darkBlue,  windSkipColor: lightBlue, rainSensorSkipColor: darkBlue, strokeColor: none, dayTextColor: black, precipTextColor: darkBlue, highTempTextColor: black, lowTempTextColor: black]  
+    }
+    else if (schemeSelection == "White without Color") {
+        return [cloudColor: white, lightColor: white, precipColor: white,  frozenPrecipColor: white, rainDropWateringColor: white, rainDropAccentColor: black, rainDropSkipColor:black, saturatedSoilColor: black, rainDropsPredictedColor: white, freezeSkip0Color: white, freezeSkip1Color: white,  windSkipColor: white, rainSensorSkipColor: white, strokeColor: white, dayTextColor: white, precipTextColor: white, highTempTextColor: white, lowTempTextColor: white]  
+    }
+    else if (schemeSelection == "Black without Color") {
+        return [cloudColor: black, lightColor: black, precipColor: black, frozenPrecipColor: black, rainDropWateringColor: black, rainDropAccentColor: white, rainDropSkipColor: white, saturatedSoilColor: white, rainDropsPredictedColor: black, freezeSkip0Color: black, freezeSkip1Color: black, windSkipColor: black, rainSensorSkipColor: black, strokeColor: black, dayTextColor: black, precipTextColor: black, highTempTextColor: black, lowTempTextColor: black]  
+    }
+    else if (schemeSelection == "Custom") {
+        return [cloudColor: cloudColorCustom, lightColor: lightColorCustom, precipColor: precipColorCustom, rainDropWateringColor: rainDropWateringColorCustom, rainDropAccentColor: rainDropAccentColorCustom, rainDropSkipColor:rainDropSkipColorCustom, skipStrikethroughColor: skipStrikethroughColorCustom, saturatedSoilColor: saturatedSoilColorCustom, rainDropsPredictedColor: rainDropsPredictedColorCustom, freezeSkip0Color: freezeSkip0ColorCustom, freezeSkip1Color: freezeSkip1ColorCustom, windSkipColor: windSkipColorCustom, rainSensorSkipColor: rainSensorSkipColorCustom, strokeColor: strokeColorCustom, dayTextColor: dayTextColorCustom, precipTextColor: precipTextColorCustom, highTempTextColor: highTempTextColorCustom, lowTempTextColor: lowTempTextColorCustom]  
+    }
+    log.debug("Error getting color scheme")
+    return
+}
+
+chanceflurries = '<g id="chanceflurries"> <path class="cloud" d="M44.1,41h5.8c5.2,0,9.5-4.3,9.5-9.5c0-4.9-3.7-8.9-8.4-9.5c0.1-0.8,0.2-1.6,0.2-2.4c0-7.4-6-13.4-13.4-13.4 c-4.6,0-8.7,2.3-11.2,6c-1.2-0.5-2.4-0.8-3.7-0.8c-5.1,0-9.3,4.2-9.3,9.3V21c-4.1,1.4-7,5.3-7,9.7c0,5.6,4.6,10.2,10.2,10.2 L44.1,41"/> <path class="frozenPrecip" d="M40.9,49.3c0.7-0.9,0.5-2.2-0.4-2.9s-2.2-0.5-2.9,0.4C37,47.7,37.1,49,38,49.7S40.2,50.2,40.9,49.3z M28.2,49.3c0.7-0.9,0.5-2.2-0.4-2.9s-2.2-0.5-2.9,0.4c-0.7,0.9-0.5,2.2,0.4,2.9S27.5,50.2,28.2,49.3z"/> <ellipse class="frozenPrecip" cx="32.9" cy="56.8" rx="2.1" ry="2.1"/> <ellipse class="frozenPrecip" cx="32.9" cy="41.3" rx="2.1" ry="2.1"/> </g>'
+
+chancerain = '<path class="cloud" d="M44.1,42.9h5.7c5.2,0,9.5-4.3,9.5-9.5c-0.1-4.7-3.8-8.7-8.4-9.3c0.1-0.8,0.2-1.6,0.2-2.4 c0-7.4-6-13.4-13.4-13.4c-4.5,0-8.7,2.3-11.2,6c-1.2-0.5-2.4-0.8-3.7-0.8c-5.1,0-9.3,4.1-9.3,9.3v0.3c-4.1,1.4-7,5.2-7,9.7 c0,5.6,4.6,10.2,10.2,10.2L44.1,42.9"/> <path class="precip" d="M24.9,46.5c-0.3,0-0.5-0.1-0.8-0.2c-0.6-0.4-0.7-1.3-0.3-1.8l2.4-3.5c0.4-0.6,1.2-0.7,1.8-0.3 c0.6,0.4,0.7,1.2,0.3,1.8L25.9,46C25.7,46.3,25.3,46.5,24.9,46.5z M30.7,46.5c-0.3,0-0.5-0.1-0.8-0.2c-0.6-0.4-0.7-1.3-0.3-1.8 L32,41c0.4-0.6,1.3-0.7,1.8-0.3c0.6,0.4,0.7,1.2,0.3,1.8L31.7,46C31.5,46.3,31.1,46.5,30.7,46.5z M36.5,46.5c-0.3,0-0.5-0.1-0.8-0.2 c-0.6-0.4-0.7-1.3-0.3-1.8l2.4-3.5c0.4-0.6,1.3-0.7,1.8-0.3c0.6,0.4,0.7,1.2,0.3,1.8L37.5,46C37.4,46.3,37,46.5,36.5,46.5z M18.6,56 c-0.3,0-0.5-0.1-0.8-0.2c-0.6-0.4-0.7-1.2-0.3-1.8l2.4-3.5c0.4-0.6,1.3-0.7,1.9-0.3s0.7,1.2,0.3,1.8l-2.4,3.5 C19.4,55.8,19,56,18.6,56z M24.5,56c-0.3,0-0.5-0.1-0.8-0.2c-0.6-0.4-0.7-1.2-0.3-1.8l2.4-3.5c0.4-0.6,1.2-0.7,1.8-0.3 c0.6,0.4,0.7,1.2,0.3,1.8l-2.4,3.5C25.3,55.8,24.9,56,24.5,56z M30.3,56c-0.3,0-0.5-0.1-0.8-0.2c-0.6-0.4-0.7-1.2-0.3-1.8l2.4-3.5 c0.4-0.6,1.2-0.7,1.8-0.3c0.6,0.4,0.7,1.2,0.3,1.8l-2.4,3.5C31.1,55.8,30.7,56,30.3,56z"/>'
+
+chancesleet = '<g id="chancesleet"> <path class="cloud" d="M44.1,42.6h5.7c5.2,0,9.5-4.3,9.5-9.5c-0.1-4.7-3.8-8.7-8.4-9.3c0.1-0.8,0.2-1.6,0.2-2.4 C51.1,14,45.1,8,37.7,8c-4.5,0-8.7,2.3-11.2,6c-1.2-0.5-2.4-0.8-3.7-0.8c-5.1,0-9.3,4.2-9.3,9.3v0.3c-4.1,1.4-7,5.2-7,9.7 c0,5.6,4.6,10.2,10.2,10.2L44.1,42.6"/> <path class="frozenPrecip" d="M26.6,46c-0.2,0-0.3,0-0.5-0.1c-0.5-0.3-0.7-0.9-0.5-1.4l3.5-6.6c0.3-0.5,0.9-0.7,1.4-0.5 c0.5,0.3,0.7,0.9,0.5,1.4l-3.5,6.6C27.4,45.8,27,46,26.6,46z M31.2,53c-0.2,0-0.3,0-0.5-0.1c-0.5-0.3-0.7-0.9-0.5-1.4l6.9-13.7 c0.3-0.5,0.9-0.7,1.4-0.5c0.5,0.3,0.7,0.9,0.5,1.4l-6.9,13.7C32,52.8,31.6,53,31.2,53z M26.1,50.6l-2.8,1l-0.9-2.8l2.8-0.9 L26.1,50.6z M27.1,55.7l2.8-0.9l0.9,2.8L28,58.4L27.1,55.7z"/> </g>'
+
+chancesnow = '<g id="chancesnow"> <path class="cloud" d="M44.1,43.5h5.7c5.2,0,9.5-4.3,9.5-9.5c-0.1-4.8-3.8-8.8-8.4-9.4c0.1-0.8,0.2-1.6,0.2-2.4 c0-7.4-6-13.4-13.4-13.4c-4.5,0-8.7,2.3-11.2,6c-1.2-0.5-2.4-0.8-3.7-0.8c-5.1,0-9.3,4.2-9.3,9.3v0.3c-4.1,1.3-7,5.2-7,9.7 c0,5.6,4.6,10.2,10.2,10.2H44.1"/> <path class="frozenPrecip" d="M42.2,46.4h-5.1c-0.1-0.4-0.3-0.8-0.5-1.2l2.3-2.3c0.4-0.4,0.4-1.1,0-1.5s-1.1-0.4-1.5,0l-2.3,2.3 c-0.4-0.2-0.8-0.4-1.2-0.5v-5.1c0-0.6-0.5-1.1-1.1-1.1s-1.1,0.5-1.1,1.1v5.1c-0.4,0.1-0.8,0.3-1.2,0.5l-2.2-2.2 c-0.4-0.4-1.1-0.4-1.5,0s-0.4,1.1,0,1.5l2.2,2.2c-0.2,0.4-0.4,0.8-0.5,1.2h-5.1c-0.6,0-1.1,0.5-1.1,1.1s0.5,1.1,1.1,1.1h5.1 c0.1,0.4,0.3,0.8,0.5,1.2l-2.3,2.3c-0.4,0.4-0.4,1.1,0,1.5c0.2,0.2,0.5,0.3,0.8,0.3s0.5-0.1,0.8-0.3l2.3-2.3 c0.4,0.2,0.8,0.4,1.2,0.5v5.1c0,0.6,0.5,1.1,1.1,1.1s1.1-0.5,1.1-1.1v-5.1c0.4-0.1,0.8-0.3,1.2-0.5l2.2,2.2 c0.2,0.2,0.5,0.3,0.8,0.3s0.6-0.1,0.8-0.3c0.4-0.4,0.4-1.1,0-1.5l-2.2-2.2c0.2-0.4,0.4-0.8,0.5-1.2h5.1c0.6,0,1.1-0.5,1.1-1.1 C43.3,46.9,42.8,46.4,42.2,46.4z M32.9,49.2c-0.9,0-1.7-0.8-1.7-1.7s0.8-1.7,1.7-1.7s1.7,0.8,1.7,1.7 C34.6,48.5,33.8,49.2,32.9,49.2z"/> </g>'
+
+chancetstorms = '<g id="chancetstorms"> <path class="cloud" d="M44.2,41.2h5.7c5.2,0,9.5-4.3,9.5-9.5c-0.2-4.7-3.9-8.7-8.5-9.3c0.1-0.8,0.2-1.6,0.2-2.4 c0-7.4-6-13.4-13.4-13.4c-4.5,0-8.7,2.3-11.2,6c-1.2-0.5-2.4-0.8-3.6-0.8c-5.1,0-9.3,4.2-9.3,9.3v0.3c-4.1,1.4-7,5.2-7,9.7 c0,5.6,4.6,10.2,10.2,10.2L44.2,41.2"/> <path class="light" d="M28.3,59.2c-0.1,0-0.4-0.1-0.5-0.1c-0.4-0.3-0.6-0.9-0.3-1.3l5.7-9.5h-6l6.7-9.6c0.3-0.4,0.9-0.5,1.3-0.2 s0.5,0.9,0.2,1.4l-4.6,6.6h5.7l-7.4,12.3C29,59.1,28.7,59.2,28.3,59.2z"/> </g>'
+
+clear = '<g id="clear"> <path class="light" d="M32.9,19.2c-0.7,0-1.3-0.6-1.3-1.3v-4.6c0-0.7,0.6-1.3,1.3-1.3s1.3,0.6,1.3,1.3v4.6 C34.2,18.6,33.6,19.2,32.9,19.2z M32.9,53.8c-0.7,0-1.3-0.6-1.3-1.3v-4.6c0-0.7,0.6-1.3,1.3-1.3s1.3,0.6,1.3,1.3v4.6 C34.2,53.2,33.6,53.8,32.9,53.8z M17.9,34.2h-4.6c-0.7,0-1.3-0.6-1.3-1.3s0.6-1.3,1.3-1.3h4.6c0.7,0,1.3,0.6,1.3,1.3 S18.6,34.2,17.9,34.2z M52.5,34.2h-4.6c-0.7,0-1.3-0.6-1.3-1.3s0.6-1.3,1.3-1.3h4.6c0.7,0,1.3,0.6,1.3,1.3S53.2,34.2,52.5,34.2z M44,23.5c-0.3,0-0.7-0.1-0.9-0.4c-0.5-0.5-0.5-1.4,0-1.9l3.2-3.2c0.5-0.5,1.4-0.5,1.9,0s0.5,1.4,0,1.9L45,23.1 C44.7,23.4,44.3,23.5,44,23.5z M19.1,48.4c-0.3,0-0.7-0.1-0.9-0.4c-0.5-0.5-0.5-1.4,0-1.9l3.2-3.2c0.5-0.5,1.4-0.5,1.9,0 s0.5,1.4,0,1.9L20,48C19.8,48.3,19.4,48.4,19.1,48.4z M47.2,48.2c-0.3,0-0.7-0.1-0.9-0.4l-3.2-3.2c-0.5-0.5-0.5-1.4,0-1.9 s1.4-0.5,1.9,0l3.2,3.2c0.5,0.5,0.5,1.4,0,1.9C47.9,48.1,47.6,48.2,47.2,48.2z M22.3,23.7c-0.3,0-0.7-0.1-0.9-0.4l-3.2-3.2 c-0.5-0.5-0.5-1.4,0-1.9s1.4-0.5,1.9,0l3.2,3.2c0.5,0.5,0.5,1.4,0,1.9C23,23.6,22.7,23.7,22.3,23.7z M32.9,24.5 M32.9,21.8 c-6.1,0-11.1,5-11.1,11.1S26.8,44,32.9,44S44,39,44,32.9S39,21.8,32.9,21.8z"/> </g>'
+
+cloudy = '<path id="cloudy" class="cloud" d="M49.7,50.2H16.8c-5.6,0-10.2-4.6-10.2-10.2c0-4.4,2.9-8.3,7-9.7V30c0-5.1,4.2-9.3,9.3-9.3 c1.3,0,2.5,0.3,3.7,0.8c2.5-3.7,6.6-6,11.2-6c7.4,0,13.4,6,13.4,13.4c0,0.8-0.1,1.6-0.2,2.4c4.7,0.6,8.3,4.6,8.3,9.4 C59.2,45.9,54.9,50.2,49.7,50.2z"/>'
+
+flurries = '<g id="flurries"> <path class="cloud" d="M44.1,41.2h5.7c5.2,0,9.5-4.3,9.5-9.5c-0.1-4.8-3.8-8.8-8.4-9.4c0.2-0.8,0.2-1.6,0.2-2.4 c0-7.4-6-13.4-13.4-13.4c-4.5,0-8.7,2.3-11.2,6c-1.2-0.5-2.4-0.8-3.6-0.8c-5.1,0-9.3,4.2-9.3,9.3v0.3c-4.1,1.4-7,5.3-7,9.7 c0,5.6,4.6,10.2,10.2,10.2L44.1,41.2"/> <path class="frozenPrecip" d="M23.4,49.6c0.7-0.9,0.5-2.2-0.4-2.9s-2.2-0.5-2.9,0.4c-0.7,0.9-0.5,2.2,0.4,2.9S22.7,50.5,23.4,49.6z M44.9,49.6c0.7-0.9,0.5-2.2-0.4-2.9s-2.2-0.5-2.9,0.4C41,48,41.1,49.3,42,50S44.2,50.5,44.9,49.6z"/> <path class="frozenPrecip" d="M39.2,41c0.7-0.9,0.5-2.2-0.4-2.9s-2.2-0.5-2.9,0.4s-0.5,2.2,0.4,2.9S38.5,41.9,39.2,41z"/> <ellipse class="frozenPrecip" cx="28.1" cy="39.8" rx="2.1" ry="2.1"/> <path class="frozenPrecip" d="M39.2,58.1c0.7-0.9,0.5-2.2-0.4-2.9s-2.2-0.5-2.9,0.4s-0.5,2.2,0.4,2.9S38.5,59.1,39.2,58.1z"/> <ellipse class="frozenPrecip" cx="28.1" cy="56.9" rx="2.1" ry="2.1"/> <ellipse class="frozenPrecip" cx="32.5" cy="48.3" rx="2.1" ry="2.1"/> </g>'
+
+fog = '<g id="fog"><path class="cloud" d="M41.7 38.5c-3.2 0-6.1-.9-8.7-2.7-7.2-5.1-13.2-5.3-19.6-.9-.5.3-1.1.2-1.4-.3-.3-.5-.2-1.1.3-1.4 7.1-4.9 14.1-4.6 21.9.9 6.2 4.4 13.3 1.9 18.2-1 .5-.3 1.1-.1 1.4.4.3.5.1 1.1-.4 1.4-4 2.4-8 3.6-11.7 3.6z"/><path class="cloud" d="M41.7 46.3c-3.2 0-6.1-.9-8.7-2.7-7.2-5.1-13.2-5.3-19.6-.9-.5.3-1.1.2-1.4-.3-.3-.5-.2-1.1.3-1.4 7.1-4.9 14.1-4.6 21.9.9 6.2 4.3 13.3 1.9 18.2-1 .5-.3 1.1-.1 1.4.4.3.5.1 1.1-.4 1.4-4 2.4-8 3.6-11.7 3.6zM41.7 30.8c-3.2 0-6.1-.9-8.7-2.7-7.2-5.1-13.2-5.3-19.6-.9-.5.3-1.1.2-1.4-.3-.3-.5-.2-1.1.3-1.4 7.1-4.9 14.1-4.6 21.9.9 6.2 4.4 13.3 1.9 18.2-1 .5-.3 1.1-.1 1.4.4.3.5.1 1.1-.4 1.4-4 2.4-8 3.6-11.7 3.6z"/></g>'
+
+hazy = '<g id="hazy"><path class="cloud" d="M41.7 38.5c-3.2 0-6.1-.9-8.7-2.7-7.2-5.1-13.2-5.3-19.6-.9-.5.3-1.1.2-1.4-.3-.3-.5-.2-1.1.3-1.4 7.1-4.9 14.1-4.6 21.9.9 6.2 4.4 13.3 1.9 18.2-1 .5-.3 1.1-.1 1.4.4.3.5.1 1.1-.4 1.4-4 2.4-8 3.6-11.7 3.6z"/><path class="cloud" d="M41.7 46.3c-3.2 0-6.1-.9-8.7-2.7-7.2-5.1-13.2-5.3-19.6-.9-.5.3-1.1.2-1.4-.3-.3-.5-.2-1.1.3-1.4 7.1-4.9 14.1-4.6 21.9.9 6.2 4.3 13.3 1.9 18.2-1 .5-.3 1.1-.1 1.4.4.3.5.1 1.1-.4 1.4-4 2.4-8 3.6-11.7 3.6zM41.7 30.8c-3.2 0-6.1-.9-8.7-2.7-7.2-5.1-13.2-5.3-19.6-.9-.5.3-1.1.2-1.4-.3-.3-.5-.2-1.1.3-1.4 7.1-4.9 14.1-4.6 21.9.9 6.2 4.4 13.3 1.9 18.2-1 .5-.3 1.1-.1 1.4.4.3.5.1 1.1-.4 1.4-4 2.4-8 3.6-11.7 3.6z"/></g>'
+
+mostlycloudy = '<g id="mostlycloudy"> <circle class="light" cx="43.3" cy="23.6" r="7.7"/> <path class="light" d="M43.1,13.9c-0.7,0-1.2-0.6-1.2-1.2V9.2c0-0.7,0.6-1.2,1.2-1.2c0.7,0,1.2,0.6,1.2,1.2v3.4 C44.3,13.3,43.8,13.9,43.1,13.9z M57.6,25h-3.4c-0.7,0-1.2-0.5-1.2-1.2s0.5-1.2,1.2-1.2h3.4c0.7,0,1.2,0.5,1.2,1.2 C58.9,24.5,58.3,25,57.6,25z M51.3,17.1c-0.3,0-0.6-0.1-0.9-0.4c-0.5-0.5-0.5-1.3,0-1.7l2.4-2.4c0.5-0.5,1.3-0.5,1.7,0 c0.5,0.5,0.5,1.3,0,1.7l-2.4,2.4C52,17,51.6,17.1,51.3,17.1z M53.7,35.4c-0.3,0-0.6-0.1-0.9-0.4l-2.4-2.4c-0.5-0.5-0.5-1.3,0-1.7 c0.5-0.5,1.3-0.5,1.7,0l2.4,2.4c0.5,0.5,0.5,1.3,0,1.7C54.4,35.3,54,35.4,53.7,35.4z M35.3,17.2c-0.3,0-0.6-0.1-0.9-0.4L32,14.5 c-0.5-0.5-0.5-1.3,0-1.7c0.5-0.5,1.3-0.5,1.7,0l2.4,2.4c0.5,0.5,0.5,1.3,0,1.7C35.9,17.1,35.6,17.2,35.3,17.2z"/> <path class="cloud" d="M45.6,57.8H16c-5.1,0-9.3-4.2-9.3-9.3c0-4,2.6-7.6,6.3-8.8v-0.2c0-4.7,3.8-8.5,8.5-8.5c1.1,0,2.2,0.2,3.2,0.7 c2.2-3.4,6-5.4,10.1-5.4c6.7,0,12.2,5.5,12.2,12.2c0,0.7-0.1,1.4-0.2,2.1c4.2,0.6,7.5,4.2,7.5,8.6C54.2,53.9,50.4,57.8,45.6,57.8z"/> </g>'
+
+mostlysunny = '<g id="mostlysunny"> <path class="light" d="M35.5,15.3c-0.7,0-1.3-0.6-1.3-1.3V9c0-0.7,0.6-1.3,1.3-1.3s1.3,0.6,1.3,1.3v5C36.8,14.7,36.2,15.3,35.5,15.3z M19.2,31.6h-5c-0.7,0-1.3-0.6-1.3-1.3c0-0.7,0.6-1.3,1.3-1.3h5c0.7,0,1.3,0.6,1.3,1.3C20.5,31,19.9,31.6,19.2,31.6z M56.7,31.6h-5 c-0.7,0-1.3-0.6-1.3-1.3c0-0.7,0.6-1.3,1.3-1.3h5c0.7,0,1.3,0.6,1.3,1.3C58,31,57.4,31.6,56.7,31.6z M47.5,20 c-0.3,0-0.7-0.1-0.9-0.4c-0.5-0.5-0.5-1.4,0-1.9l3.5-3.5c0.5-0.5,1.4-0.5,1.9,0s0.5,1.4,0,1.9l-3.5,3.5C48.2,19.8,47.8,20,47.5,20z M51,46.8c-0.3,0-0.7-0.1-0.9-0.4l-3.5-3.5c-0.5-0.5-0.5-1.4,0-1.9s1.3-0.5,1.9,0l3.5,3.5c0.5,0.5,0.5,1.4,0,1.9 C51.7,46.6,51.3,46.8,51,46.8z M24,20.2c-0.3,0-0.7-0.1-0.9-0.4l-3.5-3.5c-0.5-0.5-0.5-1.4,0-1.9s1.3-0.5,1.9,0l3.5,3.5 c0.5,0.5,0.5,1.4,0,1.9C24.7,20.1,24.3,20.2,24,20.2z"/> <circle class="light" cx="35.5" cy="30.3" r="12"/> <path class="cloud" d="M33.4,58.2h-20c-3.7,0-6.7-3-6.7-6.7c0-2.8,1.7-5.3,4.3-6.3c0.1-3.3,2.8-6,6.2-6c0.7,0,1.4,0.1,2,0.4 c1.6-2.2,4.2-3.6,7-3.6c4.8,0,8.7,3.9,8.7,8.7c0,0.4,0,0.7-0.1,1.1c2.8,0.6,5,3.1,5,6.2C39.7,55.4,36.9,58.2,33.4,58.2z"/> </g>'
+
+rain = '<g id="rain"> <path class="cloud" d="M44.1,41.2h5.7c5.2,0,9.5-4.3,9.5-9.5c-0.1-4.7-3.7-8.7-8.4-9.3c0.1-0.8,0.2-1.6,0.2-2.4 c0-7.4-6-13.4-13.4-13.4c-4.5,0-8.7,2.3-11.2,6c-1.2-0.5-2.4-0.8-3.7-0.8c-5.1,0-9.3,4.2-9.3,9.3v0.3c-4.1,1.4-7,5.2-7,9.7 c0,5.6,4.6,10.2,10.2,10.2L44.1,41.2"/> <path class="precip" d="M25.5,59.3c-0.2,0-0.3,0-0.5-0.1c-0.7-0.3-1-1.1-0.7-1.7l9.3-21.9c0.3-0.7,1.1-1,1.7-0.7 c0.7,0.3,1,1.1,0.7,1.7l-9.3,21.9C26.5,59,26,59.3,25.5,59.3z M34,53.5c-0.2,0-0.3,0-0.5-0.1c-0.7-0.3-1-1.1-0.7-1.7l6.6-16 c0.3-0.7,1.1-1,1.7-0.7c0.7,0.3,1,1.1,0.7,1.7l-6.6,16C35,53.2,34.5,53.5,34,53.5z M21.9,53.5c-0.2,0-0.3,0-0.5-0.1 c-0.7-0.3-1-1.1-0.7-1.7l6.6-16c0.3-0.7,1.1-1,1.7-0.7c0.7,0.3,1,1.1,0.7,1.7l-6.6,16C22.9,53.2,22.5,53.5,21.9,53.5z"/> </g>'
+
+sleet = '<g id="sleet"> <path class="cloud" d="M44.1,43.1h5.7c5.2,0,9.5-4.3,9.5-9.5c-0.1-4.8-3.8-8.8-8.4-9.4c0.1-0.8,0.2-1.6,0.2-2.4 c0-7.4-6-13.4-13.4-13.4c-4.5,0-8.7,2.3-11.2,6c-1.2-0.5-2.4-0.8-3.6-0.8c-5.1,0-9.3,4.2-9.3,9.3v0.3c-4.1,1.4-7,5.2-7,9.7 c0,5.6,4.6,10.2,10.2,10.2H44.1"/> <path class="frozenPrecip" d="M22.3,57.4l-2.8,0.9l-0.9-2.7l2.8-0.9L22.3,57.4z M22.6,52.7c-0.1,0-0.3,0-0.4-0.1c-0.6-0.2-0.9-0.9-0.7-1.6 l5-12.3c0.2-0.6,0.9-0.9,1.6-0.7c0.6,0.3,0.9,0.9,0.6,1.6l-5,12.3C23.5,52.4,23,52.7,22.6,52.7z M24.6,55.8l2.8-0.9l0.9,2.8 l-2.8,0.9L24.6,55.8z M28.6,53c-0.2,0-0.3,0-0.5-0.1c-0.6-0.2-0.9-0.9-0.6-1.6l5-12.3c0.2-0.6,0.9-0.9,1.6-0.6 c0.6,0.2,0.9,0.9,0.7,1.6l-5,12.3C29.5,52.7,29.1,53,28.6,53z M30.7,55.8l2.8-0.9l0.9,2.8l-2.8,0.9L30.7,55.8z M34.6,53 c-0.1,0-0.3,0-0.5-0.1c-0.6-0.2-0.9-0.9-0.6-1.6l5-12.3c0.2-0.6,0.9-0.9,1.6-0.6c0.6,0.2,0.9,0.9,0.6,1.6l-5,12.3 C35.5,52.7,35.1,53,34.6,53z"/> </g>'
+
+snow = '<path class="frozenPrecip" d="M51.6 32h-5.2l2.2-2.2c.4-.4.4-1 0-1.4-.4-.4-1-.4-1.4 0L43.6 32h-8.3l5.9-5.9h5.1c.5 0 1-.4 1-1 0-.5-.4-1-1-1h-3.1l3.7-3.7c.4-.4.4-1 0-1.4-.4-.4-1-.4-1.4 0l-3.7 3.7v-3.1c0-.5-.4-1-1-1-.5 0-1 .4-1 1v5.1l-5.9 5.9v-8.3l3.6-3.6c.4-.4.4-1 0-1.4-.4-.4-1-.4-1.4 0l-2.2 2.2v-5.2c0-.5-.4-1-1-1-.5 0-1 .4-1 1v5.2l-2.2-2.2c-.4-.4-1-.4-1.4 0-.4.4-.4 1 0 1.4l3.6 3.6v8.3L26 24.7v-5.1c0-.5-.4-1-1-1-.5 0-1 .4-1 1v3.1L20.3 19c-.4-.4-1-.4-1.4 0-.4.4-.4 1 0 1.4l3.7 3.7h-3.1c-.5 0-1 .4-1 1 0 .5.4 1 1 1h5.1l5.9 5.9h-8.3l-3.6-3.6c-.4-.4-1-.4-1.4 0-.4.4-.4 1 0 1.4l2.2 2.2h-5.2c-.5 0-1 .4-1 1 0 .5.4 1 1 1h5.2l-2.2 2.2c-.4.4-.4 1 0 1.4.2.2.4.3.7.3.2 0 .5-.1.7-.3l3.6-3.6h8.3l-5.9 5.9h-5.1c-.5 0-1 .4-1 1 0 .5.4 1 1 1h3.1L19 45.4c-.4.4-.4 1 0 1.4.2.2.4.3.7.3.2 0 .5-.1.7-.3l3.7-3.7v3.1c0 .5.4 1 1 1 .5 0 1-.4 1-1v-5.1l5.9-5.9v8.3l-3.6 3.6c-.4.4-.4 1 0 1.4.2.2.4.3.7.3.3 0 .5-.1.7-.3l2.2-2.2v5.2c0 .5.4 1 1 1 .5 0 1-.4 1-1v-5.2l2.2 2.2c.2.2.4.3.7.3.3 0 .5-.1.7-.3.4-.4.4-1 0-1.4L34 43.5v-8.3l5.9 5.9v5.1c0 .5.4 1 1 1 .5 0 1-.4 1-1v-3.1l3.7 3.7c.2.2.4.3.7.3.3 0 .5-.1.7-.3.4-.4.4-1 0-1.4l-3.7-3.7h3.1c.5 0 1-.4 1-1 0-.5-.4-1-1-1h-5.1l-5.9-5.9h8.3l3.6 3.6c.2.2.4.3.7.3.3 0 .5-.1.7-.3.4-.4.4-1 0-1.4l-2.2-2.2h5.2c.5 0 1-.4 1-1-.2-.4-.6-.8-1.1-.8z" id="snow"/>'
+
+sunny = '<g id="sunny"> <path class="light" d="M32.9,19.2c-0.7,0-1.3-0.6-1.3-1.3v-4.6c0-0.7,0.6-1.3,1.3-1.3s1.3,0.6,1.3,1.3v4.6 C34.2,18.6,33.6,19.2,32.9,19.2z M32.9,53.8c-0.7,0-1.3-0.6-1.3-1.3v-4.6c0-0.7,0.6-1.3,1.3-1.3s1.3,0.6,1.3,1.3v4.6 C34.2,53.2,33.6,53.8,32.9,53.8z M17.9,34.2h-4.6c-0.7,0-1.3-0.6-1.3-1.3s0.6-1.3,1.3-1.3h4.6c0.7,0,1.3,0.6,1.3,1.3 S18.6,34.2,17.9,34.2z M52.5,34.2h-4.6c-0.7,0-1.3-0.6-1.3-1.3s0.6-1.3,1.3-1.3h4.6c0.7,0,1.3,0.6,1.3,1.3S53.2,34.2,52.5,34.2z M44,23.5c-0.3,0-0.7-0.1-0.9-0.4c-0.5-0.5-0.5-1.4,0-1.9l3.2-3.2c0.5-0.5,1.4-0.5,1.9,0s0.5,1.4,0,1.9L45,23.1 C44.7,23.4,44.3,23.5,44,23.5z M19.1,48.4c-0.3,0-0.7-0.1-0.9-0.4c-0.5-0.5-0.5-1.4,0-1.9l3.2-3.2c0.5-0.5,1.4-0.5,1.9,0 s0.5,1.4,0,1.9L20,48C19.8,48.3,19.4,48.4,19.1,48.4z M47.2,48.2c-0.3,0-0.7-0.1-0.9-0.4l-3.2-3.2c-0.5-0.5-0.5-1.4,0-1.9 s1.4-0.5,1.9,0l3.2,3.2c0.5,0.5,0.5,1.4,0,1.9C47.9,48.1,47.6,48.2,47.2,48.2z M22.3,23.8c-0.3,0-0.7-0.1-0.9-0.4l-3.2-3.2 c-0.5-0.5-0.5-1.4,0-1.9s1.4-0.5,1.9,0l3.2,3.2c0.5,0.5,0.5,1.4,0,1.9C23,23.6,22.7,23.8,22.3,23.8z M32.9,21.8 c-6.1,0-11.1,5-11.1,11.1S26.8,44,32.9,44S44,39,44,32.9S39,21.8,32.9,21.8z"/> </g>'
+
+tstorms = '<g id="tstorms"> <path class="cloud" d="M44,41.1h5.7c5.2,0,9.5-4.3,9.5-9.5c0-4.7-3.7-8.7-8.3-9.3c0.1-0.8,0.2-1.6,0.2-2.4c0-7.4-6-13.4-13.4-13.4 c-4.5,0-8.7,2.3-11.2,6c-1.1-0.5-2.4-0.8-3.6-0.8c-5.1,0-9.3,4.2-9.3,9.3v0.3c-4.1,1.4-7,5.2-7,9.7c0,5.6,4.6,10.2,10.2,10.2 L44,41.1"/> <path class="precip" d="M19.7,53c-0.2,0-0.4,0-0.6-0.1c-0.7-0.3-0.9-1.1-0.6-1.8l2.8-5.8c0.3-0.7,1.1-0.9,1.8-0.6 c0.7,0.3,0.9,1.1,0.6,1.8l-2.8,5.8C20.6,52.7,20.2,53,19.7,53z M13.1,53c-0.2,0-0.4,0-0.6-0.1c-0.7-0.3-0.9-1.1-0.6-1.8l2.8-5.8 c0.3-0.7,1.1-0.9,1.8-0.6c0.7,0.3,0.9,1.1,0.6,1.8l-2.8,5.8C14.1,52.7,13.6,53,13.1,53z M46.8,53c-0.2,0-0.4,0-0.6-0.1 c-0.7-0.3-0.9-1.1-0.6-1.8l2.8-5.8c0.3-0.7,1.1-0.9,1.8-0.6c0.7,0.3,0.9,1.1,0.6,1.8L48,52.3C47.8,52.7,47.3,53,46.8,53z M40.2,53 c-0.2,0-0.4,0-0.6-0.1c-0.7-0.3-0.9-1.1-0.6-1.8l2.8-5.8c0.3-0.7,1.1-0.9,1.8-0.6c0.7,0.3,0.9,1.1,0.6,1.8l-2.8,5.8 C41.2,52.7,40.7,53,40.2,53z"/> <path class="light" d="M28.1,59.3c-0.1,0-0.3-0.1-0.4-0.1c-0.4-0.2-0.5-0.7-0.2-1.1l4.8-8h-5l5.7-8c0.2-0.4,0.7-0.4,1.1-0.2 c0.4,0.2,0.4,0.8,0.2,1.2l-3.9,5.5H35l-6.3,10.3C28.7,59.1,28.4,59.3,28.1,59.3z"/> </g>'
+
+partlycloud = '<g id="partlycloudy"> <path class="light" d="M35.5,15.3c-0.7,0-1.3-0.6-1.3-1.3V9c0-0.7,0.6-1.3,1.3-1.3s1.3,0.6,1.3,1.3v5C36.8,14.7,36.2,15.3,35.5,15.3z M19.2,31.6h-5c-0.7,0-1.3-0.6-1.3-1.3c0-0.7,0.6-1.3,1.3-1.3h5c0.7,0,1.3,0.6,1.3,1.3C20.5,31,19.9,31.6,19.2,31.6z M56.7,31.6h-5 c-0.7,0-1.3-0.6-1.3-1.3c0-0.7,0.6-1.3,1.3-1.3h5c0.7,0,1.3,0.6,1.3,1.3C58,31,57.4,31.6,56.7,31.6z M47.5,20 c-0.3,0-0.7-0.1-0.9-0.4c-0.5-0.5-0.5-1.4,0-1.9l3.5-3.5c0.5-0.5,1.4-0.5,1.9,0s0.5,1.4,0,1.9l-3.5,3.5C48.2,19.8,47.8,20,47.5,20z M51,46.8c-0.3,0-0.7-0.1-0.9-0.4l-3.5-3.5c-0.5-0.5-0.5-1.4,0-1.9s1.3-0.5,1.9,0l3.5,3.5c0.5,0.5,0.5,1.4,0,1.9 C51.7,46.6,51.3,46.8,51,46.8z M24,20.2c-0.3,0-0.7-0.1-0.9-0.4l-3.5-3.5c-0.5-0.5-0.5-1.4,0-1.9s1.3-0.5,1.9,0l3.5,3.5 c0.5,0.5,0.5,1.4,0,1.9C24.7,20.1,24.3,20.2,24,20.2z"/> <circle class="light" cx="35.5" cy="30.5" r="12.2"/> <path class="cloud" d="M33.4,58.2h-20c-3.7,0-6.7-3-6.7-6.7c0-2.8,1.7-5.3,4.3-6.3c0.1-3.3,2.8-6,6.2-6c0.7,0,1.4,0.1,2,0.4 c1.6-2.2,4.2-3.6,7-3.6c4.8,0,8.7,3.9,8.7,8.7c0,0.4,0,0.7-0.1,1.1c2.8,0.6,5,3.1,5,6.2C39.7,55.4,36.9,58.2,33.4,58.2z"/> </g>'
+
+partlysunny = '<g id="partlysunny"> <path class="light" d="M43.1,13.9c-0.7,0-1.2-0.6-1.2-1.2V9.2c0-0.7,0.6-1.2,1.2-1.2c0.7,0,1.2,0.6,1.2,1.2v3.4 C44.3,13.3,43.8,13.9,43.1,13.9z M57.6,25h-3.4c-0.7,0-1.2-0.5-1.2-1.2s0.5-1.2,1.2-1.2h3.4c0.7,0,1.2,0.5,1.2,1.2 C58.9,24.5,58.3,25,57.6,25z M51.3,17.1c-0.3,0-0.6-0.1-0.9-0.4c-0.5-0.5-0.5-1.3,0-1.7l2.4-2.4c0.5-0.5,1.3-0.5,1.7,0 c0.5,0.5,0.5,1.3,0,1.7l-2.4,2.4C52,17,51.6,17.1,51.3,17.1z M53.7,35.4c-0.3,0-0.6-0.1-0.9-0.4l-2.4-2.4c-0.5-0.5-0.5-1.3,0-1.7 c0.5-0.5,1.3-0.5,1.7,0l2.4,2.4c0.5,0.5,0.5,1.3,0,1.7C54.4,35.3,54,35.4,53.7,35.4z M35.3,17.2c-0.3,0-0.6-0.1-0.9-0.4L32,14.5 c-0.5-0.5-0.5-1.3,0-1.7c0.5-0.5,1.3-0.5,1.7,0l2.4,2.4c0.5,0.5,0.5,1.3,0,1.7C35.9,17.1,35.6,17.2,35.3,17.2z"/> <circle class="light" cx="43.1" cy="23.5" r="7.7"/> <path class="cloud" d="M45.6,57.8H16c-5.1,0-9.3-4.2-9.3-9.3c0-4,2.6-7.6,6.3-8.8v-0.2c0-4.7,3.8-8.5,8.5-8.5c1.1,0,2.2,0.2,3.2,0.7 c2.2-3.4,6-5.4,10.1-5.4c6.7,0,12.2,5.5,12.2,12.2c0,0.7-0.1,1.4-0.2,2.1c4.2,0.6,7.5,4.2,7.5,8.6C54.2,53.9,50.4,57.8,45.6,57.8z"/></g>'
+
+/*
+sprinklerWatering = '<circle class="sprinklerBackgroundWatering" cx="32.3" cy="86.7" r="7.5"/> <g> <g> <path class="sprinklerHead" d="M34.6,86.4H30c-0.2,0-0.4,0.2-0.4,0.4V88c0,0.2,0.2,0.4,0.4,0.4h0.8v0.5c-0.2,0-0.4,0.2-0.4,0.4V91H34v-1.7 c0-0.2-0.2-0.4-0.4-0.4v-0.5h1c0.2,0,0.4-0.2,0.4-0.4v-1.2C35,86.6,34.8,86.4,34.6,86.4z"/> </g> </g> <g> <g> <path class="sprinklerHead" d="M30.5,91.7v0.9c0,0.2,0.2,0.4,0.4,0.4h2.9c0.2,0,0.4-0.2,0.4-0.4v-0.9H30.5z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M32.3,80.6c-0.2,0-0.4,0.2-0.4,0.4v3.9c0,0.2,0.2,0.4,0.4,0.4c0.2,0,0.4-0.2,0.4-0.4V81 C32.7,80.8,32.5,80.6,32.3,80.6z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M31.2,85.2l-2.7-2.7c-0.1-0.1-0.4-0.1-0.5,0s-0.1,0.4,0,0.5l2.7,2.7c0.1,0.1,0.4,0.1,0.5,0 C31.4,85.5,31.4,85.3,31.2,85.2z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M36.7,82.4c-0.1-0.1-0.4-0.1-0.5,0l-2.7,2.7c-0.1,0.1-0.1,0.4,0,0.5s0.4,0.1,0.5,0l2.7-2.7 C36.8,82.8,36.8,82.6,36.7,82.4z"/> </g> </g>'
+
+sprinklerSkip = '<circle class="sprinklerBackgroundSkip" cx="32.3" cy="86.7" r="7.5"/> <g> <g> <path class="sprinklerHead" d="M34.6,86.4H30c-0.2,0-0.4,0.2-0.4,0.4V88c0,0.2,0.2,0.4,0.4,0.4h0.8v0.5c-0.2,0-0.4,0.2-0.4,0.4V91H34v-1.7 c0-0.2-0.2-0.4-0.4-0.4v-0.5h1c0.2,0,0.4-0.2,0.4-0.4v-1.2C35,86.6,34.8,86.4,34.6,86.4z"/> </g> </g> <g> <g> <path class="sprinklerHead" d="M30.5,91.7v0.9c0,0.2,0.2,0.4,0.4,0.4h2.9c0.2,0,0.4-0.2,0.4-0.4v-0.9H30.5z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M32.3,80.6c-0.2,0-0.4,0.2-0.4,0.4v3.9c0,0.2,0.2,0.4,0.4,0.4c0.2,0,0.4-0.2,0.4-0.4V81 C32.7,80.8,32.5,80.6,32.3,80.6z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M31.2,85.2l-2.7-2.7c-0.1-0.1-0.4-0.1-0.5,0s-0.1,0.4,0,0.5l2.7,2.7c0.1,0.1,0.4,0.1,0.5,0 C31.4,85.5,31.4,85.3,31.2,85.2z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M36.7,82.4c-0.1-0.1-0.4-0.1-0.5,0l-2.7,2.7c-0.1,0.1-0.1,0.4,0,0.5s0.4,0.1,0.5,0l2.7-2.7 C36.8,82.8,36.8,82.6,36.7,82.4z"/> </g> </g>'
+*/
+
+rainicon = '<g transform="scale(.1,.1)"><path class="precip" d="M54.8,41.2C54.8,53.9,44.5,64,32,64S9.2,53.9,9.2,41.2S32,0,32,0S54.8,28.7,54.8,41.2z"/> <path class="cloud" d="M32,58c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2C19.2,48.3,24.9,54,32,54c1.1,0,2,0.9,2,2 S33.1,58,32,58z"/></g>'
+
+sprinklerWatering = '<g transform="scale(.2,.2)"><path class="rainDropWatering" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/></g>'
+
+saturationSkip = '<g transform="scale(.2,.2)"><path class="saturatedSoil" d="M53.9,60.1c14.1,0.8,24.8,2.7,24.8,4.9c0,2.9-17.4,5.2-38.9,5.2S0.9,67.9,0.9,65c0-2.1,10.5-4.1,24.5-4.9"/><g><path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/><path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/></g></g>'
+
+rainSkip = '<g transform="scale(.2,.2)"><path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/><path class="rainDropsPredicted" d="M75.1,36.3c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9c0-3.3,5.9-10.6,5.9-10.6S75.1,33.1,75.1,36.3z"/><path class="rainDropsPredicted" d="M65.1,11.6c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9S59.2,1,59.2,1S65.1,8.4,65.1,11.6z"/><path class="rainDropsPredicted" d="M78.4,17.7c0,3.3-2.7,5.9-5.9,5.9c-3.2,0-5.9-2.6-5.9-5.9s5.9-10.6,5.9-10.6S78.4,14.5,78.4,17.7z"/><path class="rainDropsPredicted" d="M26.2,12.2c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9s5.9-10.6,5.9-10.6S26.2,9,26.2,12.2z"/><path class="rainDropsPredicted" d="M12.8,17.7c0,3.3-2.7,5.9-5.9,5.9S1,21,1,17.7S6.9,7.1,6.9,7.1S12.8,14.5,12.8,17.7z"/><path class="rainDropsPredicted" d="M16.2,36.3c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9c0-3.3,5.9-10.6,5.9-10.6S16.2,33.1,16.2,36.3z"/></g>'
+
+windSkip = '<g transform="scale(.2,.2)"><g><path class="windSkip" d="M42.4,15.1h23.8c4.2,0,7.5-3.2,7.5-7.1S70.3,1,66.2,1s-7.5,3.2-7.5,7.1c0,0.9,0.7,1.6,1.6,1.6 c0.9,0,1.6-0.7,1.6-1.6c0-2.1,2-3.9,4.4-3.9s4.4,1.7,4.4,3.9c0,2.1-2,3.9-4.4,3.9H2.4c-0.9,0-1.6,0.7-1.6,1.6 c0,0.9,0.7,1.6,1.6,1.6L42.4,15.1z"/> <path class="windSkip" d="M66.2,24.8H2.4c-0.9,0-1.6,0.7-1.6,1.6c0,0.9,0.7,1.6,1.6,1.6h63.8c2.4,0,4.4,1.8,4.4,3.9 c0,2.1-2,3.9-4.4,3.9c-0.9,0-1.6,0.7-1.6,1.6c0,0.9,0.7,1.6,1.6,1.6c4.2,0,7.5-3.2,7.5-7.1C73.7,28,70.3,24.8,66.2,24.8L66.2,24.8 z"/> <path class="windSkip" d="M77.2,13.9c-0.9,0-1.6,0.7-1.6,1.6c0,1.8-1.8,3.2-4.1,3.2H2.4c-0.9,0-1.6,0.7-1.6,1.6s0.7,1.6,1.6,1.6h69.1 c4,0,7.2-2.9,7.2-6.4C78.8,14.6,78.1,13.9,77.2,13.9L77.2,13.9z"/> </g><g> <path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/></g></g>'
+
+freezeSkip = '<g transform="scale(.2,.2)"><g> <path class="freezeSkip0" d="M50.3,0l4.5,19.4c0.2,1,1.7,1,1.9,0L61.2,0H50.3z"/> <path class="freezeSkip1" d="M53.6,0h-3.3l4.5,19.4c0.2,1,1.7,1,1.9,0l0.7-3L53.6,0z"/> <path class="freezeSkip0" d="M57.7,0l4.5,30.2c0.2,1.1,1.8,1.1,1.9,0L68.6,0H57.7z"/> <path class="freezeSkip1" d="M61,0h-3.3l4.5,30.2c0.2,1.1,1.8,1.1,1.9,0l0.7-4.6L61,0z"/> <path class="freezeSkip0" d="M68.6,0l4.5,23c0.2,1.1,1.7,1.1,1.9,0l4.5-23H68.6z"/> <path class="freezeSkip1" d="M71.9,0h-3.3l4.5,23c0.2,1.1,1.7,1.1,1.9,0l0.7-3.5L71.9,0z"/> <path class="freezeSkip0" d="M6.9,0l4.5,33.8c0.1,1.1,1.8,1.1,1.9,0L17.8,0H6.9z"/> <path class="freezeSkip1" d="M10.2,0H6.9l4.5,33.8c0.1,1.1,1.8,1.1,1.9,0l0.7-5.1L10.2,0z"/> <path class="freezeSkip0" d="M0,0l4.5,16.7c0.3,1,1.6,1,1.9,0L10.9,0H0z"/> <path class="freezeSkip1" d="M3.3,0H0l4.5,16.7c0.3,1,1.6,1,1.9,0l0.7-2.6L3.3,0z"/> <path class="freezeSkip0" d="M15.2,0l4.5,19.4c0.2,1,1.7,1,1.9,0L26.1,0H15.2z"/> <path class="freezeSkip1" d="M18.5,0h-3.3l4.5,19.4c0.2,1,1.7,1,1.9,0l0.7-3L18.5,0z"/> </g> <g> <path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/> </g></g>'
+
+rainSensorSkip = '<g transform="scale(.2,.2)"><g></g><g><path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/><path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/> <g> <path class="rainSensorSkip" d="M75.4,23.8c-0.6-0.6-1.6-0.6-2.2,0c-0.6,0.6-0.6,1.6,0,2.2c4.4,4.4,6.8,10.3,6.8,16.5s-2.4,12.1-6.8,16.5 c-0.6,0.6-0.6,1.6,0,2.2c0.6,0.6,1.6,0.6,2.2,0c5-5,7.7-11.6,7.7-18.7S80.4,28.7,75.4,23.8z"/> <path class="rainSensorSkip" d="M70.7,28.4c-0.6-0.6-1.6-0.6-2.2,0c-0.6,0.6-0.6,1.6,0,2.2c3.2,3.2,4.9,7.3,4.9,11.8s-1.7,8.7-4.9,11.8 c-0.6,0.6-0.6,1.6,0,2.2c0.6,0.6,1.6,0.6,2.2,0c3.7-3.7,5.8-8.7,5.8-14S74.4,32.2,70.7,28.4z"/> <path class="rainSensorSkip" d="M66,33.1c-0.6-0.6-1.6-0.6-2.2,0c-0.6,0.6-0.6,1.6,0,2.2c1.9,1.9,2.9,4.4,2.9,7.1c0,2.7-1,5.2-2.9,7.1 c-0.6,0.6-0.6,1.6,0,2.2c0.6,0.6,1.6,0.6,2.2,0c2.5-2.5,3.9-5.8,3.9-9.3S68.5,35.6,66,33.1L66,33.1z"/> <path class="rainSensorSkip" d="M-0.6,42.4c0-6.2,2.4-12.1,6.8-16.5c0.6-0.6,0.6-1.6,0-2.2c-0.6-0.6-1.6-0.6-2.2,0c-5,5-7.7,11.6-7.7,18.7 S-1,56.1,4,61.1c0.6,0.6,1.6,0.6,2.2,0c0.6-0.6,0.6-1.6,0-2.2C1.8,54.5-0.6,48.7-0.6,42.4L-0.6,42.4z"/> <path class="rainSensorSkip" d="M6,42.4c0-4.5,1.7-8.7,4.9-11.8c0.6-0.6,0.6-1.6,0-2.2c-0.6-0.6-1.6-0.6-2.2,0c-3.7,3.7-5.8,8.7-5.8,14 s2.1,10.3,5.8,14c0.6,0.6,1.6,0.6,2.2,0c0.6-0.6,0.6-1.6,0-2.2C7.7,51.1,6,46.9,6,42.4z"/> <path class="rainSensorSkip" d="M15.6,33.1c-0.6-0.6-1.6-0.6-2.2,0c-2.5,2.5-3.9,5.8-3.9,9.3s1.4,6.8,3.9,9.3c0.6,0.6,1.6,0.6,2.2,0 c0.6-0.6,0.6-1.6,0-2.2c-1.9-1.9-2.9-4.4-2.9-7.1c0-2.7,1-5.2,2.9-7.1C16.2,34.7,16.2,33.7,15.6,33.1L15.6,33.1z"/> </g> </g></g>'
+    
+genericSkip = '<g transform="scale(.2,.2)"> <path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/> </g>'
+    
+  
+    
+    
