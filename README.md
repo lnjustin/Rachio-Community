@@ -23,10 +23,10 @@ Future enhancements will include HTML-based dashboard with clickable days to bri
 Note that Rachio Community relies on an undocumented API to extend the native Rachio functionality. Rachio makes no guarantee about availability of its undocumented API, meaning it could change without notice at any time. Accordingly, the expanded functionality in Rachio Community cannot be guaranteed.
 
 **Install Instructions**
-0. Uninstall the Rachio native app
-1. Install the Rachio Zone driver
-2. Install the Rachio Controller driver
-3. Install the Rachio Community app
-4. Enable Oath
-5. Follow the install instructions in the Rachio Community app
+1. Uninstall the Rachio native app
+2. Install the Rachio Zone driver
+3. Install the Rachio Controller driver
+4. Install the Rachio Community app
+5. Enable Oath
+6. Follow the install instructions in the Rachio Community app
 
