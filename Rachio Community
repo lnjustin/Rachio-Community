@@ -4,8 +4,8 @@
  *  Copyright\u00A9 2018 Anthony Santilli
  *  Copyright\u00A9 2020 Justin Leonard
  *
- *  SmartThings version written by Anthony Santilli (@tonesto7)
- *  Ported to Hubitat and Enhanced by Justin Leonard (@JustinL)
+ *  V1.1.1 written by Anthony Santilli (@tonesto7)
+ *  Ported to Hubitat and Enhanced to V2.0 by Justin Leonard (@JustinL)
  *
  * Many thanks to Tom Walling (@tomw) for high-level consultation on architecture and functionality for enhancing the native Rachio app/drivers.
  * Thanks also to Josh Lyon (@josh) for proof of concept for generating an SVG for output at an Oath endpoint
@@ -22,12 +22,8 @@
  *  for the specific language governing permissions and limitations under the License.
  *
  * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
- * V2.0:    Ported to Hubitat; Added dashboard and exposed additional information in controller/zone, including next run, last run, rain sensor state, next upcoming event, weather intelligence information, and monthly watering summary (05-25-2020)    
+ * V2.0:    Ported to Hubitat; Added dashboard and exposed additional information in controller/zone, including next run, last run, rain sensor state, next upcoming event, weather intelligence information, and monthly watering summary (05-31-2020)    
 
-
- * TO DO:
-    - implement pause zone (e.g., pause if in shower, or if motion in yard)
-    - check scheduleType field
  */
 
 import groovy.json.*
@@ -61,16 +57,6 @@ preferences {
 mappings {
     path("/rachioReceiver") { action: [ POST: "rachioReceiveHandler" ] }
     path("/rachioDashboard/:controllerID") { action: [ GET: "buildDashboard"] }
-    // path("/rachioDashboard") { action: [ GET: "buildDashboard"] }
-    
-  /*  if(settings?.controllers) {
-        settings?.controllers?.each { contID ->
-            if(contID) { 
-                path("/rachioDashboard/${contID}") { action: [ GET: "buildDashboard(\"${contID}\")"] }
-            }
-        }
-    }
-*/
 }
 
 String appVer() { return "2.0" }
@@ -81,7 +67,7 @@ def appInfoSect()	{
         str += "${app?.name}"
         str += "\nCopyright\u00A9 Anthony Santilli, Justin Leonard"
         str += "\nVersion: ${appVer()}"
-        paragraph str, image: "https://s3-us-west-2.amazonaws.com/rachio-media/smartthings/Rachio-logo-100px.png"
+        paragraph str
     }
 }
 
@@ -217,7 +203,7 @@ def dashboardSettingsPage(){
         createAccessToken()	
     }
 
-    return dynamicPage(name: "dashboardSettings", title: "Dashboard Setup", install: true){
+    return dynamicPage(name: "dashboardSettings", title: "Dashboard Setup", nextPage: "devicePage"){
         section(getSectionTitle("Dashboard Day Settings")){
                 input "numPastDaysDashboard", "number", title: "Number of Days in Past to Display on Dashboard", required: false, defaultValue: 2, submitOnChange: false
                 input "numFutureDaysDashboard", "number", title: "Number of Days in Future to Display on Dashboard", required: false, defaultValue: 2, submitOnChange: false
@@ -263,7 +249,7 @@ def dashboardSettingsPage(){
 
 
         section(getSectionTitle("Attribution")) {
-            paragraph("Sprinkler icon made by Freepik from www.flaticon.com")  
+            paragraph("Rain drop icon, icicle icon, and rain sensor icon made by Freepik from www.flaticon.com")  
         }
 
     }
@@ -341,7 +327,7 @@ def getAccessToken() {
         else { return true }
     }
     catch (ex) {
-        def msg = "Error: OAuth is not Enabled for the Rachio (Connect) application!!!.  Please click remove and Enable Oauth under the App SettingsE..."
+        def msg = "Error: OAuth is not Enabled for the Rachio Community application!!!.  Please click remove and Enable Oauth under the App Settings..."
         // sendPush(msg)
         log.warn "getAccessToken Exception | ${msg}"
         return false
@@ -436,7 +422,7 @@ def getHardwareInfo(val) {
     return [desc: null, model: null, img: "", gen: null]
 }
 
-def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/tonesto7/rachio-manager/master/images/$imgName" }
+def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/$imgName" }
 
 def _httpGet(subUri, endpoint="open") {
     log.debug "_httpGet($subUri)"
@@ -618,7 +604,7 @@ void removeAllWebhooks() {
 def webhookEvtTypes() {
     log.debug "Updating webhook event types"
     def typeIds = []
-    def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT"]   // , "WEATHER_INTELLIGENCE_EVENT", "RAIN_DELAY_EVENT"]
+    def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT"] 
     def data = _httpGet("notification/webhook_event_type")
     if(data) {
         typeIds = data?.findAll { it?.name in okTypes }.collect { ["id":it?.id?.toString()] }
@@ -954,6 +940,7 @@ void poll(child=null, type=null) {
     def zoneCnt = 0
     selectedDevices?.each { cont->
         def devData = getDeviceData(cont?.key)
+        //log.trace "devData is ${devData}"
         def devDetails = getDeviceDetails(cont?.key)
         def devState = getDeviceState(cont?.key)
         def devZoneDetails = getZoneDetails(cont?.key)
@@ -1440,6 +1427,18 @@ def pauseScheduleRun(child) {
     }
 }
 
+def pauseZoneRun(child, devId, duration) {
+    def jsonData = new JsonBuilder("id":devId, "duration":duration)
+    def result = sendJson("device/pause_zone_run", jsonData?.toString(), devId)
+    return result
+}
+
+def resumeZoneRun(child, devId) {
+    def jsonData = new JsonBuilder("id":devId)
+    def result = sendJson("device/resume_zone_run", jsonData?.toString(), devId)
+    return result
+}
+
 //Required by child devices
 def getZones(device) {
    // log.trace "getZones(${device.label})..."
@@ -1494,7 +1493,7 @@ def buildDashboard() {
     
     svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropAccent{fill:' + colorScheme.rainDropAccentColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:none;stroke:' + colorScheme.skipStrikethroughColor + ';stroke-width:3;stroke-miterlimit:10;} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip0{fill:' + colorScheme.freezeSkip0Color + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:7px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style> <defs> <linearGradient id="bicolored"> <stop offset="50%" stop-color="' + colorScheme.highTempTextColor + '"/> <stop offset="50%" stop-color="' + colorScheme.lowTempTextColor + '"/> </linearGradient> </defs>'
     
-    svg += '<g transform="scale(' + Double.toString(globalScale/100) + ')">'
+    svg += '<g transform="scale(' + Double.toString((globalScale-40)/100) + ')">'
     
     def today = new Date()
     today.set(hourOfDay: 0, minute: 0, second: 0)
@@ -1521,6 +1520,8 @@ def buildDashboard() {
         def lowTemp = weather.temperatureMin
         def weatherIconText = weather.weatherType
         def weatherIcon = null
+        
+        log.debug "Weather icon text for ${dayLabel} is ${weatherIconText}"
                             
         if (weatherIconText == 'CHANCE_FLURRIES') { weatherIcon = chanceflurries }
         else if (weatherIconText == 'CHANCE_RAIN') { weatherIcon = chancerain }
@@ -1656,7 +1657,7 @@ def buildDashboard() {
             irrigationExtraVerticalSpacing = extraVerticalSpace*2
         }
 
-        svg += '<g transform="translate(' + Double.toString((48 + extraHorizontalSpace)/2) + ',' + Long.toString(irrigationBaseY + irrigationExtraVerticalSpacing) + ')">'
+        svg += '<g transform="translate(' + Double.toString((48 + extraHorizontalSpace)/2) + ',' + Long.toString(irrigationBaseY + irrigationExtraVerticalSpacing) + ') scale(.3,.3)">'
         svg += irrigationIcon
           
         svg += '</g>'
@@ -1729,31 +1730,23 @@ sunny = '<g id="sunny"> <path class="light" d="M32.9,19.2c-0.7,0-1.3-0.6-1.3-1.3
 
 tstorms = '<g id="tstorms"> <path class="cloud" d="M44,41.1h5.7c5.2,0,9.5-4.3,9.5-9.5c0-4.7-3.7-8.7-8.3-9.3c0.1-0.8,0.2-1.6,0.2-2.4c0-7.4-6-13.4-13.4-13.4 c-4.5,0-8.7,2.3-11.2,6c-1.1-0.5-2.4-0.8-3.6-0.8c-5.1,0-9.3,4.2-9.3,9.3v0.3c-4.1,1.4-7,5.2-7,9.7c0,5.6,4.6,10.2,10.2,10.2 L44,41.1"/> <path class="precip" d="M19.7,53c-0.2,0-0.4,0-0.6-0.1c-0.7-0.3-0.9-1.1-0.6-1.8l2.8-5.8c0.3-0.7,1.1-0.9,1.8-0.6 c0.7,0.3,0.9,1.1,0.6,1.8l-2.8,5.8C20.6,52.7,20.2,53,19.7,53z M13.1,53c-0.2,0-0.4,0-0.6-0.1c-0.7-0.3-0.9-1.1-0.6-1.8l2.8-5.8 c0.3-0.7,1.1-0.9,1.8-0.6c0.7,0.3,0.9,1.1,0.6,1.8l-2.8,5.8C14.1,52.7,13.6,53,13.1,53z M46.8,53c-0.2,0-0.4,0-0.6-0.1 c-0.7-0.3-0.9-1.1-0.6-1.8l2.8-5.8c0.3-0.7,1.1-0.9,1.8-0.6c0.7,0.3,0.9,1.1,0.6,1.8L48,52.3C47.8,52.7,47.3,53,46.8,53z M40.2,53 c-0.2,0-0.4,0-0.6-0.1c-0.7-0.3-0.9-1.1-0.6-1.8l2.8-5.8c0.3-0.7,1.1-0.9,1.8-0.6c0.7,0.3,0.9,1.1,0.6,1.8l-2.8,5.8 C41.2,52.7,40.7,53,40.2,53z"/> <path class="light" d="M28.1,59.3c-0.1,0-0.3-0.1-0.4-0.1c-0.4-0.2-0.5-0.7-0.2-1.1l4.8-8h-5l5.7-8c0.2-0.4,0.7-0.4,1.1-0.2 c0.4,0.2,0.4,0.8,0.2,1.2l-3.9,5.5H35l-6.3,10.3C28.7,59.1,28.4,59.3,28.1,59.3z"/> </g>'
 
-partlycloud = '<g id="partlycloudy"> <path class="light" d="M35.5,15.3c-0.7,0-1.3-0.6-1.3-1.3V9c0-0.7,0.6-1.3,1.3-1.3s1.3,0.6,1.3,1.3v5C36.8,14.7,36.2,15.3,35.5,15.3z M19.2,31.6h-5c-0.7,0-1.3-0.6-1.3-1.3c0-0.7,0.6-1.3,1.3-1.3h5c0.7,0,1.3,0.6,1.3,1.3C20.5,31,19.9,31.6,19.2,31.6z M56.7,31.6h-5 c-0.7,0-1.3-0.6-1.3-1.3c0-0.7,0.6-1.3,1.3-1.3h5c0.7,0,1.3,0.6,1.3,1.3C58,31,57.4,31.6,56.7,31.6z M47.5,20 c-0.3,0-0.7-0.1-0.9-0.4c-0.5-0.5-0.5-1.4,0-1.9l3.5-3.5c0.5-0.5,1.4-0.5,1.9,0s0.5,1.4,0,1.9l-3.5,3.5C48.2,19.8,47.8,20,47.5,20z M51,46.8c-0.3,0-0.7-0.1-0.9-0.4l-3.5-3.5c-0.5-0.5-0.5-1.4,0-1.9s1.3-0.5,1.9,0l3.5,3.5c0.5,0.5,0.5,1.4,0,1.9 C51.7,46.6,51.3,46.8,51,46.8z M24,20.2c-0.3,0-0.7-0.1-0.9-0.4l-3.5-3.5c-0.5-0.5-0.5-1.4,0-1.9s1.3-0.5,1.9,0l3.5,3.5 c0.5,0.5,0.5,1.4,0,1.9C24.7,20.1,24.3,20.2,24,20.2z"/> <circle class="light" cx="35.5" cy="30.5" r="12.2"/> <path class="cloud" d="M33.4,58.2h-20c-3.7,0-6.7-3-6.7-6.7c0-2.8,1.7-5.3,4.3-6.3c0.1-3.3,2.8-6,6.2-6c0.7,0,1.4,0.1,2,0.4 c1.6-2.2,4.2-3.6,7-3.6c4.8,0,8.7,3.9,8.7,8.7c0,0.4,0,0.7-0.1,1.1c2.8,0.6,5,3.1,5,6.2C39.7,55.4,36.9,58.2,33.4,58.2z"/> </g>'
+partlycloudy = '<g id="partlycloudy"> <path class="light" d="M35.5,15.3c-0.7,0-1.3-0.6-1.3-1.3V9c0-0.7,0.6-1.3,1.3-1.3s1.3,0.6,1.3,1.3v5C36.8,14.7,36.2,15.3,35.5,15.3z M19.2,31.6h-5c-0.7,0-1.3-0.6-1.3-1.3c0-0.7,0.6-1.3,1.3-1.3h5c0.7,0,1.3,0.6,1.3,1.3C20.5,31,19.9,31.6,19.2,31.6z M56.7,31.6h-5 c-0.7,0-1.3-0.6-1.3-1.3c0-0.7,0.6-1.3,1.3-1.3h5c0.7,0,1.3,0.6,1.3,1.3C58,31,57.4,31.6,56.7,31.6z M47.5,20 c-0.3,0-0.7-0.1-0.9-0.4c-0.5-0.5-0.5-1.4,0-1.9l3.5-3.5c0.5-0.5,1.4-0.5,1.9,0s0.5,1.4,0,1.9l-3.5,3.5C48.2,19.8,47.8,20,47.5,20z M51,46.8c-0.3,0-0.7-0.1-0.9-0.4l-3.5-3.5c-0.5-0.5-0.5-1.4,0-1.9s1.3-0.5,1.9,0l3.5,3.5c0.5,0.5,0.5,1.4,0,1.9 C51.7,46.6,51.3,46.8,51,46.8z M24,20.2c-0.3,0-0.7-0.1-0.9-0.4l-3.5-3.5c-0.5-0.5-0.5-1.4,0-1.9s1.3-0.5,1.9,0l3.5,3.5 c0.5,0.5,0.5,1.4,0,1.9C24.7,20.1,24.3,20.2,24,20.2z"/> <circle class="light" cx="35.5" cy="30.5" r="12.2"/> <path class="cloud" d="M33.4,58.2h-20c-3.7,0-6.7-3-6.7-6.7c0-2.8,1.7-5.3,4.3-6.3c0.1-3.3,2.8-6,6.2-6c0.7,0,1.4,0.1,2,0.4 c1.6-2.2,4.2-3.6,7-3.6c4.8,0,8.7,3.9,8.7,8.7c0,0.4,0,0.7-0.1,1.1c2.8,0.6,5,3.1,5,6.2C39.7,55.4,36.9,58.2,33.4,58.2z"/> </g>'
 
 partlysunny = '<g id="partlysunny"> <path class="light" d="M43.1,13.9c-0.7,0-1.2-0.6-1.2-1.2V9.2c0-0.7,0.6-1.2,1.2-1.2c0.7,0,1.2,0.6,1.2,1.2v3.4 C44.3,13.3,43.8,13.9,43.1,13.9z M57.6,25h-3.4c-0.7,0-1.2-0.5-1.2-1.2s0.5-1.2,1.2-1.2h3.4c0.7,0,1.2,0.5,1.2,1.2 C58.9,24.5,58.3,25,57.6,25z M51.3,17.1c-0.3,0-0.6-0.1-0.9-0.4c-0.5-0.5-0.5-1.3,0-1.7l2.4-2.4c0.5-0.5,1.3-0.5,1.7,0 c0.5,0.5,0.5,1.3,0,1.7l-2.4,2.4C52,17,51.6,17.1,51.3,17.1z M53.7,35.4c-0.3,0-0.6-0.1-0.9-0.4l-2.4-2.4c-0.5-0.5-0.5-1.3,0-1.7 c0.5-0.5,1.3-0.5,1.7,0l2.4,2.4c0.5,0.5,0.5,1.3,0,1.7C54.4,35.3,54,35.4,53.7,35.4z M35.3,17.2c-0.3,0-0.6-0.1-0.9-0.4L32,14.5 c-0.5-0.5-0.5-1.3,0-1.7c0.5-0.5,1.3-0.5,1.7,0l2.4,2.4c0.5,0.5,0.5,1.3,0,1.7C35.9,17.1,35.6,17.2,35.3,17.2z"/> <circle class="light" cx="43.1" cy="23.5" r="7.7"/> <path class="cloud" d="M45.6,57.8H16c-5.1,0-9.3-4.2-9.3-9.3c0-4,2.6-7.6,6.3-8.8v-0.2c0-4.7,3.8-8.5,8.5-8.5c1.1,0,2.2,0.2,3.2,0.7 c2.2-3.4,6-5.4,10.1-5.4c6.7,0,12.2,5.5,12.2,12.2c0,0.7-0.1,1.4-0.2,2.1c4.2,0.6,7.5,4.2,7.5,8.6C54.2,53.9,50.4,57.8,45.6,57.8z"/></g>'
 
-/*
-sprinklerWatering = '<circle class="sprinklerBackgroundWatering" cx="32.3" cy="86.7" r="7.5"/> <g> <g> <path class="sprinklerHead" d="M34.6,86.4H30c-0.2,0-0.4,0.2-0.4,0.4V88c0,0.2,0.2,0.4,0.4,0.4h0.8v0.5c-0.2,0-0.4,0.2-0.4,0.4V91H34v-1.7 c0-0.2-0.2-0.4-0.4-0.4v-0.5h1c0.2,0,0.4-0.2,0.4-0.4v-1.2C35,86.6,34.8,86.4,34.6,86.4z"/> </g> </g> <g> <g> <path class="sprinklerHead" d="M30.5,91.7v0.9c0,0.2,0.2,0.4,0.4,0.4h2.9c0.2,0,0.4-0.2,0.4-0.4v-0.9H30.5z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M32.3,80.6c-0.2,0-0.4,0.2-0.4,0.4v3.9c0,0.2,0.2,0.4,0.4,0.4c0.2,0,0.4-0.2,0.4-0.4V81 C32.7,80.8,32.5,80.6,32.3,80.6z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M31.2,85.2l-2.7-2.7c-0.1-0.1-0.4-0.1-0.5,0s-0.1,0.4,0,0.5l2.7,2.7c0.1,0.1,0.4,0.1,0.5,0 C31.4,85.5,31.4,85.3,31.2,85.2z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M36.7,82.4c-0.1-0.1-0.4-0.1-0.5,0l-2.7,2.7c-0.1,0.1-0.1,0.4,0,0.5s0.4,0.1,0.5,0l2.7-2.7 C36.8,82.8,36.8,82.6,36.7,82.4z"/> </g> </g>'
+sprinklerWatering = '<path class="rainDropWatering" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/>'
 
-sprinklerSkip = '<circle class="sprinklerBackgroundSkip" cx="32.3" cy="86.7" r="7.5"/> <g> <g> <path class="sprinklerHead" d="M34.6,86.4H30c-0.2,0-0.4,0.2-0.4,0.4V88c0,0.2,0.2,0.4,0.4,0.4h0.8v0.5c-0.2,0-0.4,0.2-0.4,0.4V91H34v-1.7 c0-0.2-0.2-0.4-0.4-0.4v-0.5h1c0.2,0,0.4-0.2,0.4-0.4v-1.2C35,86.6,34.8,86.4,34.6,86.4z"/> </g> </g> <g> <g> <path class="sprinklerHead" d="M30.5,91.7v0.9c0,0.2,0.2,0.4,0.4,0.4h2.9c0.2,0,0.4-0.2,0.4-0.4v-0.9H30.5z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M32.3,80.6c-0.2,0-0.4,0.2-0.4,0.4v3.9c0,0.2,0.2,0.4,0.4,0.4c0.2,0,0.4-0.2,0.4-0.4V81 C32.7,80.8,32.5,80.6,32.3,80.6z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M31.2,85.2l-2.7-2.7c-0.1-0.1-0.4-0.1-0.5,0s-0.1,0.4,0,0.5l2.7,2.7c0.1,0.1,0.4,0.1,0.5,0 C31.4,85.5,31.4,85.3,31.2,85.2z"/> </g> </g> <g> <g> <path class="sprinklerWater" d="M36.7,82.4c-0.1-0.1-0.4-0.1-0.5,0l-2.7,2.7c-0.1,0.1-0.1,0.4,0,0.5s0.4,0.1,0.5,0l2.7-2.7 C36.8,82.8,36.8,82.6,36.7,82.4z"/> </g> </g>'
-*/
+saturationSkip = '<path class="saturatedSoil" d="M53.9,60.1c14.1,0.8,24.8,2.7,24.8,4.9c0,2.9-17.4,5.2-38.9,5.2S0.9,67.9,0.9,65c0-2.1,10.5-4.1,24.5-4.9"/><g><path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/><path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/></g>'
 
-rainicon = '<g transform="scale(.1,.1)"><path class="precip" d="M54.8,41.2C54.8,53.9,44.5,64,32,64S9.2,53.9,9.2,41.2S32,0,32,0S54.8,28.7,54.8,41.2z"/> <path class="cloud" d="M32,58c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2C19.2,48.3,24.9,54,32,54c1.1,0,2,0.9,2,2 S33.1,58,32,58z"/></g>'
+rainSkip = '<path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/><path class="rainDropsPredicted" d="M75.1,36.3c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9c0-3.3,5.9-10.6,5.9-10.6S75.1,33.1,75.1,36.3z"/><path class="rainDropsPredicted" d="M65.1,11.6c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9S59.2,1,59.2,1S65.1,8.4,65.1,11.6z"/><path class="rainDropsPredicted" d="M78.4,17.7c0,3.3-2.7,5.9-5.9,5.9c-3.2,0-5.9-2.6-5.9-5.9s5.9-10.6,5.9-10.6S78.4,14.5,78.4,17.7z"/><path class="rainDropsPredicted" d="M26.2,12.2c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9s5.9-10.6,5.9-10.6S26.2,9,26.2,12.2z"/><path class="rainDropsPredicted" d="M12.8,17.7c0,3.3-2.7,5.9-5.9,5.9S1,21,1,17.7S6.9,7.1,6.9,7.1S12.8,14.5,12.8,17.7z"/><path class="rainDropsPredicted" d="M16.2,36.3c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9c0-3.3,5.9-10.6,5.9-10.6S16.2,33.1,16.2,36.3z"/>'
 
-sprinklerWatering = '<g transform="scale(.2,.2)"><path class="rainDropWatering" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/></g>'
+windSkip = '<g><path class="windSkip" d="M42.4,15.1h23.8c4.2,0,7.5-3.2,7.5-7.1S70.3,1,66.2,1s-7.5,3.2-7.5,7.1c0,0.9,0.7,1.6,1.6,1.6 c0.9,0,1.6-0.7,1.6-1.6c0-2.1,2-3.9,4.4-3.9s4.4,1.7,4.4,3.9c0,2.1-2,3.9-4.4,3.9H2.4c-0.9,0-1.6,0.7-1.6,1.6 c0,0.9,0.7,1.6,1.6,1.6L42.4,15.1z"/> <path class="windSkip" d="M66.2,24.8H2.4c-0.9,0-1.6,0.7-1.6,1.6c0,0.9,0.7,1.6,1.6,1.6h63.8c2.4,0,4.4,1.8,4.4,3.9 c0,2.1-2,3.9-4.4,3.9c-0.9,0-1.6,0.7-1.6,1.6c0,0.9,0.7,1.6,1.6,1.6c4.2,0,7.5-3.2,7.5-7.1C73.7,28,70.3,24.8,66.2,24.8L66.2,24.8 z"/> <path class="windSkip" d="M77.2,13.9c-0.9,0-1.6,0.7-1.6,1.6c0,1.8-1.8,3.2-4.1,3.2H2.4c-0.9,0-1.6,0.7-1.6,1.6s0.7,1.6,1.6,1.6h69.1 c4,0,7.2-2.9,7.2-6.4C78.8,14.6,78.1,13.9,77.2,13.9L77.2,13.9z"/> </g><g> <path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/></g>'
 
-saturationSkip = '<g transform="scale(.2,.2)"><path class="saturatedSoil" d="M53.9,60.1c14.1,0.8,24.8,2.7,24.8,4.9c0,2.9-17.4,5.2-38.9,5.2S0.9,67.9,0.9,65c0-2.1,10.5-4.1,24.5-4.9"/><g><path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/><path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/></g></g>'
+freezeSkip = '<g> <path class="freezeSkip0" d="M50.3,0l4.5,19.4c0.2,1,1.7,1,1.9,0L61.2,0H50.3z"/> <path class="freezeSkip1" d="M53.6,0h-3.3l4.5,19.4c0.2,1,1.7,1,1.9,0l0.7-3L53.6,0z"/> <path class="freezeSkip0" d="M57.7,0l4.5,30.2c0.2,1.1,1.8,1.1,1.9,0L68.6,0H57.7z"/> <path class="freezeSkip1" d="M61,0h-3.3l4.5,30.2c0.2,1.1,1.8,1.1,1.9,0l0.7-4.6L61,0z"/> <path class="freezeSkip0" d="M68.6,0l4.5,23c0.2,1.1,1.7,1.1,1.9,0l4.5-23H68.6z"/> <path class="freezeSkip1" d="M71.9,0h-3.3l4.5,23c0.2,1.1,1.7,1.1,1.9,0l0.7-3.5L71.9,0z"/> <path class="freezeSkip0" d="M6.9,0l4.5,33.8c0.1,1.1,1.8,1.1,1.9,0L17.8,0H6.9z"/> <path class="freezeSkip1" d="M10.2,0H6.9l4.5,33.8c0.1,1.1,1.8,1.1,1.9,0l0.7-5.1L10.2,0z"/> <path class="freezeSkip0" d="M0,0l4.5,16.7c0.3,1,1.6,1,1.9,0L10.9,0H0z"/> <path class="freezeSkip1" d="M3.3,0H0l4.5,16.7c0.3,1,1.6,1,1.9,0l0.7-2.6L3.3,0z"/> <path class="freezeSkip0" d="M15.2,0l4.5,19.4c0.2,1,1.7,1,1.9,0L26.1,0H15.2z"/> <path class="freezeSkip1" d="M18.5,0h-3.3l4.5,19.4c0.2,1,1.7,1,1.9,0l0.7-3L18.5,0z"/> </g> <g> <path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/> </g>'
 
-rainSkip = '<g transform="scale(.2,.2)"><path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/><path class="rainDropsPredicted" d="M75.1,36.3c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9c0-3.3,5.9-10.6,5.9-10.6S75.1,33.1,75.1,36.3z"/><path class="rainDropsPredicted" d="M65.1,11.6c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9S59.2,1,59.2,1S65.1,8.4,65.1,11.6z"/><path class="rainDropsPredicted" d="M78.4,17.7c0,3.3-2.7,5.9-5.9,5.9c-3.2,0-5.9-2.6-5.9-5.9s5.9-10.6,5.9-10.6S78.4,14.5,78.4,17.7z"/><path class="rainDropsPredicted" d="M26.2,12.2c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9s5.9-10.6,5.9-10.6S26.2,9,26.2,12.2z"/><path class="rainDropsPredicted" d="M12.8,17.7c0,3.3-2.7,5.9-5.9,5.9S1,21,1,17.7S6.9,7.1,6.9,7.1S12.8,14.5,12.8,17.7z"/><path class="rainDropsPredicted" d="M16.2,36.3c0,3.3-2.7,5.9-5.9,5.9s-5.9-2.6-5.9-5.9c0-3.3,5.9-10.6,5.9-10.6S16.2,33.1,16.2,36.3z"/></g>'
-
-windSkip = '<g transform="scale(.2,.2)"><g><path class="windSkip" d="M42.4,15.1h23.8c4.2,0,7.5-3.2,7.5-7.1S70.3,1,66.2,1s-7.5,3.2-7.5,7.1c0,0.9,0.7,1.6,1.6,1.6 c0.9,0,1.6-0.7,1.6-1.6c0-2.1,2-3.9,4.4-3.9s4.4,1.7,4.4,3.9c0,2.1-2,3.9-4.4,3.9H2.4c-0.9,0-1.6,0.7-1.6,1.6 c0,0.9,0.7,1.6,1.6,1.6L42.4,15.1z"/> <path class="windSkip" d="M66.2,24.8H2.4c-0.9,0-1.6,0.7-1.6,1.6c0,0.9,0.7,1.6,1.6,1.6h63.8c2.4,0,4.4,1.8,4.4,3.9 c0,2.1-2,3.9-4.4,3.9c-0.9,0-1.6,0.7-1.6,1.6c0,0.9,0.7,1.6,1.6,1.6c4.2,0,7.5-3.2,7.5-7.1C73.7,28,70.3,24.8,66.2,24.8L66.2,24.8 z"/> <path class="windSkip" d="M77.2,13.9c-0.9,0-1.6,0.7-1.6,1.6c0,1.8-1.8,3.2-4.1,3.2H2.4c-0.9,0-1.6,0.7-1.6,1.6s0.7,1.6,1.6,1.6h69.1 c4,0,7.2-2.9,7.2-6.4C78.8,14.6,78.1,13.9,77.2,13.9L77.2,13.9z"/> </g><g> <path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/></g></g>'
-
-freezeSkip = '<g transform="scale(.2,.2)"><g> <path class="freezeSkip0" d="M50.3,0l4.5,19.4c0.2,1,1.7,1,1.9,0L61.2,0H50.3z"/> <path class="freezeSkip1" d="M53.6,0h-3.3l4.5,19.4c0.2,1,1.7,1,1.9,0l0.7-3L53.6,0z"/> <path class="freezeSkip0" d="M57.7,0l4.5,30.2c0.2,1.1,1.8,1.1,1.9,0L68.6,0H57.7z"/> <path class="freezeSkip1" d="M61,0h-3.3l4.5,30.2c0.2,1.1,1.8,1.1,1.9,0l0.7-4.6L61,0z"/> <path class="freezeSkip0" d="M68.6,0l4.5,23c0.2,1.1,1.7,1.1,1.9,0l4.5-23H68.6z"/> <path class="freezeSkip1" d="M71.9,0h-3.3l4.5,23c0.2,1.1,1.7,1.1,1.9,0l0.7-3.5L71.9,0z"/> <path class="freezeSkip0" d="M6.9,0l4.5,33.8c0.1,1.1,1.8,1.1,1.9,0L17.8,0H6.9z"/> <path class="freezeSkip1" d="M10.2,0H6.9l4.5,33.8c0.1,1.1,1.8,1.1,1.9,0l0.7-5.1L10.2,0z"/> <path class="freezeSkip0" d="M0,0l4.5,16.7c0.3,1,1.6,1,1.9,0L10.9,0H0z"/> <path class="freezeSkip1" d="M3.3,0H0l4.5,16.7c0.3,1,1.6,1,1.9,0l0.7-2.6L3.3,0z"/> <path class="freezeSkip0" d="M15.2,0l4.5,19.4c0.2,1,1.7,1,1.9,0L26.1,0H15.2z"/> <path class="freezeSkip1" d="M18.5,0h-3.3l4.5,19.4c0.2,1,1.7,1,1.9,0l0.7-3L18.5,0z"/> </g> <g> <path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/> </g></g>'
-
-rainSensorSkip = '<g transform="scale(.2,.2)"><g></g><g><path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/><path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/> <g> <path class="rainSensorSkip" d="M75.4,23.8c-0.6-0.6-1.6-0.6-2.2,0c-0.6,0.6-0.6,1.6,0,2.2c4.4,4.4,6.8,10.3,6.8,16.5s-2.4,12.1-6.8,16.5 c-0.6,0.6-0.6,1.6,0,2.2c0.6,0.6,1.6,0.6,2.2,0c5-5,7.7-11.6,7.7-18.7S80.4,28.7,75.4,23.8z"/> <path class="rainSensorSkip" d="M70.7,28.4c-0.6-0.6-1.6-0.6-2.2,0c-0.6,0.6-0.6,1.6,0,2.2c3.2,3.2,4.9,7.3,4.9,11.8s-1.7,8.7-4.9,11.8 c-0.6,0.6-0.6,1.6,0,2.2c0.6,0.6,1.6,0.6,2.2,0c3.7-3.7,5.8-8.7,5.8-14S74.4,32.2,70.7,28.4z"/> <path class="rainSensorSkip" d="M66,33.1c-0.6-0.6-1.6-0.6-2.2,0c-0.6,0.6-0.6,1.6,0,2.2c1.9,1.9,2.9,4.4,2.9,7.1c0,2.7-1,5.2-2.9,7.1 c-0.6,0.6-0.6,1.6,0,2.2c0.6,0.6,1.6,0.6,2.2,0c2.5-2.5,3.9-5.8,3.9-9.3S68.5,35.6,66,33.1L66,33.1z"/> <path class="rainSensorSkip" d="M-0.6,42.4c0-6.2,2.4-12.1,6.8-16.5c0.6-0.6,0.6-1.6,0-2.2c-0.6-0.6-1.6-0.6-2.2,0c-5,5-7.7,11.6-7.7,18.7 S-1,56.1,4,61.1c0.6,0.6,1.6,0.6,2.2,0c0.6-0.6,0.6-1.6,0-2.2C1.8,54.5-0.6,48.7-0.6,42.4L-0.6,42.4z"/> <path class="rainSensorSkip" d="M6,42.4c0-4.5,1.7-8.7,4.9-11.8c0.6-0.6,0.6-1.6,0-2.2c-0.6-0.6-1.6-0.6-2.2,0c-3.7,3.7-5.8,8.7-5.8,14 s2.1,10.3,5.8,14c0.6,0.6,1.6,0.6,2.2,0c0.6-0.6,0.6-1.6,0-2.2C7.7,51.1,6,46.9,6,42.4z"/> <path class="rainSensorSkip" d="M15.6,33.1c-0.6-0.6-1.6-0.6-2.2,0c-2.5,2.5-3.9,5.8-3.9,9.3s1.4,6.8,3.9,9.3c0.6,0.6,1.6,0.6,2.2,0 c0.6-0.6,0.6-1.6,0-2.2c-1.9-1.9-2.9-4.4-2.9-7.1c0-2.7,1-5.2,2.9-7.1C16.2,34.7,16.2,33.7,15.6,33.1L15.6,33.1z"/> </g> </g></g>'
+rainSensorSkip = '<g></g><g><path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/><path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/> <g> <path class="rainSensorSkip" d="M75.4,23.8c-0.6-0.6-1.6-0.6-2.2,0c-0.6,0.6-0.6,1.6,0,2.2c4.4,4.4,6.8,10.3,6.8,16.5s-2.4,12.1-6.8,16.5 c-0.6,0.6-0.6,1.6,0,2.2c0.6,0.6,1.6,0.6,2.2,0c5-5,7.7-11.6,7.7-18.7S80.4,28.7,75.4,23.8z"/> <path class="rainSensorSkip" d="M70.7,28.4c-0.6-0.6-1.6-0.6-2.2,0c-0.6,0.6-0.6,1.6,0,2.2c3.2,3.2,4.9,7.3,4.9,11.8s-1.7,8.7-4.9,11.8 c-0.6,0.6-0.6,1.6,0,2.2c0.6,0.6,1.6,0.6,2.2,0c3.7-3.7,5.8-8.7,5.8-14S74.4,32.2,70.7,28.4z"/> <path class="rainSensorSkip" d="M66,33.1c-0.6-0.6-1.6-0.6-2.2,0c-0.6,0.6-0.6,1.6,0,2.2c1.9,1.9,2.9,4.4,2.9,7.1c0,2.7-1,5.2-2.9,7.1 c-0.6,0.6-0.6,1.6,0,2.2c0.6,0.6,1.6,0.6,2.2,0c2.5-2.5,3.9-5.8,3.9-9.3S68.5,35.6,66,33.1L66,33.1z"/> <path class="rainSensorSkip" d="M-0.6,42.4c0-6.2,2.4-12.1,6.8-16.5c0.6-0.6,0.6-1.6,0-2.2c-0.6-0.6-1.6-0.6-2.2,0c-5,5-7.7,11.6-7.7,18.7 S-1,56.1,4,61.1c0.6,0.6,1.6,0.6,2.2,0c0.6-0.6,0.6-1.6,0-2.2C1.8,54.5-0.6,48.7-0.6,42.4L-0.6,42.4z"/> <path class="rainSensorSkip" d="M6,42.4c0-4.5,1.7-8.7,4.9-11.8c0.6-0.6,0.6-1.6,0-2.2c-0.6-0.6-1.6-0.6-2.2,0c-3.7,3.7-5.8,8.7-5.8,14 s2.1,10.3,5.8,14c0.6,0.6,1.6,0.6,2.2,0c0.6-0.6,0.6-1.6,0-2.2C7.7,51.1,6,46.9,6,42.4z"/> <path class="rainSensorSkip" d="M15.6,33.1c-0.6-0.6-1.6-0.6-2.2,0c-2.5,2.5-3.9,5.8-3.9,9.3s1.4,6.8,3.9,9.3c0.6,0.6,1.6,0.6,2.2,0 c0.6-0.6,0.6-1.6,0-2.2c-1.9-1.9-2.9-4.4-2.9-7.1c0-2.7,1-5.2,2.9-7.1C16.2,34.7,16.2,33.7,15.6,33.1L15.6,33.1z"/> </g> </g>'
     
-genericSkip = '<g transform="scale(.2,.2)"> <path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/> </g>'
+genericSkip = '<path class="rainDropSkip" d="M62.5,42.2C62.5,54.9,52.2,65,39.7,65S16.9,54.9,16.9,42.2S39.7,1,39.7,1S62.5,29.7,62.5,42.2z"/> <path class="rainDropAccent" d="M39.5,59c-9.2,0-16.8-7.5-16.8-16.8c0-1.1,0.9-2,2-2s2,0.9,2,2c0,7.1,5.7,12.8,12.8,12.8c1.1,0,2,0.9,2,2 S40.6,59,39.5,59z"/>'
     
   
     
