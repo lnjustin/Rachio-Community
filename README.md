@@ -17,7 +17,9 @@ The Dashboard outputs an SVG image to a local endpoint as well as a cloud endpoi
 * Expand or Collapse vertical or horizontal spacing
 * scale up or down in size
 
-Future enhancements will include HTML-based dashboard with clickable days to bring up additional information.
+Future enhancements will include:
+- indicate schedule information on dashboard
+- HTML-based dashboard with clickable days to bring up additional information.
 
 **Uses undocumented Rachio API**
 Note that Rachio Community relies on an undocumented API to extend the native Rachio functionality. Rachio makes no guarantee about availability of its undocumented API, meaning it could change without notice at any time. Accordingly, the expanded functionality in Rachio Community cannot be guaranteed.
