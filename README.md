@@ -8,7 +8,7 @@ Rachio Community builds off of the same base code likely used for the official R
 * Next event data exposed. See information about your system's next event, e.g., scheduled run or skip.
 * Monthly watering summary exposed. See the same monthly watering summary as on the Home tab of the mobile app.
 
-![Rachio Community Dashboard(https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/Dashboard.JPG)
+![Rachio Community Dashboard](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/Dashboard.JPG)
 
 The Dashboard outputs an SVG image to a local endpoint as well as a cloud endpoint, so you can display the dashboard on any image tile of any dashboard, e.g., Sharptools dashboard, Smartly, etc. The dashboard is highly configurable with regard to:
 * Number of days on dashboard
