@@ -4,6 +4,9 @@
  *  Copyright\u00A9 2018 Anthony Santilli
  *  Copyright\u00A9 2020 Justin Leonard
  *
+ *  V1.1.1 written by Anthony Santilli (@tonesto7)
+ *  Ported to Hubitat and Enhanced to V2.0 by Justin Leonard (@JustinL)
+ *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
  *
@@ -14,7 +17,7 @@
  *  for the specific language governing permissions and limitations under the License.
  *
  * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
- * V2.0:    Ported to Hubitat; Exposed next run, last run, rain sensor state, next upcoming event, weather intelligence info (05-21-2020) 
+ * V2.0:    Ported to Hubitat; Added dashboard and exposed additional information in controller/zone, including next run, last run, rain sensor state, next upcoming event, weather intelligence information, and monthly watering summary (05-31-2020) 
  */
 
 import java.text.SimpleDateFormat
@@ -82,7 +85,7 @@ metadata {
         command "decZoneWaterTime"
         command "incZoneWaterTime"
         command "runAllZones"
-        command "pauseZoneRun"
+        command "pauseZoneRun", ["number"]
         command "resumeZoneRun"
         command "standbyOn"
         command "standbyOff"
@@ -126,9 +129,6 @@ metadata {
         valueTile("controllerRunStatus", "device.controllerRunStatus", inactiveLabel: true, width: 4, height: 2, decoration: "flat") {
             state "default", label: '${currentValue}'
         }
-        valueTile("upcomingEvent", "device.upcomingEvent", inactiveLabel: true, width: 4, height: 2, decoration: "flat") {
-            state "default", label: '${currentValue}'
-        }
         valueTile("blank", "device.blank", width: 2, height: 1, decoration: "flat") {
             state("default", label: '')
         }
@@ -169,9 +169,6 @@ metadata {
         }
         valueTile("runAllZonesTile", "device.curZoneWaterTime", inactiveLabel: false, width: 2 , height: 1, decoration: "flat") {
             state("default", label: 'Run All Zones\n${currentValue} Minutes', action:'runAllZones')
-        }
-        valueTile("pauseZoneRunTile", "device.curZoneWaterTime", inactiveLabel: false, width: 2 , height: 1, decoration: "flat") {
-            state("default", label: 'Pause Zone Run', action:'pauseZoneRun')
         }
         standardTile("standbyMode", "device.standbyMode", decoration: "flat", wordWrap: true, width: 2, height: 2) {
             state "on", label:'Turn Standby Off', action:"standbyOff", nextState: "false", icon: "http://cdn.device-icons.smartthings.com/sonos/play-icon@2x.png"
@@ -454,8 +451,8 @@ def detailsDataEvent(detailsData) {
 
 def scheduleDataEvent(sData, zData, rainDelay) {
     //log.trace "scheduleDataEvent($data)..."
-    state?.schedData = sData
-    state?.zoneData = zData
+ //   state?.schedData = sData
+ //   state?.zoneData = zData
     state?.rainData = rainDelay
     def curSchedType = !sData?.type ? "Off" : sData?.type?.toString().capitalize()
     //def curSchedTypeBtnDesc = (!curSchedType || curSchedType in ["off", "manual"]) ? "Pause Disabled" : "Pause Schedule"
@@ -697,10 +694,10 @@ def stopWatering() {
     close()
 }
 
-// TO DO: Check to see if this setRainDelay function is used and if it is why it uses "value" - seems like a bug
+
 def setRainDelay(rainDelay) {
-    sendEvent("name":"rainDelay", "value": value)
-    def res = parent?.setRainDelay(this, value);
+    sendEvent("name":"rainDelay", "value": rainDelay)
+    def res = parent?.setRainDelay(this, rainDelay);
     //if (res) { parent?.pollChildren() }
 }
 
