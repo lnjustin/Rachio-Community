@@ -1489,7 +1489,7 @@ def buildDashboard() {
     Integer columnWidth = 64 + extraHorizontalSpace
     Integer numDays = 1 + numPastDaysDashboard + numFutureDaysDashboard
     Integer svgWidth = columnWidth * numDays
-    svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 95" style="enable-background:new 0 0 ' + Integer.toString(svgWidth) + ' 95;" xml:space="preserve">'
+    svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 105" style="enable-background:new 0 0 ' + Integer.toString(svgWidth) + ' 105;" xml:space="preserve">'
     
     svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropAccent{fill:' + colorScheme.rainDropAccentColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:none;stroke:' + colorScheme.skipStrikethroughColor + ';stroke-width:3;stroke-miterlimit:10;} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip0{fill:' + colorScheme.freezeSkip0Color + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:7px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style> <defs> <linearGradient id="bicolored"> <stop offset="50%" stop-color="' + colorScheme.highTempTextColor + '"/> <stop offset="50%" stop-color="' + colorScheme.lowTempTextColor + '"/> </linearGradient> </defs>'
     
@@ -1505,7 +1505,7 @@ def buildDashboard() {
     
     def i = 0
     for (date in startDate..endDate) {
-        i += 1
+        
         def dateMap = getDateMap(date)
        
         def dayLabel = ""
@@ -1603,7 +1603,7 @@ def buildDashboard() {
         Integer halfColumnWidth = columnWidth / 2
         columnCenter = Integer.toString(halfColumnWidth*(i+1))
         
-        svg += '<g transform="translate(' + Integer.toString(columnWidth*i) + ', 0)">'
+        svg += '<g transform="translate(' + Integer.toString(columnWidth*i) + ', 10)">'
         svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="1.5" text-anchor="middle" class="dayText largeFontClass fontWeightClass">' + dayLabel + '</text>'
         
         svg += '<g transform="translate(' + Double.toString(extraHorizontalSpace/2) + ', 0)">'
@@ -1663,6 +1663,7 @@ def buildDashboard() {
         svg += '</g>'
             
         svg += '</g>'
+        i += 1
     }
     svg += '</g></svg>'
     render contentType: "image/svg+xml", data: svg, status: 200
