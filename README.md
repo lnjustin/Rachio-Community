@@ -10,6 +10,20 @@ Rachio Community builds off of the same base code likely used for the official R
 
 ![Rachio Community Dashboard](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/Dashboard.JPG)
 
+##Icon Key:
+![Watering](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/water.JPG) Watering
+
+![Rain Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rain%20skip.JPG) Rain Skip due to predicted rain
+
+![Saturation Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/saturation%20skip.JPG) Soil saturated skip
+
+![Wind Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/Wind%20Skip.JPG) Wind skip
+
+![Freeze Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/freeze%20Skip.JPG) Freeze skip
+
+![Rain Sensor Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rain%20sensor%20skip.JPG) Rain Sensor skip
+(Tentative skip if rain sensor remains triggered)
+
 The Dashboard outputs an SVG image to a local endpoint as well as a cloud endpoint, so you can display the dashboard on any image tile of any dashboard, e.g., Sharptools dashboard, Smartly, etc. The dashboard is highly configurable with regard to:
 * Number of days on dashboard
 * Hide/Show precipitation percentage, precipitation amount, high/low temp
