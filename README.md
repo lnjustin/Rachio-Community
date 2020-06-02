@@ -1,7 +1,7 @@
 # Rachio-Community
 Community version of Rachio App/Drivers for Hubitat
 
-Rachio Community builds off of the same base code likely used for the official Rachio integration. On top of the native features, this community version adds:
+Rachio Community builds off of the native Rachio integration. On top of the native features, this community version adds:
 * Dashboard. See your watering schedule and skips, in conjunction with Rachio weather information, on your smart home dashboard. Substantially similar to what you see on the Home tab of the mobile app, except Rachio Community enhances it to include different icons for different types of skips. Highly configurable.
 * Next Run and Last Run data exposed for automation & display. Automate based on when your next run will occur and/or when your last run occurred.
 * Rain Sensor State exposed. Use your irrigation system's rain sensor for automation and/or see its status on your smart home dashboard.
