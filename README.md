@@ -17,9 +17,9 @@ Rachio Community builds off of the same base code likely used for the official R
 
 ![Saturation Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/saturation%20skip.JPG) Soil saturated skip
 
-![Wind Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/wind%20Skip.JPG) Wind skip
+![Wind Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/Wind%20Skip.JPG) Wind skip
 
-![Freeze Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/freeze%20Skip.JPG) Freeze skip
+![Freeze Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/freeze%20skip.JPG) Freeze skip
 
 ![Rain Sensor Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rain%20sensor%20skip.JPG) Rain Sensor skip
 (Tentative skip if rain sensor remains triggered)
