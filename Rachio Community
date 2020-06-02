@@ -1657,7 +1657,7 @@ def buildDashboard() {
             irrigationExtraVerticalSpacing = extraVerticalSpace*2
         }
 
-        svg += '<g transform="translate(' + Double.toString((48 + extraHorizontalSpace)/2) + ',' + Long.toString(irrigationBaseY + irrigationExtraVerticalSpacing) + ') scale(.3,.3)">'
+        svg += '<g transform="translate(' + Double.toString((40 + extraHorizontalSpace)/2) + ',' + Long.toString(irrigationBaseY + irrigationExtraVerticalSpacing) + ') scale(.3,.3)">'
         svg += irrigationIcon
           
         svg += '</g>'
