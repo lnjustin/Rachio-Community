@@ -41,4 +41,5 @@ Note that Rachio Community relies on an undocumented API to extend the native Ra
 4. Install the Rachio Community app
 5. Enable Oath
 6. Follow the install instructions in the Rachio Community app
+7. Make sure to click Next on the Dashboard Setup page at least once, so as to actually set up the dashboard. Otherwise, the dashboard will not be set up and will not work.
 
