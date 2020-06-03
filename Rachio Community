@@ -188,7 +188,7 @@ def devicePage() {
                     section("") {
                     def localUri = getFullLocalApiServerUrl() + "/rachioDashboard/${contID}?access_token=${state.accessToken}"
                     def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${contID}?access_token=${state.accessToken}"
-                        paragraph("Use the following URIs to access the Dashboard for Controller ${contID} (output as SVG image): <ul><li><strong>Local</strong>:<br /><a href='${localUri}'>${localUri}</a></li><li><strong>Cloud</strong>:<br/><a href='${cloudUri}'>${cloudUri}</a></li></ul>")
+                        paragraph("After clicking Next on the Dashboard Setup page at least once, use the following URIs to access the Dashboard for Controller ${contID} (output as SVG image): <ul><li><strong>Local</strong>:<br /><a href='${localUri}'>${localUri}</a></li><li><strong>Cloud</strong>:<br/><a href='${cloudUri}'>${cloudUri}</a></li></ul>")
                     }
                 }
             }
