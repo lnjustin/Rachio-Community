@@ -327,6 +327,7 @@ def hardwareModelEvent(val) {
     def curDesc = device?.currentState("hardwareDesc")?.value.toString()
     def newModel = null
     def newDesc = null
+    log.debug "Rachio Controller Model: ${val}"
     switch(val) {
         case "GENERATION1_8ZONE":
             newModel = "8ZoneV1"
