@@ -24,7 +24,11 @@ Rachio Community builds off of the native Rachio integration. On top of the nati
 ![Rain Sensor Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rain%20sensor%20skip.JPG) Rain Sensor skip
 (Tentative skip if rain sensor remains triggered)
 
-The Dashboard outputs an SVG image to a local endpoint as well as a cloud endpoint, so you can display the dashboard on any image tile of any dashboard, e.g., Sharptools dashboard, Smartly, etc. The dashboard is highly configurable with regard to:
+**Dashboard Output Format**
+The Dashboard outputs an SVG image to a local endpoint as well as a cloud endpoint, so you can embed the resulting image into any image tile of any dashboard, e.g., Sharptools dashboard, Smartly, etc. Note that you would want to embed the image into a dashboard image tile with a dark background if you select a white color scheme, and embed the image into a dashboard image tile with a light background if you select a black color scheme.
+
+**Dashboard Configuration**
+The dashboard is highly configurable with regard to:
 * Number of days on dashboard
 * Hide/Show precipitation percentage, precipitation amount, high/low temp
 * Select from predefined color schemes or customize every color
@@ -32,7 +36,10 @@ The Dashboard outputs an SVG image to a local endpoint as well as a cloud endpoi
 * scale up or down in size
 
 **Uses undocumented Rachio API**
-Note that Rachio Community relies on an undocumented API to extend the native Rachio functionality. Rachio makes no guarantee about availability of its undocumented API, meaning it could change without notice at any time. Accordingly, the expanded functionality in Rachio Community cannot be guaranteed.
+Note that Rachio Community relies on an undocumented API to extend the native Rachio functionality. Rachio has stated in its community forum that, although use of the undocumented API is allowed, there is no guarantee about its availability, meaning it could change without notice at any time. Accordingly, the expanded functionality in Rachio Community cannot be guaranteed. This especially since *this community version of the app and drivers has been developed by the Hubitat community, without any affiliation or cooperation with Rachio.*
+
+**Supported Controllers**
+Rachio controllers 1, 2, 3, and 3e are supported.
 
 **Install Instructions**
 1. Uninstall the Rachio native app
