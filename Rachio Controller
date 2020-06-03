@@ -110,12 +110,13 @@ metadata {
         }
         standardTile("hardwareModel", "device.hardwareModel", inactiveLabel: false, width: 2, height: 2, decoration: "flat") {
             state "default", icon: ""
-            state "8ZoneV1", icon: "https://s3-us-west-2.amazonaws.com/rachio-media/smartthings/8zone_v1.png"
-            state "16ZoneV1", icon: "https://s3-us-west-2.amazonaws.com/rachio-media/smartthings/8zone_v1.png"
-            state "8ZoneV2", icon: "https://raw.githubusercontent.com/tonesto7/rachio-manager/master/images/rachio_gen2.png"
-            state "16ZoneV2", icon: "https://raw.githubusercontent.com/tonesto7/rachio-manager/master/images/rachio_gen2.png"
-            state "8ZoneV3", icon: "https://raw.githubusercontent.com/tonesto7/rachio-manager/master/images/rachio_gen3.png"
-            state "16ZoneV3", icon: "https://raw.githubusercontent.com/tonesto7/rachio-manager/master/images/rachio_gen3.png"
+            state "8ZoneV1", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/8zone_v1.png"
+            state "16ZoneV1", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/8zone_v1.png"
+            state "8ZoneV2", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen2.png"
+            state "16ZoneV2", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen2.png"
+            state "8ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
+            state "16ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
+            state "8ZoneV3Lite", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3_lite.PNG"
         }
         valueTile("hardwareDesc", "device.hardwareDesc", inactiveLabel: false, width: 4, height: 1, decoration: "flat") {
             state "default", label: 'Model:\n${currentValue}'
@@ -184,11 +185,11 @@ metadata {
             "leftZoneTimeButton", "curZoneWaterTime", "rightZoneTimeButton", "runAllZonesTile", "pauseZoneRunTile", "lastUpdatedDt", "standbyMode", "refresh"])
 }
 
-def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/tonesto7/rachio-manager/master/images/$imgName" }
+def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/$imgName" }
 
 // parse events into attributes
 def parse(String description) {
-    log.debug "Parsing '${description}'"
+    if (parent?.debugLogging) { log.debug "Parsing '${description}'" }
 }
 
 def initialize() {
@@ -284,7 +285,7 @@ def lastUpdatedEvent() {
 
 def markOffLine() {
     if(isStateChange(device, "watering", "offline") || isStateChange(device, "curZoneRunStatus", "Device is Offline")) {
-        log.debug("UPDATED: Watering is set to (Offline)")
+        //log.debug("UPDATED: Watering is set to (Offline)")
         sendEvent(name: 'watering', value: "offline", displayed: true, isStateChange: true)
         sendEvent(name: 'valve', value: "closed", displayed: false, isStateChange: true)
         sendEvent(name: 'switch', value: "off", displayed: false, isStateChange: true)
@@ -296,7 +297,7 @@ def markOffLine() {
 
 def markStandby() {
     if(isStateChange(device, "watering", "standby") || isStateChange(device, "curZoneRunStatus", "Device in Standby Mode")) {
-        log.debug("UPDATED: Watering set to (Standby Mode)")
+        //log.debug("UPDATED: Watering set to (Standby Mode)")
         sendEvent(name: 'watering', value: "standby", displayed: true, isStateChange: true)
         sendEvent(name: 'valve', value: "closed", displayed: false, isStateChange: true)
         sendEvent(name: 'switch', value: "off", displayed: false, isStateChange: true)
@@ -327,7 +328,7 @@ def hardwareModelEvent(val) {
     def curDesc = device?.currentState("hardwareDesc")?.value.toString()
     def newModel = null
     def newDesc = null
-    log.debug "Rachio Controller Model: ${val}"
+    if (parent?.debugLogging) { log.debug "Rachio Controller Model: ${val}" }
     switch(val) {
         case "GENERATION1_8ZONE":
             newModel = "8ZoneV1"
@@ -359,13 +360,18 @@ def hardwareModelEvent(val) {
             newDesc = "16-Zone (Gen 3)"
             state?.controllerDescription = "gen3IrrigationController"
             break
+        case "GENERATION3_8ZONE_LITE":
+            newModel = "8ZoneV3Lite"
+            newDesc = "8-Zone (Gen 3 Lite)"
+            state?.controllerDescription = "gen3LiteIrrigationController"
+            break
     }
     if(isStateChange(device, "hardwareModel", newModel.toString())) {
-        log.debug "UPDATED: Controller Model (${newModel}) | Previous: (${curModel})"
+       if (parent?.debugLogging) {  log.debug "UPDATED: Controller Model (${newModel}) | Previous: (${curModel})" }
         sendEvent(name: 'hardwareModel', value: newModel, displayed: true, isStateChange: true)
     }
     if(isStateChange(device, "hardwareDesc", newDesc.toString())) {
-        log.debug "UPDATED: Controller Description (${newDesc}) | Previous: (${curDesc})"
+        if (parent?.debugLogging) { log.debug "UPDATED: Controller Description (${newDesc}) | Previous: (${curDesc})" }
         sendEvent(name: 'hardwareDesc', value: newDesc.toString(), displayed: true, isStateChange: true)
     }
 }
@@ -377,7 +383,7 @@ def activeZoneCntEvent(zData) {
         zData.each { z -> if(z?.enabled.toString() == "true") { zoneCnt = zoneCnt+1 } }
     }
     if(isStateChange(device, "activeZoneCnt", zoneCnt.toString())) {
-        log.debug "UPDATED: Active Zone Count (${zoneCnt}) | Previous: (${curState})"
+       // log.debug "UPDATED: Active Zone Count (${zoneCnt}) | Previous: (${curState})"
         sendEvent(name: 'activeZoneCnt', value: zoneCnt?.toInteger(), displayed: true, isStateChange: true)
     }
 }
@@ -386,7 +392,7 @@ def controllerOnEvent(val) {
     def curState = device?.currentState("controllerOn")?.value
     def newState = val?.toString()
     if(isStateChange(device, "controllerOn", newState.toString())) {
-        log.debug "UPDATED: Controller On Status (${newState}) | Previous: (${curState})"
+       // log.debug "UPDATED: Controller On Status (${newState}) | Previous: (${curState})"
         sendEvent(name: 'controllerOn', value: newState, displayed: true, isStateChange: true)
     }
 }
@@ -396,7 +402,7 @@ def lastWateredDateEvent(val, dur) {
     def newDesc = "${epochToDt(val)}\nDuration: ${getDurationDesc(dur?.toLong())}"
     def curState = device?.currentState("lastWateredDt")?.value
     if(isStateChange(device, "lastWateredDt", newState.toString())) {
-        log.debug "UPDATED: Last Watered Date (${newState}) | Previous: (${curState})"
+       // log.debug "UPDATED: Last Watered Date (${newState}) | Previous: (${curState})"
         sendEvent(name: 'lastWateredDt', value: newState, displayed: true, isStateChange: true)
         sendEvent(name: 'lastWateredDesc', value: newDesc, displayed: false, isStateChange: true)
     }
@@ -406,7 +412,7 @@ def rainDelayValEvent(val) {
     def curState = device?.currentState("rainDelay")?.value.toString()
     def newState = val ? val : 0
     if(isStateChange(device, "rainDelay", newState.toString())) {
-        log.debug("UPDATED: Rain Delay Value (${newState}) | Previous: (${curState})")
+        //log.debug("UPDATED: Rain Delay Value (${newState}) | Previous: (${curState})")
         sendEvent(name:'rainDelay', value: newState, displayed: true)
         setRainDelayString(newState)
     }
@@ -416,7 +422,7 @@ def setZoneWaterTime(timeVal) {
     def curState = device?.currentState("curZoneWaterTime")?.value.toString()
     def newVal = timeVal ? timeVal.toInteger() : parent?.settings?.defaultZoneTime
     if(isStateChange(device, "curZoneWaterTime", newVal.toString())) {
-        log.debug("UPDATED: Manual Zone Water Time (${newVal}) | Previous: (${curState})")
+       // log.debug("UPDATED: Manual Zone Water Time (${newVal}) | Previous: (${curState})")
         sendEvent(name: 'curZoneWaterTime', value: newVal, displayed: true)
     }
 }
@@ -537,7 +543,7 @@ def setRainDelayString( rainDelay) {
 
 def doSetRainDelay() {
     def value = device.latestValue('rainDelay')
-    log.debug("Set Rain Delay ${value}")
+    if (parent?.debugLogging) { log.debug("Set Rain Delay ${value}") }
     def res = parent?.setRainDelay(this, state?.deviceId, value);
     if( !res) {
         markOffLine()
@@ -548,7 +554,7 @@ def doSetRainDelay() {
 
 def updateRainDelay(value) {
     sendEvent( name: "rainDelayStr", value: "Set New Rain Delay", isStateChange: true)
-    log.debug("Update ${value} ")
+    if (parent?.debugLogging) {  log.debug("Update ${value} ") }
     if( value > 7) {
         value = 7;
     } else if ( value < 0) {
@@ -558,13 +564,13 @@ def updateRainDelay(value) {
 }
 
 def increaseRainDelay() {
-    log.debug("Increase Rain Delay");
+   // log.debug("Increase Rain Delay");
     def value = device.latestValue('rainDelay')
     updateRainDelay(value + 1)
 }
 
 def decreaseRainDelay() {
-    log.debug("Decrease Rain Delay");
+    //log.debug("Decrease Rain Delay");
     def value = device.latestValue('rainDelay')
     updateRainDelay(value - 1)
 }
@@ -595,7 +601,7 @@ def runAllZones() {
     log.trace "runAllZones..."
     if(!isCmdOk2Run()) { return }
     def waterTime = device?.latestValue('curZoneWaterTime')
-    log.debug("Sending Run All Zones for (${waterTime} Minutes)")
+    if (parent?.debugLogging) { log.debug("Sending Run All Zones for (${waterTime} Minutes)") }
     def res = parent?.runAllZones(this, state?.deviceId, waterTime)
     if (!res) {
         markOffLine()
