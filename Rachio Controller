@@ -363,7 +363,7 @@ def hardwareModelEvent(val) {
         case "GENERATION3_8ZONE_LITE":
             newModel = "8ZoneV3Lite"
             newDesc = "8-Zone (Gen 3 Lite)"
-            state?.controllerDescription = "gen3LiteIrrigationController"
+            state?.controllerDescription = "gen3IrrigationController"
             break
     }
     if(isStateChange(device, "hardwareModel", newModel.toString())) {
