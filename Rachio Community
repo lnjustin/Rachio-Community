@@ -182,6 +182,9 @@ def devicePage() {
             href "authPage", title: "Manage Login", description: ""
             href "dashboardSettingsPage", title: "Dashboard Setup", description: ""
         }
+        section() {
+            input "debugLogging", "bool", title: "Activate Debug Logging?", defaultValue: false, submitOnChange: true
+        }
         if(settings?.controllers) {
             settings?.controllers?.each { contID ->
                 if(contID) { 
@@ -196,6 +199,18 @@ def devicePage() {
         removeSect()
     }
 }
+
+numPastDaysDashboardDefault = 2
+numFutureDaysDashboardDefault = 2
+showPrecipPercentDefault = true
+showPrecipAmountDefault = true
+showTempDefault = true
+colorSchemeSelectionDefault = "Black with Color"
+fontWeightDefault = "normal"
+globalScaleDefault = 100
+extraVerticalSpaceDefault = 0
+extraHorizontalSpaceDefault = 0
+
 
 def dashboardSettingsPage(){
     if(!state.accessToken){	
@@ -214,7 +229,7 @@ def dashboardSettingsPage(){
             input "showTemp", "bool", title: "Show High/Low Temperature?", defaultValue: true, submitOnChange: false
         }
         section(getSectionTitle("Configure Display Formatting")) {
-            input(name: "colorSchemeSelection", type: "enum", title: "Select Color Scheme:", required: true, multiple: false, options: ["White with Color","Black with Color", "White without Color", "Black without Color", "Custom"], submitOnChange: false, defaultValue: 'White with Color', width: 5)
+            input(name: "colorSchemeSelection", type: "enum", title: "Select Color Scheme:", required: true, multiple: false, options: ["White with Color","Black with Color", "White without Color", "Black without Color", "Custom"], submitOnChange: false, defaultValue: 'Black with Color', width: 5)
             if(colorSchemeSelection == "Custom") {
                 input "cloudColorCustom", "string", title: "Cloud Color (format: #FFFFFF)", submitOnChange: false
                 input "lightColorCustom", "string", title: "Sun and Lightning Color (format: #FFFFFF)", submitOnChange: false
@@ -240,7 +255,7 @@ def dashboardSettingsPage(){
                 input "lowTempTextColorCustom", "string", title: "Low Temp Text Color (format: #FFFFFF)", submitOnChange: false
                 
             }
-            input "fontWeightSetting", "enum", title: "Text Weight", defaultValue: "normal", options:["normal", "bold"], multiple: false, width: 2, submitOnChange: false
+            input "fontWeight", "enum", title: "Text Weight", defaultValue: "normal", options:["normal", "bold"], multiple: false, width: 2, submitOnChange: false
             input "globalScale", "number", title: "Global Scale (in percent)",defaultValue: 100, submitOnChange: false
             input "extraVerticalSpace", "number", title: "Extra Vertical Spacing (in pts)", defaultValue: 0, submitOnChange: false
             input "extraHorizontalSpace", "number", title: "Extra Horizontal Spacing (in pts)", defaultValue: 0, submitOnChange: false
@@ -344,7 +359,7 @@ def getRachioDeviceData(noData=false) {
         return
     }
     def userInfo = getUserInfo(atomicState?.userId)
-    //log.debug "userInfo: ${userInfo}"
+    if (debugLogging) { log.debug "userInfo: ${userInfo}" }
     atomicState?.userName = userInfo?.username
 
     if(!noData) { return userInfo }
@@ -418,6 +433,9 @@ def getHardwareInfo(val) {
             return [model: "8ZoneV3", desc: "8-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_16ZONE":
             return [model: "16ZoneV3", desc: "16-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+        case "GENERATION3_8ZONE_LITE":
+            return [model: "8ZoneV3Lite", desc: "8-Zone (Gen 3 Lite)", img: getAppImg("rachio_gen3_lite.PNG"), gen: "Gen3", jsonTag: "gen3LiteIrrigationController"]
+        
     }
     return [desc: null, model: null, img: "", gen: null]
 }
@@ -425,7 +443,7 @@ def getHardwareInfo(val) {
 def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/$imgName" }
 
 def _httpGet(subUri, endpoint="open") {
-    log.debug "_httpGet($subUri)"
+    if (debugLogging) { log.debug "_httpGet($subUri)" }
     try {
         def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
         def params = [
@@ -438,9 +456,9 @@ def _httpGet(subUri, endpoint="open") {
             } else {
                 //refresh the auth token
                 if (resp?.status == 500 && resp?.data?.status?.code == 14) {
-                    log.debug "Storing the failed action to try later"
+                    if (debugLogging) { log.debug "Storing the failed action to try later" }
                     data.action = "getRachioDeviceData"
-                    log.debug "Refreshing your authToken!"
+                    if (debugLogging) { log.debug "Refreshing your authToken!" }
                     // refreshAuthToken()
                 } else {
                     log.error "Authentication error, invalid authentication method, lack of credentials, etc."
@@ -475,7 +493,7 @@ def installed() {
 }
 
 def updated() {
-    log.debug "Updated with settings: ${settings}"
+    if (debugLogging) { log.debug "Updated with settings: ${settings}" }
     unsubscribe()
     initialize()
 }
@@ -538,7 +556,7 @@ void initWebhooks() {
     settings?.controllers?.each { c->
         if(c) { 
             initWebhook(c)
-            // log.debug "webhooks($c): ${getWebhookIdsForDev(c)}"
+            if (debugLogging) { log.debug "webhooks($c): ${getWebhookIdsForDev(c)}" }
         }
     }
 }
@@ -602,7 +620,7 @@ void removeAllWebhooks() {
 
 //Returns the available event types to subscribe to.
 def webhookEvtTypes() {
-    log.debug "Updating webhook event types"
+    if (debugLogging) { log.debug "Updating webhook event types" }
     def typeIds = []
     def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT"] 
     def data = _httpGet("notification/webhook_event_type")
@@ -640,7 +658,7 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
             }
         }
         if(response) {
-            //log.debug "response.status: ${response?.status} | data: ${response?.data}"
+            if (debugLogging) { log.debug "response.status: ${response?.status} | data: ${response?.data}" }
             if(response?.status in [200, 201, 204]) {
                 returnStatus = true
                 if(type in ["put", "post"]) {
@@ -655,7 +673,7 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
             } else {
                 //refresh the auth token
                 if (response?.status == 401) {
-                    log.debug "Refreshing your authToken!"
+                    if (debugLogging) { log.debug "Refreshing your authToken!" }
                     // refreshAuthToken()
                 } else {
                     log.error "Authentication error, invalid authentication method, lack of credentials, etc."
@@ -856,7 +874,7 @@ def addRemoveDevices(uninst=false) {
                  //   d.completedSetup = true
                     log.info "Controller Device Created: (${d?.displayName}) with id: [${contDev?.key}]"
                 } else {
-                    log.debug "found ${d?.displayName} with dni: ${dni?.key} already exists"
+                    if (debugLogging) { log.debug "found ${d?.displayName} with dni: ${dni?.key} already exists" }
                 }
                 devsInUse += contDev.key
                 contDev?.value?.zones?.each { zoneDni ->
@@ -867,17 +885,15 @@ def addRemoveDevices(uninst=false) {
                       //  d2.completedSetup = true
                         log.info "Zone Device Created: (${d2?.displayName}) with id: [${zoneDni?.key}]"
                     } else {
-                        log.debug "found ${d2?.displayName} with dni: ${zoneDni?.key} already exists"
+                        if (debugLogging) { log.debug "found ${d2?.displayName} with dni: ${zoneDni?.key} already exists" }
                     }
                     devsInUse += zoneDni?.key
                 }
             }
-            //log.debug "devicesInUse: ${devsInUse}"
-            // delete = app.getChildDevices(true).findAll { !(it?.deviceNetworkId in devsInUse) }
+            if (debugLogging) { log.debug "devicesInUse: ${devsInUse}" }
             delete = app.getChildDevices().findAll { !(it?.deviceNetworkId in devsInUse) }
         } else {
             atomicState?.selectedDevices = []
-            // delete = app.getChildDevices(true)
             delete = app.getChildDevices()
         }
         if(delete?.size() > 0) {
@@ -940,8 +956,9 @@ void poll(child=null, type=null) {
     def zoneCnt = 0
     selectedDevices?.each { cont->
         def devData = getDeviceData(cont?.key)
-        log.debug "devData for device ID ${cont?.key} is ${devData}"
+        if (debugLogging) { log.debug "devData for device ID ${cont?.key} is ${devData}" }
         def devDetails = getDeviceDetails(cont?.key)
+        if (debugLogging) { log.debug "devDetails for device ID${cont?.key} is ${devDetails}" }
         def devState = getDeviceState(cont?.key)
         def devZoneDetails = getZoneDetails(cont?.key)
         def devNextEvent = getDeviceNextEvent(cont?.key)
@@ -1088,7 +1105,7 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
 
     try{
         if(!standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
-            log.debug "Skipping this command while controller is in 'Standby Mode'..."
+            if (debugLogging) { log.debug "Skipping this command while controller is in 'Standby Mode'..." }
             return true
         }
 
@@ -1100,7 +1117,7 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
             } else {
                 //refresh the auth token
                 if (resp.status == 401) {
-                    log.debug "Refreshing your authToken!"
+                    if (debugLogging) { log.debug "Refreshing your authToken!" }
                     // refreshAuthToken()
                 } else {
                     log.error "Authentication error, invalid authentication method, lack of credentials, etc."
@@ -1147,7 +1164,7 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
             } else {
                 //refresh the auth token
                 if (response?.status == 401) {
-                    log.debug "Refreshing your authToken!"
+                    if (debugLogging) { log.debug "Refreshing your authToken!" }
                     // refreshAuthToken()
                 } else {
                     log.error "Response status: ${response?.status} - Authentication error, invalid authentication method, lack of credentials, etc."
@@ -1298,7 +1315,7 @@ def sendActivityFeeds(notificationMessage) {
 }
 
 def standbyOn(child, deviceId) {
-    log.debug "standbyOn() command received from ${child?.device?.displayName}"
+    if (debugLogging) { log.debug "standbyOn() command received from ${child?.device?.displayName}" }
     if(deviceId) {
         def jsonData = new JsonBuilder("id":deviceId)
         def res = sendJson("device/off", jsonData.toString(), deviceId, true)
@@ -1309,7 +1326,7 @@ def standbyOn(child, deviceId) {
 }
 
 def standbyOff(child, deviceId) {
-    log.debug "standbyOff() command received from ${child?.device?.displayName}"
+    if (debugLogging) { log.debug "standbyOff() command received from ${child?.device?.displayName}" }
     if(deviceId) {
         def jsonData = new JsonBuilder("id":deviceId)
         def res = sendJson("device/on", jsonData.toString(), deviceId, true)
@@ -1456,19 +1473,32 @@ def getScheduleRuleInfo(schedId) {
 def getDashboardStartDate() {
     def today = new Date()
     today.set(hourOfDay: 0, minute: 0, second: 0)
-    def intDays = (int) numPastDaysDashboard
+    def numPastDaysDashboardSetting = (numPastDaysDashboard == null) ? numPastDaysDashboardDefault : numPastDaysDashboard
+    def intDays = (int) numPastDaysDashboardSetting
     return today-intDays
 }
 
 def getDashboardEndDate() {
     def today = new Date()
     today.set(hourOfDay: 23, minute: 59, second: 59)
-    def intDays = (int) numFutureDaysDashboard
+    def numFutureDaysDashboardSetting = (numFutureDaysDashboard == null) ? numFutureDaysDashboardDefault : numFutureDaysDashboard
+    def intDays = (int) numFutureDaysDashboardSetting
     return today+intDays
 }
 
 
 def buildDashboard() {
+    
+    def numPastDaysDashboardSetting = (numPastDaysDashboard == null) ? numPastDaysDashboardDefault : numPastDaysDashboard
+    def numFutureDaysDashboardSetting = (numFutureDaysDashboard == null) ? numFutureDaysDashboardDefault : numFutureDaysDashboard
+    def showPrecipPercentSetting = (showPrecipPercent == null) ? showPrecipPercentDefault : showPrecipPercent
+    def showPrecipAmountSetting = (showPrecipAmount == null) ? showPrecipAmountDefault : showPrecipAmount
+    def showTempSetting = (showTemp == null) ? showTempDefault : showTemp
+    def colorSchemeSelectionSetting = (colorSchemeSelection == null) ? colorSchemeSelectionDefault : colorSchemeSelection
+    def fontWeightSetting = (fontWeight == null) ? fontWeightDefault : fontWeight
+    def globalScaleSetting = (globalScale == null) ? globalScaleDefault : globalScale
+    def extraVerticalSpaceSetting = (extraVerticalSpace == null) ? extraVerticalSpaceDefault : extraVerticalSpace
+    def extraHorizontalSpaceSetting = (extraHorizontalSpace == null) ? extraHorizontalSpaceDefault : extraHorizontalSpace
    
     def devId = params.controllerID
     def startDate = getDashboardStartDate()
@@ -1484,16 +1514,16 @@ def buildDashboard() {
     def pastEventsData = getDevicePastEvents(devId, startDate, endDate)
     def futureEventsData = getDeviceFutureEvents(devId, endDate).entries
     
-    colorScheme = getColorScheme(colorSchemeSelection)
+    colorScheme = getColorScheme(colorSchemeSelectionSetting)
     
-    Integer columnWidth = 64 + extraHorizontalSpace
-    Integer numDays = 1 + numPastDaysDashboard + numFutureDaysDashboard
+    Integer columnWidth = 64 + extraHorizontalSpaceSetting
+    Integer numDays = 1 + numPastDaysDashboardSetting + numFutureDaysDashboardSetting
     Integer svgWidth = columnWidth * numDays
     svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 105" style="enable-background:new 0 0 ' + Integer.toString(svgWidth) + ' 105;" xml:space="preserve">'
     
     svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropAccent{fill:' + colorScheme.rainDropAccentColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:none;stroke:' + colorScheme.skipStrikethroughColor + ';stroke-width:3;stroke-miterlimit:10;} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip0{fill:' + colorScheme.freezeSkip0Color + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:7px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style> <defs> <linearGradient id="bicolored"> <stop offset="50%" stop-color="' + colorScheme.highTempTextColor + '"/> <stop offset="50%" stop-color="' + colorScheme.lowTempTextColor + '"/> </linearGradient> </defs>'
     
-    svg += '<g transform="scale(' + Double.toString((globalScale-40)/100) + ')">'
+    svg += '<g transform="scale(' + Double.toString((globalScaleSetting-40)/100) + ')">'
     
     def today = new Date()
     today.set(hourOfDay: 0, minute: 0, second: 0)
@@ -1514,6 +1544,7 @@ def buildDashboard() {
         else { dayLabel = date.format('M/d') }
 
         def weather = weatherData?.find { it?.date == dateMap }
+        if (debugLogging) { log.debug "Weather is: ${weather}" }
         def precipPercent = (weather.precipProbability > 0) ? ((int) (weather.precipProbability * 100)).toString() + "%" : ""
         def precipAmount = (weather.calculatedPrecip > 0) ? weather.calculatedPrecip + "\"" : ""
         def highTemp = weather.temperatureMax
@@ -1521,7 +1552,7 @@ def buildDashboard() {
         def weatherIconText = weather.weatherType
         def weatherIcon = null
         
-        log.debug "Weather icon text for ${dayLabel} is ${weatherIconText}"
+        if (debugLogging) { log.debug "Weather icon text for ${dayLabel} is ${weatherIconText}" }
                             
         if (weatherIconText == 'CHANCE_FLURRIES') { weatherIcon = chanceflurries }
         else if (weatherIconText == 'CHANCE_RAIN') { weatherIcon = chancerain }
@@ -1544,7 +1575,9 @@ def buildDashboard() {
         else if (weatherIconText == 'PARTLY_SUNNY') { weatherIcon = partlysunny }
         
         def pastEvents = pastEventsData?.findAll { getDateMap(new Date(it?.eventDate)) == dateMap }
+        if (debugLogging) { log.debug "Past Events are: ${pastEvents}" }
         def futureEvents = futureEventsData?.findAll { getDateMap(getDateObjectFromUTCDt(it?.timestamp)) == dateMap }
+        if (debugLogging) { log.debug "Future Events are: ${futureEvents}" }
         def eventsList = []
         irrigationIcon = null
         if (!pastEvents.isEmpty()) {
@@ -1606,58 +1639,58 @@ def buildDashboard() {
         svg += '<g transform="translate(' + Integer.toString(columnWidth*i) + ', 10)">'
         svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="1.5" text-anchor="middle" class="dayText largeFontClass fontWeightClass">' + dayLabel + '</text>'
         
-        svg += '<g transform="translate(' + Double.toString(extraHorizontalSpace/2) + ', 0)">'
+        svg += '<g transform="translate(' + Double.toString(extraHorizontalSpaceSetting/2) + ', 0)">'
         svg += weatherIcon
         svg += '</g>'
         
-        if (showPrecipPercent && date.after(yesterday)) {  // only show % for dates that are on or after today
+        if (showPrecipPercentSetting && date.after(yesterday)) {  // only show % for dates that are on or after today
             popBaseY = 69
-            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((popBaseY+extraVerticalSpace)) + '" text-anchor="middle" class="precipText smallFontClass fontWeightClass">' + precipPercent + '</text>'
+            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((popBaseY+extraVerticalSpaceSetting)) + '" text-anchor="middle" class="precipText smallFontClass fontWeightClass">' + precipPercent + '</text>'
         }
-        if (showPrecipAmount) {
-            precipAmountBaseY = showPrecipPercent ? 79 : 69
-            precipAmountExtraVerticalSpacing = showPrecipPercent ? extraVerticalSpace*2 : extraVerticalSpace
+        if (showPrecipAmountSetting) {
+            precipAmountBaseY = showPrecipPercentSetting ? 79 : 69
+            precipAmountExtraVerticalSpacing = showPrecipPercentSetting ? extraVerticalSpaceSetting*2 : extraVerticalSpaceSetting
             svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((precipAmountBaseY + precipAmountExtraVerticalSpacing)) + '" text-anchor="middle" class="precipText smallFontClass fontWeightClass">' + precipAmount + '</text>'
         }
         
-        if (showTemp) {
+        if (showTempSetting) {
             tempBaseY = 72
-            tempExtraVerticalSpacing = extraVerticalSpace
-            if (showPrecipPercent && showPrecipAmount) {
+            tempExtraVerticalSpacing = extraVerticalSpaceSetting
+            if (showPrecipPercentSetting && showPrecipAmountSetting) {
                 tempBaseY = 91 
-                tempExtraVerticalSpacing = extraVerticalSpace*3
+                tempExtraVerticalSpacing = extraVerticalSpaceSetting*3
             }
-            else if (showPrecipPercent || showPrecipAmount) {
+            else if (showPrecipPercentSetting || showPrecipAmountSetting) {
                 tempBaseY = 82 
-                tempExtraVerticalSpacing = extraVerticalSpace*2
+                tempExtraVerticalSpacing = extraVerticalSpaceSetting*2
             }
             svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((tempBaseY+tempExtraVerticalSpacing)) + '" text-anchor="middle" class="tempText largeFontClass fontWeightClass">' + highTemp + ' | ' + lowTemp + '</text>'
         }
         
         irrigationBaseY = 65
         irrigationExtraVerticalSpacing = extraVerticalSpace
-        if (showPrecipPercent && showPrecipAmount && showTemp) {
+        if (showPrecipPercentSetting && showPrecipAmountSetting && showTempSetting) {
             irrigationBaseY = 100
-            irrigationExtraVerticalSpacing = extraVerticalSpace*4
+            irrigationExtraVerticalSpacing = extraVerticalSpaceSetting*4
         }
-        else if ((showPrecipPercent && showPrecipAmount)) {
+        else if ((showPrecipPercentSetting && showPrecipAmountSetting)) {
             irrigationBaseY = 86
-            irrigationExtraVerticalSpacing = extraVerticalSpace*3
+            irrigationExtraVerticalSpacing = extraVerticalSpaceSetting*3
         }
-        else if ((showPrecipPercent && showTemp) || (showPrecipAmount && showTemp)) {
+        else if ((showPrecipPercentSetting && showTempSetting) || (showPrecipAmountSetting && showTempSetting)) {
             irrigationBaseY = 91
-            irrigationExtraVerticalSpacing = extraVerticalSpace*3
+            irrigationExtraVerticalSpacing = extraVerticalSpaceSetting*3
         }
-        else if (showPrecipPercent || showPrecipAmount) {
+        else if (showPrecipPercentSetting || showPrecipAmountSetting) {
             irrigationBaseY = 76
-            irrigationExtraVerticalSpacing = extraVerticalSpace*2
+            irrigationExtraVerticalSpacing = extraVerticalSpaceSetting*2
         }
-        else if (showTemp) {
+        else if (showTempSetting) {
             irrigationBaseY = 80
-            irrigationExtraVerticalSpacing = extraVerticalSpace*2
+            irrigationExtraVerticalSpacing = extraVerticalSpaceSetting*2
         }
 
-        svg += '<g transform="translate(' + Double.toString((40 + extraHorizontalSpace)/2) + ',' + Long.toString(irrigationBaseY + irrigationExtraVerticalSpacing) + ') scale(.3,.3)">'
+        svg += '<g transform="translate(' + Double.toString((40 + extraHorizontalSpaceSetting)/2) + ',' + Long.toString(irrigationBaseY + irrigationExtraVerticalSpacing) + ') scale(.3,.3)">'
         svg += irrigationIcon
           
         svg += '</g>'
@@ -1693,7 +1726,7 @@ def getColorScheme(schemeSelection) {
     else if (schemeSelection == "Custom") {
         return [cloudColor: cloudColorCustom, lightColor: lightColorCustom, precipColor: precipColorCustom, rainDropWateringColor: rainDropWateringColorCustom, rainDropAccentColor: rainDropAccentColorCustom, rainDropSkipColor:rainDropSkipColorCustom, skipStrikethroughColor: skipStrikethroughColorCustom, saturatedSoilColor: saturatedSoilColorCustom, rainDropsPredictedColor: rainDropsPredictedColorCustom, freezeSkip0Color: freezeSkip0ColorCustom, freezeSkip1Color: freezeSkip1ColorCustom, windSkipColor: windSkipColorCustom, rainSensorSkipColor: rainSensorSkipColorCustom, strokeColor: strokeColorCustom, dayTextColor: dayTextColorCustom, precipTextColor: precipTextColorCustom, highTempTextColor: highTempTextColorCustom, lowTempTextColor: lowTempTextColorCustom]  
     }
-    log.debug("Error getting color scheme")
+    if (debugLogging) { log.debug("Error getting color scheme") }
     return
 }
 
