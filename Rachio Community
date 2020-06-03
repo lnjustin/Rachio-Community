@@ -940,7 +940,7 @@ void poll(child=null, type=null) {
     def zoneCnt = 0
     selectedDevices?.each { cont->
         def devData = getDeviceData(cont?.key)
-        //log.trace "devData is ${devData}"
+        log.debug "devData for device ID ${cont?.key} is ${devData}"
         def devDetails = getDeviceDetails(cont?.key)
         def devState = getDeviceState(cont?.key)
         def devZoneDetails = getZoneDetails(cont?.key)
