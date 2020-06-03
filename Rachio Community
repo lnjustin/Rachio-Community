@@ -434,7 +434,7 @@ def getHardwareInfo(val) {
         case "GENERATION3_16ZONE":
             return [model: "16ZoneV3", desc: "16-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_8ZONE_LITE":
-            return [model: "8ZoneV3Lite", desc: "8-Zone (Gen 3 Lite)", img: getAppImg("rachio_gen3_lite.PNG"), gen: "Gen3", jsonTag: "gen3LiteIrrigationController"]
+            return [model: "8ZoneV3Lite", desc: "8-Zone (Gen 3 Lite)", img: getAppImg("rachio_gen3_lite.PNG"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         
     }
     return [desc: null, model: null, img: "", gen: null]
