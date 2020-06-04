@@ -8,7 +8,7 @@ Rachio Community builds off of the native Rachio integration. On top of the nati
 * Next event data exposed. See information about your system's next event, e.g., scheduled run or skip.
 * Monthly watering summary exposed. See the same monthly watering summary as on the Home tab of the mobile app.
 
-![Rachio Community Dashboard](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/Dashboard.JPG)
+![Rachio Community Dashboard](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/Dashboard3.PNG)
 
 ## Icon Key:
 ![Watering](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/water.JPG) Watering
