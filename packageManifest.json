@@ -1,0 +1,33 @@
+{
+  "packageName": "Rachio Community Package",
+  "author": "Justin Leonard",
+  "version": "2.0",
+  "minimumHEVersion": "2.0",
+  "dateReleased": "2020-06-02",
+  "apps": [
+    {
+      "id": "2f59ef09-2381-48e8-81ea-e9eca85bbc3d",
+      "name": "Rachio Community",
+      "namespace": "lnjustin",
+      "location": "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Rachio%20Community",
+      "required": true,
+      "oauth": true
+    }
+  ],
+  "drivers": [
+    {
+      "id": "3872fa21-36f4-4b1b-9d7f-d923627adbdc",
+      "name": "Rachio Controller",
+      "namespace": "lnjustin",
+      "location": "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Rachio%20Controller",
+      "required": true
+    },
+    {
+      "id": "7aeefe85-7418-4a95-b16b-e2099904d248",
+      "name": "Rachio Zone",
+      "namespace": "lnjustin",
+      "location": "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Rachio%20Zone",
+      "required": true
+    }
+  ]
+}
