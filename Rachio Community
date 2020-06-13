@@ -24,6 +24,7 @@
  * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
  * V2.0:    Ported to Hubitat; Added dashboard and exposed additional information in controller/zone, including next run, last run, rain sensor state, next upcoming event, weather intelligence information, and monthly watering summary (05-31-2020)    
  * V2.0.1:  Added external target for account setup link
+ * V2.0.2:  Fixed issue with removal of webhook subscriptions upon app uninstall
  */
 
 import groovy.json.*
@@ -59,7 +60,7 @@ mappings {
     path("/rachioDashboard/:controllerID") { action: [ GET: "buildDashboard"] }
 }
 
-String appVer() { return "2.0" }
+String appVer() { return "2.0.2" }
 
 def appInfoSect()	{
     section() {
@@ -291,7 +292,7 @@ void settingRemove(name) {
 
 void appCleanup() {
   //  log.trace "appCleanup()"
-    def stateItems = ["deviceId", "selectedDevice", "selectedZones", "inStandbyMode", "webhookId", "isWateringMap", "inStandbyModeMap"]
+    def stateItems = ["deviceId", "selectedDevice", "selectedZones", "inStandbyMode", "isWateringMap", "inStandbyModeMap"]
     def setItems = ["sprinklers", "selectedZones"]
     stateItems?.each { if(state?.containsKey(it as String)) {state.remove(it)} }
     setItems?.each { if(settings?.containsKey(it as String)) {settingRemove(it)} }
@@ -521,7 +522,7 @@ void initStep3() {
 }
 
 def uninstalled() {
-  //  log.trace "uninstalled() called... removing smartapp and devices"
+    log.debug "uninstalled() called... removing app and devices"
     unschedule()
     //Remove any existing webhooks before uninstall...
     removeAllWebhooks()
@@ -565,15 +566,15 @@ void initWebhooks() {
 def initWebhook(controlId) {
     //log.trace "initWebhook..."
     def result = false
-    def whId = atomicState?.webhookIds ?: [:]
-    def cmdType = whId[controlId] == null ? "post" : "put"
+    def webhookIds = getWebhookIdsForDev(controlId)
+    def cmdType = webhookIds == null ? "post" : "put"
     def apiWebhookUrl = "${rootApiUrl()}/notification/webhook"
     def endpointUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/rachioReceiver?access_token=${atomicState?.accessToken}"
     def bodyData
-    if(!whId[controlId]) { 
-        bodyData = new JsonOutput().toJson([device:[id: controlId], externalId: app.id, url: endpointUrl, eventTypes: webhookEvtTypes()])
+    if(!webhookIds) { 
+        bodyData = new JsonOutput().toJson([device:[id: controlId], externalId: app.name, url: endpointUrl, eventTypes: webhookEvtTypes()])
     } else { 
-        bodyData = new JsonOutput().toJson([id: whId[controlId], externalId: app.id, url: endpointUrl, eventTypes: webhookEvtTypes()])
+        bodyData = new JsonOutput().toJson([id: webhookIds, externalId: app.name, url: endpointUrl, eventTypes: webhookEvtTypes()])
     }
     try {
         if(webhookHttp(apiWebhookUrl, bodyData, cmdType, controlId)) {
@@ -586,33 +587,34 @@ def initWebhook(controlId) {
     return result
 }
 
-//This isn't used for anything other than to return the webhooks for the device
 def getWebhookIdsForDev(devId) {
     if(!devId) { return null }
     def data = _httpGet("notification/${devId}/webhook")
     def res = null
-    if(data) { res = data?.findAll { it?.externalId == app?.id }?.collect { it?.id } }
+    if(data) { res = data?.findAll { it?.externalId == app?.name }?.collect { it?.id } }
+    if (debugLogging) { log.debug "Get webhookIdsForDevice received data: ${data}. Webhook IDs for Device ${devId} include: ${res}" }
     return res
 }
 
 void removeWebhookByDevId(devId) {
-    def webhookIds = atomicState?.webhookIds
-    if(webhookIds && webhookIds[devId] != null) {
-        if(webhookHttp("${rootApiUrl()}/notification/webhook/${webhookIds[devId]}", "", "delete")) {
-            log.warn "Removed API Webhook Subscription for (${webhookIds[devId]})"
+    def webhookIds = getWebhookIdsForDev(devId)
+    for (webhookId in webhookIds) {
+        if(webhookHttp("${rootApiUrl()}/notification/webhook/${webhookId}", "", "delete", devId)) {
+            log.warn "Removed API Webhook Subscription for (${webhookId})"
+        }
+        else {
+            log.error "Failed to remove API Webhook Subscription for (${webhookId})"
         }
     }
 }
 
 //Removes the webhook subscription for the device.
 void removeAllWebhooks() {
-    def webhookIds = atomicState?.webhookIds
-    if(settings?.controllers && webhookIds) {
+    if (debugLogging) { log.debug "removeAllWebhooks called." }
+    if(settings?.controllers) {
         settings?.controllers?.each { c->
             if(c) {
-                if(webhookHttp("${rootApiUrl()}/notification/webhook/${webhookIds[c]}", "", "delete")) {
-                    log.warn "Removed API Webhook Subscription for (${webhookIds[c]})"
-                }
+                removeWebhookByDevId(c)
             }
         }
     }
@@ -632,7 +634,7 @@ def webhookEvtTypes() {
 
 //Handles the http requests for the webhook methods
 def webhookHttp(url, jsonBody, type=null, ctrlId) {
-    //log.trace "webhookHttp($url, $jsonBody, $type)"
+    if (debugLogging) { log.debug "webhookHttp($url, $jsonBody, $type, $ctrlId)" }
     def returnStatus = false
     def response = null
     def cmdParams = [
@@ -641,6 +643,7 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
         headers: ["Authorization": "Bearer ${atomicState?.authToken}", "Content-Type": "application/json"],
         body: jsonBody
     ]
+    
     try {
         if(type == "post") {
             httpPost(cmdParams) { resp ->
@@ -658,18 +661,9 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
             }
         }
         if(response) {
-            if (debugLogging) { log.debug "response.status: ${response?.status} | data: ${response?.data}" }
+            if (debugLogging) { log.debug "webhook http response status: ${response?.status} | data: ${response?.data}" }
             if(response?.status in [200, 201, 204]) {
                 returnStatus = true
-                if(type in ["put", "post"]) {
-                    def whIds = atomicState?.webhookIds ?: [:]
-                    whIds[ctrlId] = response?.data?.id
-                    atomicState?.webhookIds = whIds
-                } else if(type == "delete") {
-                    def whIds = atomicState?.webhookIds ?: [:]
-                    whIds?.remove(ctrlId)
-                    atomicState?.webhookIds = whIds
-                }
             } else {
                 //refresh the auth token
                 if (response?.status == 401) {
@@ -679,9 +673,12 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
                     log.error "Authentication error, invalid authentication method, lack of credentials, etc."
                 }
             }
-        } else { return returnStatus }
+        } else { 
+            log.error "Return Status in webhook Http: ${returnStatus}"
+            return returnStatus 
+        }
     } catch(Exception e) {
-        log.error "webhookHttp Exception Error: ", e
+        log.error "webhookHttp Exception Error: ${e}"
     }
     return returnStatus
 }
@@ -826,8 +823,7 @@ def getLocationId(devId, detailsData) {
 
 def cleanupObjects(id){
     if(settings?."${id}_zones") { settingRemove("${id}_zones") }
-    def whIds = atomicState?.webhookIds
-    if(whIds && whIds[id]) { removeWebhookByDevId(id) }
+    removeWebhookByDevId(id)
 }
 
 def isWatering() {
@@ -941,6 +937,7 @@ def rachioReceiveHandler() {
     }
 }
 
+
 //Section4: polling device info methods
 void poll(child=null, type=null) {
     def lastPollSec = getTimeSinceInSeconds(atomicState?.lastPollDt)
@@ -1009,6 +1006,9 @@ def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMon
                 if(dni == contDev?.key) {
                     updateStandbyItem(dni, inStandby)
                     // log.debug "schedRunning: ${schedRunning} | isWatering: ${isWatering()}"
+                    
+                    def controllerWebhookIDs = getWebhookIdsForDev(contDev?.key)
+                    log.debug "Webhook IDs for controller ${contDev?.key} include: ${controllerWebhookIDs}"
                     if (isWatering() && !schedRunning) {
                         handleWateringSched(dni, false)
                     }
