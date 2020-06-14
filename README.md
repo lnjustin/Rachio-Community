@@ -41,7 +41,13 @@ Note that Rachio Community relies on an undocumented API to extend the native Ra
 **Supported Controllers**
 Rachio controllers 1, 2, 3, and 3e are supported.
 
-**Install Instructions**
+
+**Hubitat Package Manager Install Instructions**
+1. Uninstall the Rachio native app
+2. Install Rachio Community Package via Hubitat Package Manager
+6. Follow the install instructions in the Rachio Community app
+
+**Manual Install Instructions**
 1. Uninstall the Rachio native app
 2. Install the Rachio Zone driver
 3. Install the Rachio Controller driver
