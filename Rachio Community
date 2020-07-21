@@ -26,6 +26,7 @@
  * V2.0.1:  Added external target for account setup link
  * V2.0.2:  Fixed issue with removal of webhook subscriptions upon app uninstall
  * V2.0.3:  Fixed issue with dashboard sizing; Added dashboard attribute to controller
+ * V2.0.4:  Increased font size on dashboard for precipitation info
  */
 
 import groovy.json.*
@@ -1554,9 +1555,9 @@ def buildDashboard() {
     Integer numDays = 1 + numPastDaysDashboardSetting + numFutureDaysDashboardSetting
     Integer svgWidth = columnWidth * numDays
     log.debug("Column Width = ${columnWidth}. numDays = ${numDays}. svgWidth = ${svgWidth}")
-    svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="100%" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 135"  xml:space="preserve">'
+    svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="100%" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 140"  xml:space="preserve">'
     
-    svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropAccent{fill:' + colorScheme.rainDropAccentColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:none;stroke:' + colorScheme.skipStrikethroughColor + ';stroke-width:3;stroke-miterlimit:10;} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip0{fill:' + colorScheme.freezeSkip0Color + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:7px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style> <defs> <linearGradient id="bicolored"> <stop offset="50%" stop-color="' + colorScheme.highTempTextColor + '"/> <stop offset="50%" stop-color="' + colorScheme.lowTempTextColor + '"/> </linearGradient> </defs>'
+    svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropAccent{fill:' + colorScheme.rainDropAccentColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:none;stroke:' + colorScheme.skipStrikethroughColor + ';stroke-width:3;stroke-miterlimit:10;} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip0{fill:' + colorScheme.freezeSkip0Color + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:10px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style> <defs> <linearGradient id="bicolored"> <stop offset="50%" stop-color="' + colorScheme.highTempTextColor + '"/> <stop offset="50%" stop-color="' + colorScheme.lowTempTextColor + '"/> </linearGradient> </defs>'
     
 //    svg += '<g transform="scale(' + Double.toString((globalScaleSetting-40)/100) + ')">'
      svg += '<g>'
@@ -1680,31 +1681,31 @@ def buildDashboard() {
         svg += '</g>'
         
         if (showPrecipPercentSetting && date.after(yesterday)) {  // only show % for dates that are on or after today
-            popBaseY = 69
+            popBaseY = 71
             svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((popBaseY+extraVerticalSpaceSetting)) + '" text-anchor="middle" class="precipText smallFontClass fontWeightClass">' + precipPercent + '</text>'
         }
         if (showPrecipAmountSetting) {
-            precipAmountBaseY = showPrecipPercentSetting ? 79 : 69
+            precipAmountBaseY = showPrecipPercentSetting ? 81 : 71
             precipAmountExtraVerticalSpacing = showPrecipPercentSetting ? extraVerticalSpaceSetting*2 : extraVerticalSpaceSetting
             svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((precipAmountBaseY + precipAmountExtraVerticalSpacing)) + '" text-anchor="middle" class="precipText smallFontClass fontWeightClass">' + precipAmount + '</text>'
         }
         
         if (showTempSetting) {
-            tempBaseY = 72
+            tempBaseY = 74
             tempExtraVerticalSpacing = extraVerticalSpaceSetting
             if (showPrecipPercentSetting && showPrecipAmountSetting) {
-                tempBaseY = 91 
+                tempBaseY = 93 
                 tempExtraVerticalSpacing = extraVerticalSpaceSetting*3
             }
             else if (showPrecipPercentSetting || showPrecipAmountSetting) {
-                tempBaseY = 82 
+                tempBaseY = 84 
                 tempExtraVerticalSpacing = extraVerticalSpaceSetting*2
             }
             svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((tempBaseY+tempExtraVerticalSpacing)) + '" text-anchor="middle" class="tempText largeFontClass fontWeightClass">' + highTemp + ' | ' + lowTemp + '</text>'
         }
         
         irrigationBaseY = 65
-        irrigationExtraVerticalSpacing = extraVerticalSpace
+        irrigationExtraVerticalSpacing = extraVerticalSpaceSetting
         if (showPrecipPercentSetting && showPrecipAmountSetting && showTempSetting) {
             irrigationBaseY = 100
             irrigationExtraVerticalSpacing = extraVerticalSpaceSetting*4
