@@ -19,6 +19,7 @@
  * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
  * V2.0:    Ported to Hubitat; Added dashboard and exposed additional information in controller/zone, including next run, last run, rain sensor state, next upcoming event, weather intelligence information, and monthly watering summary (05-31-2020) 
  * V2.0.3:  Fixed issue with dashboard sizing; Added dashboard attribute to controller
+ * V2.0.6:    Fixed issue with default zone run time
  */
 
 import java.text.SimpleDateFormat
@@ -245,7 +246,7 @@ def generateEvent(Map results) {
                 markStandby()
             } else { isWateringEvent(results?.schedData?.status, results?.schedData?.zoneId) }
         }
-        if(!device?.currentState("curZoneWaterTime")?.value) { setZoneWaterTime(parent?.settings?.defaultZoneTime) }
+        if(!device?.currentState("curZoneWaterTime")?.value) { setZoneWaterTime(parent?.getZoneRunTimeDefaultSetting()) }
         scheduleDataEvent(results?.schedData, results?.data.zones, results?.rainDelay)
         rainDelayValEvent(results?.rainDelay)
         stateDataEvent(results?.stateData)
@@ -424,7 +425,7 @@ def rainDelayValEvent(val) {
 
 def setZoneWaterTime(timeVal) {
     def curState = device?.currentState("curZoneWaterTime")?.value.toString()
-    def newVal = timeVal ? timeVal.toInteger() : parent?.settings?.defaultZoneTime
+    def newVal = timeVal ? timeVal.toInteger() : parent?.getZoneRunTimeDefaultSetting()
     if(isStateChange(device, "curZoneWaterTime", newVal.toString())) {
        // log.debug("UPDATED: Manual Zone Water Time (${newVal}) | Previous: (${curState})")
         sendEvent(name: 'curZoneWaterTime', value: newVal, displayed: true)
