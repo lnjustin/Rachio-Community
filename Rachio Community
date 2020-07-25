@@ -28,11 +28,13 @@
  * V2.0.3:  Fixed issue with dashboard sizing; Added dashboard attribute to controller
  * V2.0.4:  Increased font size on dashboard for precipitation info
  * V2.0.5:  Fixed issue with web browser caching dashboard image in dashboard attribute of controller
+ ^ V2.0.6:    Fixed issue with default zone run time
  */
 
 import groovy.json.*
 import java.text.SimpleDateFormat
 import groovy.json.JsonBuilder
+import groovy.transform.Field
 
 definition(
     name: "Rachio Community",
@@ -63,7 +65,13 @@ mappings {
     path("/rachioDashboard/:controllerID") { action: [ GET: "buildDashboard"] }
 }
 
-String appVer() { return "2.0.5" }
+String appVer() { return "2.0.6" }
+
+@Field Integer zoneRunTimeDefault = 10
+
+def getZoneRunTimeDefaultSetting() {
+    return (defaultZoneTime) ? defaultZoneTime : zoneRunTimeDefault
+}
 
 def appInfoSect()	{
     section() {
