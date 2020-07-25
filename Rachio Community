@@ -28,7 +28,7 @@
  * V2.0.3:  Fixed issue with dashboard sizing; Added dashboard attribute to controller
  * V2.0.4:  Increased font size on dashboard for precipitation info
  * V2.0.5:  Fixed issue with web browser caching dashboard image in dashboard attribute of controller
- ^ V2.0.6:    Fixed issue with default zone run time
+ * V2.0.6:    Fixed issue with default zone run time
  */
 
 import groovy.json.*
