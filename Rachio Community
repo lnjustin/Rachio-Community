@@ -29,6 +29,7 @@
  * V2.0.4:  Increased font size on dashboard for precipitation info
  * V2.0.5:  Fixed issue with web browser caching dashboard image in dashboard attribute of controller
  * V2.0.6:    Fixed issue with default zone run time
+ * V2.0.7:    Fixed issue with logging and with getCurrentRainDelay method
  */
 
 import groovy.json.*
@@ -65,7 +66,7 @@ mappings {
     path("/rachioDashboard/:controllerID") { action: [ GET: "buildDashboard"] }
 }
 
-String appVer() { return "2.0.6" }
+String appVer() { return "2.0.7" }
 
 @Field Integer zoneRunTimeDefault = 10
 
@@ -152,13 +153,13 @@ def removeSect() {
 def devicePage() {
     //log.trace "devicePage()..."
     if(!atomicState?.authToken) {
-        log.debug "No accesstoken"
+        if (debugLogging) { log.debug "No accesstoken" }
         return
     }
     // Step 1: get (list) of available devices associated with the login account.
     def devData = getRachioDeviceData()
     def devices = getDeviceInputEnum(devData)
-    log.debug "rachioDeviceList(): ${devices}"
+    if (debugLogging) { log.debug "rachioDeviceList(): ${devices}" }
 
     //step2: render the page for user to select which device
     return dynamicPage(name: "devicePage", title: "${(atomicState?.authToken && atomicState?.selectedDevices) ? "Select" : "Manage"} Your Devices", install: true, uninstall: true) {
@@ -537,7 +538,7 @@ void initStep3() {
 }
 
 def uninstalled() {
-    log.debug "uninstalled() called... removing app and devices"
+    if (debugLogging) { log.debug "uninstalled() called... removing app and devices" }
     unschedule()
     //Remove any existing webhooks before uninstall...
     removeAllWebhooks()
@@ -693,7 +694,7 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
             return returnStatus 
         }
     } catch(Exception e) {
-        log.error "webhookHttp Exception Error: ${e}"
+        log.error "webhookHttp Exception Error: ${e.message}"
     }
     return returnStatus
 }
@@ -1029,7 +1030,7 @@ def pollChild(child, devData, devDetails, devState, devZoneDetails, devMonthlyWa
 }
 
 def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent) {
-    //log.trace "updating child device (${child?.label})" // | ${child?.device?.deviceNetworkId})"
+    if (debugLogging) { log.debug "updating child device ${childDev} with device data ${devData}" }
     try {
         if(childDev && devData) {
             String dni = childDev?.device?.deviceNetworkId
@@ -1053,7 +1054,7 @@ def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMon
                     // log.debug "schedRunning: ${schedRunning} | isWatering: ${isWatering()}"
                     
                     def controllerWebhookIDs = getWebhookIdsForDev(contDev?.key)
-                    log.debug "Webhook IDs for controller ${contDev?.key} include: ${controllerWebhookIDs}"
+                    if (debugLogging) { log.debug "Webhook IDs for controller ${contDev?.key} include: ${controllerWebhookIDs}" }
                     if (isWatering() && !schedRunning) {
                         handleWateringSched(dni, false)
                     }
@@ -1084,9 +1085,9 @@ def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMon
                 childDev?.sendEvent(name: "DeviceWatch-DeviceStatus", value: onlStatus, displayed: false)
             }
         } else { log.warn "pollChildren cannot update children because it is missing the required parameters..." }
-    } catch(Exception ex) {
-        log.error "exception polling children:", ex
-        //refreshAuthToken()
+        
+    } catch (e) {
+        log.error "exception polling children: ${e}"
     }
     return result
 }
@@ -1427,9 +1428,9 @@ def getControlLblById(id) {
 }
 
 def getCurrentRainDelay(res) {
-    //log.debug("getCurrentRainDelay($devId)...")
+    if (debugLogging) { log.debug "getCurrentRainDelay with input ${res}" }
     // convert to configured rain delay to days.
-    def ret =  (res?.rainDelayExpirationDate || res?.rainDelayStartDate) ? (res?.rainDelayExpirationDate - res?.rainDelayStartDate)/(26*60*60*1000) : 0
+    def ret =  (res?.rainDelayExpirationDate && res?.rainDelayStartDate) ? (res?.rainDelayExpirationDate - res?.rainDelayStartDate)/(26*60*60*1000) : 0
     def value = (long) Math.floor(ret + 0.5d)
     return value
 }
@@ -1566,7 +1567,7 @@ def buildDashboard() {
     Integer columnWidth = 64 + extraHorizontalSpaceSetting
     Integer numDays = 1 + numPastDaysDashboardSetting + numFutureDaysDashboardSetting
     Integer svgWidth = columnWidth * numDays
-    log.debug("Column Width = ${columnWidth}. numDays = ${numDays}. svgWidth = ${svgWidth}")
+    if (debugLogging) { log.debug("Column Width = ${columnWidth}. numDays = ${numDays}. svgWidth = ${svgWidth}") }
     svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="100%" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 140"  xml:space="preserve">'
     
     svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropAccent{fill:' + colorScheme.rainDropAccentColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:none;stroke:' + colorScheme.skipStrikethroughColor + ';stroke-width:3;stroke-miterlimit:10;} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip0{fill:' + colorScheme.freezeSkip0Color + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:10px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style> <defs> <linearGradient id="bicolored"> <stop offset="50%" stop-color="' + colorScheme.highTempTextColor + '"/> <stop offset="50%" stop-color="' + colorScheme.lowTempTextColor + '"/> </linearGradient> </defs>'
