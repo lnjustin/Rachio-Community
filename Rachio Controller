@@ -435,8 +435,10 @@ def setZoneWaterTime(timeVal) {
 def stateDataEvent(stateData) {
     //state?.stateData = stateData
     sendEvent(name:'rainSensorTripped', value: stateData.state?.rainSensorTripped)
+    if (parent?.debugLogging) {  log.debug("Last Run is: ${stateData.state?.lastRun}") }
     sendEvent(name:'lastRunStr', value: formatUtcDt(stateData.state?.lastRun))
     sendEvent(name:'lastRun', value: getUnixDtFromUTCDt(stateData.state?.lastRun))
+    if (parent?.debugLogging) {  log.debug("Next Run is: ${stateData.state?.nextRun}") }
     sendEvent(name:'nextRunStr', value: formatUtcDt(stateData.state?.nextRun))
     sendEvent(name:'nextRun', value: getUnixDtFromUTCDt(stateData.state?.nextRun))
 }
@@ -449,6 +451,7 @@ def wateringSummaryDataEvent(wateringSummaryData) {
 
 def nextEventDataEvent(nextEventData) {
     sendEvent(name: 'nextEvent', value: nextEventData?.entry?.summary)
+    if (parent?.debugLogging) {  log.debug("Next Event Time is: ${nextEventData?.entry?.timestamp}") }
     sendEvent(name: 'nextEventTime', value: formatUtcDt(nextEventData?.entry?.timestamp))
     sendEvent(name: 'nextEventType', value: nextEventData?.entry?.type)
     sendEvent(name: 'nextEventWeatherIntelligence', value: nextEventData?.entry?.weatherIntelligenceInfo)
@@ -607,7 +610,7 @@ def isCmdOk2Run() {
 }
 
 def runAllZones() {
-    log.trace "runAllZones..."
+   // log.trace "runAllZones..."
     if(!isCmdOk2Run()) { return }
     def waterTime = device?.latestValue('curZoneWaterTime')
     if (parent?.debugLogging) { log.debug("Sending Run All Zones for (${waterTime} Minutes)") }
@@ -642,7 +645,7 @@ def pauseScheduleRun() {
 }
 
 def standbyOn() {
-    log.trace "standbyOn..."
+  //  log.trace "standbyOn..."
     def inStandby = device?.currentState("standbyMode")?.value.toString() == "on" ? true : false
     if(device?.currentState("watering")?.value == "offline") {
         log.info "Device is currently Offline... Ignoring..."
@@ -654,7 +657,7 @@ def standbyOn() {
 }
 
 def standbyOff() {
-    log.trace "standbyOff..."
+ //   log.trace "standbyOff..."
     def inStandby = device?.currentState("standbyMode")?.value.toString() == "on" ? true : false
     if(device?.currentState("watering")?.value == "offline") {
         log.info "Device is currently Offline... Ignoring..."
@@ -666,7 +669,7 @@ def standbyOff() {
 }
 
 def on() {
-    log.trace "on..."
+  //  log.trace "on..."
     if(!isCmdOk2Run()) { return }
     def isOn = device?.currentState("switch")?.value.toString() == "on" ? true : false
     if (!isOn) { open() }
@@ -674,7 +677,7 @@ def on() {
 }
 
 def off() {
-    log.trace "off..."
+  //  log.trace "off..."
     //if(!isCmdOk2Run()) { return }
     def isOff = device?.currentState("switch")?.value.toString() == "off" ? true : false
     if (!isOff) { close() }
@@ -682,12 +685,12 @@ def off() {
 }
 
 def open() {
-    log.trace "open()..."
+ //   log.trace "open()..."
     log.info "open command is not currently supported by the controller device..."
 }
 
 def close() {
-    log.trace "close()..."
+  //  log.trace "close()..."
     //if(!isCmdOk2Run()) { return }
     def isClosed = device?.currentState("valve")?.value.toString() == "closed" ? true : false
     if (!isClosed) {
@@ -706,7 +709,7 @@ def close() {
 
 // To be used directly by smart apps
 def stopWatering() {
-    log.trace "stopWatering"
+ //   log.trace "stopWatering"
     close()
 }
 
@@ -747,7 +750,13 @@ def formatUtcDt(utcDt, mdy = true) {
 	def outFormat = new SimpleDateFormat(formatVal)
     if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
     
-	return outFormat.format(inFormat.parse(utcDt))
+    if (parent?.debugLogging) {  log.debug("Formatting utcDt of ${utcDt}") }
+    
+    def ret = null
+    if (utcDt != null) {
+        ret = outFormat.format(inFormat.parse(utcDt))
+    }
+	return ret
 }
 
 def formatUtcDtNoTime(utcDt) {
