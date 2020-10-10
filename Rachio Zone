@@ -83,6 +83,9 @@ metadata {
         attribute "lastUpdatedDt", "string"
         attribute "notificationMessage", "string"
 
+        attribute "zoneRunStatus", "string"
+        attribute "isCycling", "string"
+
         command "stopWatering"
         command "decZoneWaterTime"
         command "incZoneWaterTime"
@@ -473,7 +476,7 @@ def scheduleDataEvent(data) {
     def zoneCycleCount = (zoneId != device?.deviceNetworkId && !data?.totalCycleCount) ? 0 : data?.totalCycleCount
     def isCycling =  (zoneId == device?.deviceNetworkId && data?.cycling) ? true : false
     def wateringVal = device?.currentState("watering")?.value
-    if(isStateChange(device, "scheduleType", curSchedType?.toString().toLowerCase())) {
+    if(isStateChange(device, "scheduleType", curSchedType?.toString().toLowerCase()?.capitalize())) {
         sendEvent(name: 'scheduleType', value: curSchedType?.toString().toLowerCase()?.capitalize(), displayed: true, isStateChange: true)
     }
     if(isStateChange(device, "zoneDuration", zoneDuration.toString())) {
