@@ -887,7 +887,7 @@ def setDashboard(deviceId) {
     dashboard += '</table>'
 
     d = getChildDevice(deviceId)
-    d.sendEvent(name: 'dashboard', value: dashboard, displayed: true, isStateChange: true)   
+    d.sendEvent(name: 'dashboard', value: dashboard, displayed: true)   
 }
 
 def addRemoveDevices(uninst=false) {

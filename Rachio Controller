@@ -239,7 +239,7 @@ def generateEvent(Map results) {
             markOffLine()
         } else {
             state?.inStandby = results?.standby
-            if(isStateChange(device, "standbyMode", results?.standby.toString())) {
+            if(isStateChange(device, "standbyMode", (results?.standby?.toString() == "true" ? "on": "off"))) {
                 sendEvent(name: 'standbyMode', value: (results?.standby?.toString() == "true" ? "on": "off"), displayed: true, isStateChange: true)
             }
             if(results?.standby == true && results?.pauseInStandby == true) {
