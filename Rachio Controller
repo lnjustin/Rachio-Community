@@ -19,12 +19,13 @@
  * V1.1.1:  Modified by Rachio/Anthony Santilli (07-11-2018)
  * V2.0:    Ported to Hubitat; Added dashboard and exposed additional information in controller/zone, including next run, last run, rain sensor state, next upcoming event, weather intelligence information, and monthly watering summary (05-31-2020) 
  * V2.0.3:  Fixed issue with dashboard sizing; Added dashboard attribute to controller
- * V2.0.6:    Fixed issue with default zone run time
+ * V2.0.6:  Fixed issue with default zone run time
+ * V2.0.7:  Fixed null pointer errors caused by null nextRun if nothing scheduled
  */
 
 import java.text.SimpleDateFormat
 
-String devVer() { return "2.0" }
+String devVer() { return "2.0.7" }
 Integer statusRefresh() { return 60 }
 
 metadata {
@@ -436,11 +437,11 @@ def stateDataEvent(stateData) {
     //state?.stateData = stateData
     sendEvent(name:'rainSensorTripped', value: stateData.state?.rainSensorTripped)
     if (parent?.debugLogging) {  log.debug("Last Run is: ${stateData.state?.lastRun}") }
-    sendEvent(name:'lastRunStr', value: formatUtcDt(stateData.state?.lastRun))
-    sendEvent(name:'lastRun', value: getUnixDtFromUTCDt(stateData.state?.lastRun))
+    if (stateData.state?.lastRun) sendEvent(name:'lastRunStr', value: formatUtcDt(stateData.state?.lastRun))
+    if (stateData.state?.lastRun) sendEvent(name:'lastRun', value: getUnixDtFromUTCDt(stateData.state?.lastRun))
     if (parent?.debugLogging) {  log.debug("Next Run is: ${stateData.state?.nextRun}") }
-    sendEvent(name:'nextRunStr', value: formatUtcDt(stateData.state?.nextRun))
-    sendEvent(name:'nextRun', value: getUnixDtFromUTCDt(stateData.state?.nextRun))
+    if (stateData.state?.nextRun) sendEvent(name:'nextRunStr', value: formatUtcDt(stateData.state?.nextRun))
+    if (stateData.state?.nextRun) sendEvent(name:'nextRun', value: getUnixDtFromUTCDt(stateData.state?.nextRun))
 }
 
 def wateringSummaryDataEvent(wateringSummaryData) {
@@ -452,7 +453,7 @@ def wateringSummaryDataEvent(wateringSummaryData) {
 def nextEventDataEvent(nextEventData) {
     sendEvent(name: 'nextEvent', value: nextEventData?.entry?.summary)
     if (parent?.debugLogging) {  log.debug("Next Event Time is: ${nextEventData?.entry?.timestamp}") }
-    sendEvent(name: 'nextEventTime', value: formatUtcDt(nextEventData?.entry?.timestamp))
+    if (nextEventData?.entry?.timestamp) sendEvent(name: 'nextEventTime', value: formatUtcDt(nextEventData?.entry?.timestamp))
     sendEvent(name: 'nextEventType', value: nextEventData?.entry?.type)
     sendEvent(name: 'nextEventWeatherIntelligence', value: nextEventData?.entry?.weatherIntelligenceInfo)
     sendEvent(name: 'nextEventThresholdInfo', value: nextEventData?.entry?.thresholdInfo)
