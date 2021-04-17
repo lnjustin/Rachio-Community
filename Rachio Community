@@ -9,6 +9,7 @@
  *
  * Many thanks to Tom Walling (@tomw) for high-level consultation on architecture and functionality for enhancing the native Rachio app/drivers.
  * Thanks also to Josh Lyon (@josh) for proof of concept for generating an SVG for output at an Oath endpoint
+ * Thanks to Rob (@Equis) in the Hubitat Community for icon design
  *
  * Attribution: Filled icons: Rain drop icon, icicle icon, and rain sensor icon made by Freepik from www.flaticon.com, Weather icons originally designed by Ashley Jager and modified by Justin Leonard
  * 
@@ -32,7 +33,7 @@
  * V2.0.5:  Fixed issue with web browser caching dashboard image in dashboard attribute of controller
  * V2.0.6:    Fixed issue with default zone run time
  * V2.0.7:    Fixed issue with logging and with getCurrentRainDelay method
- * V2.0.8:  Added new icon pack
+ * V2.0.8: Added icon pack; Fixed Internal Server Error from Webhooks
  */
 
 import groovy.json.*
@@ -587,14 +588,14 @@ def initWebhook(controlId) {
     //log.trace "initWebhook..."
     def result = false
     def webhookIds = getWebhookIdsForDev(controlId)
-    def cmdType = webhookIds == null ? "post" : "put"
+    def cmdType = webhookIds == null ? "put" : "put"
     def apiWebhookUrl = "${rootApiUrl()}/notification/webhook"
     def endpointUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/rachioReceiver?access_token=${atomicState?.accessToken}"
     def bodyData
     if(!webhookIds) { 
         bodyData = new JsonOutput().toJson([device:[id: controlId], externalId: app.name, url: endpointUrl, eventTypes: webhookEvtTypes()])
     } else { 
-        bodyData = new JsonOutput().toJson([id: webhookIds, externalId: app.name, url: endpointUrl, eventTypes: webhookEvtTypes()])
+        bodyData = new JsonOutput().toJson([id: webhookIds[0], externalId: app.name, url: endpointUrl, eventTypes: webhookEvtTypes()])
     }
     try {
         if(webhookHttp(apiWebhookUrl, bodyData, cmdType, controlId)) {
