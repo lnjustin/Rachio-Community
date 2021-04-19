@@ -1588,6 +1588,8 @@ def buildDashboard() {
     def sevenDaysLater = today.copyWith(hourOfDay: 23, minute: 59, second: 59)
     sevenDaysLater += 6
     
+    def iconPack = getIconPreference()
+    
     def i = 0
     for (date in startDate..endDate) {
         
@@ -1625,7 +1627,7 @@ def buildDashboard() {
         svg += '<g transform="translate(' + Integer.toString(columnWidth*i) + ', 10)">'
         svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="1.5" text-anchor="middle" class="dayText largeFontClass fontWeightClass">' + dayLabel + '</text>'
         
-        svg += '<g transform="translate(' + Double.toString(extraHorizontalSpaceSetting/2) + ', 0)">'
+        svg += '<g transform="translate(' + Double.toString(extraHorizontalSpaceSetting/2) + ', ' + (iconPack == "Outline" ? '3' : '0') + ')">'
         svg += weatherIcon
         svg += '</g>'
         
@@ -1947,4 +1949,3 @@ genericSkip2 = '<g transform="scale(.8)"><path class="rainDropSkip" d="m 14.9843
 
     
     
-
