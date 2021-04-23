@@ -1638,7 +1638,7 @@ def buildDashboard() {
         Integer halfColumnWidth = columnWidth / 2
         columnCenter = Integer.toString(halfColumnWidth*(i+1))
         
-        svg += '<g transform="translate(' + Integer.toString(columnWidth*i) + ', 0)">'
+        svg += '<g transform="translate(' + Integer.toString(columnWidth*i) + ', 10)">'
         svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="1.5" text-anchor="middle" class="dayText largeFontClass fontWeightClass">' + dayLabel + '</text>'
         
          svg += '<g transform="translate(' + Double.toString(halfColumnWidth + wateringIconOffset) + ',-15) scale(.8)">'
