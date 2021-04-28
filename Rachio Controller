@@ -21,11 +21,12 @@
  * V2.0.3:  Fixed issue with dashboard sizing; Added dashboard attribute to controller
  * V2.0.6:  Fixed issue with default zone run time
  * V2.0.7:  Fixed null pointer errors caused by null nextRun if nothing scheduled
+ * V2.0.8:  Added support for 12 zone gen 3
  */
 
 import java.text.SimpleDateFormat
 
-String devVer() { return "2.0.7" }
+String devVer() { return "2.0.8" }
 Integer statusRefresh() { return 60 }
 
 metadata {
@@ -120,6 +121,7 @@ metadata {
             state "8ZoneV2", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen2.png"
             state "16ZoneV2", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen2.png"
             state "8ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
+	    state "12ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
             state "16ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
             state "8ZoneV3Lite", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3_lite.PNG"
         }
@@ -359,6 +361,11 @@ def hardwareModelEvent(val) {
         case "GENERATION3_8ZONE":
             newModel = "8ZoneV3"
             newDesc = "8-Zone (Gen 3)"
+            state?.controllerDescription = "gen3IrrigationController"
+            break
+	case "GENERATION3_12ZONE":
+            newModel = "12ZoneV3"
+            newDesc = "12-Zone (Gen 3)"
             state?.controllerDescription = "gen3IrrigationController"
             break
         case "GENERATION3_16ZONE":
