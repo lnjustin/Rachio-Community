@@ -30,6 +30,7 @@
  * V2.0.5:  Fixed issue with web browser caching dashboard image in dashboard attribute of controller
  * V2.0.6:    Fixed issue with default zone run time
  * V2.0.7:    Fixed issue with logging and with getCurrentRainDelay method
+ * V2.0.8:    Added support for 12 Zone Gen 3
  */
 
 import groovy.json.*
@@ -448,6 +449,8 @@ def getHardwareInfo(val) {
             return [model: "16ZoneV2", desc: "16-Zone (Gen 2)", img: getAppImg("rachio_gen2.png"), gen: "Gen2", jsonTag: "gen2IrrigationController"]
         case "GENERATION3_8ZONE":
             return [model: "8ZoneV3", desc: "8-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+	case "GENERATION3_12ZONE":
+            return [model: "12ZoneV3", desc: "12-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_16ZONE":
             return [model: "16ZoneV3", desc: "16-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_8ZONE_LITE":
