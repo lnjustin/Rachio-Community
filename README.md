@@ -8,21 +8,27 @@ Rachio Community builds off of the native Rachio integration. On top of the nati
 * Next event data exposed. See information about your system's next event, e.g., scheduled run or skip.
 * Monthly watering summary exposed. See the same monthly watering summary as on the Home tab of the mobile app.
 
-![Rachio Community Dashboard](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/Dashboard3.PNG)
+Filled Icon Pack
+![image](https://user-images.githubusercontent.com/12822477/118013431-1ce49580-b320-11eb-824d-a81a2a92e31d.png)
+
+Outline Icon Pack
+![image](https://user-images.githubusercontent.com/12822477/118013465-266dfd80-b320-11eb-9fe6-bc0c002f0dec.png)
 
 ## Icon Key:
-![Watering](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/water.JPG) Watering
+![image](https://user-images.githubusercontent.com/12822477/118013482-2b32b180-b320-11eb-8849-fd853cc4dea2.png) Watering
 
-![Rain Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rain%20skip.JPG) Rain Skip due to predicted rain
+![image](https://user-images.githubusercontent.com/12822477/118013502-2f5ecf00-b320-11eb-9d02-e8545fddd681.png) Rain Skip due to predicted rain
 
-![Saturation Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/saturation%20skip.JPG) Soil saturated skip
+![image](https://user-images.githubusercontent.com/12822477/118013513-32f25600-b320-11eb-81ea-1dd865a4b10c.png) Soil saturated skip
 
-![Wind Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/Wind%20Skip.JPG) Wind skip
+![image](https://user-images.githubusercontent.com/12822477/118013550-3a196400-b320-11eb-8e1a-de0b26ed85d6.png) Wind skip
 
-![Freeze Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/freeze%20skip.JPG) Freeze skip
+![image](https://user-images.githubusercontent.com/12822477/118013559-3c7bbe00-b320-11eb-8db4-598ad790d59c.png) Freeze skip
 
-![Rain Sensor Skip](https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rain%20sensor%20skip.JPG) Rain Sensor skip
+![image](https://user-images.githubusercontent.com/12822477/118013569-3f76ae80-b320-11eb-9bd8-eb367fd005ae.png) Rain Sensor skip
 (Tentative skip if rain sensor remains triggered)
+
+![image](https://user-images.githubusercontent.com/12822477/118013586-42719f00-b320-11eb-8ccc-91466a841cc3.png) Manual Skip
 
 **Dashboard Output Format**
 The Dashboard outputs an SVG image to a local endpoint as well as a cloud endpoint, so you can embed the resulting image into any image tile of any dashboard, e.g., Sharptools dashboard, Smartly, etc. Note that you would want to embed the image into a dashboard image tile with a dark background if you select a white color scheme, and embed the image into a dashboard image tile with a light background if you select a black color scheme.
