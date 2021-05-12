@@ -33,7 +33,8 @@
  * V2.0.5:  Fixed issue with web browser caching dashboard image in dashboard attribute of controller
  * V2.0.6:    Fixed issue with default zone run time
  * V2.0.7:    Fixed issue with logging and with getCurrentRainDelay method
- * V2.1.0:  Added icon pack; Fixed Internal Server Error from Webhooks; Added manual skip icon; Added ability to customize device label prefix
+ * V2.1:  Added icon pack; Fixed Internal Server Error from Webhooks; Added manual skip icon; Added ability to customize device label prefix
+ * V2.1.1: Support for 12 Zone Gen 3
  */
 
 import groovy.json.*
@@ -70,7 +71,7 @@ mappings {
     path("/rachioDashboard/:controllerID") { action: [ GET: "buildDashboard"] }
 }
 
-String appVer() { return "2.0.8" }
+String appVer() { return "2.1.1" }
 
 @Field Integer zoneRunTimeDefault = 10
 @Field String deviceLabelPrefixDefault = "Rachio - "
@@ -478,6 +479,8 @@ def getHardwareInfo(val) {
             return [model: "16ZoneV2", desc: "16-Zone (Gen 2)", img: getAppImg("rachio_gen2.png"), gen: "Gen2", jsonTag: "gen2IrrigationController"]
         case "GENERATION3_8ZONE":
             return [model: "8ZoneV3", desc: "8-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+        case "GENERATION3_12ZONE":
+            return [model: "12ZoneV3", desc: "12-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_16ZONE":
             return [model: "16ZoneV3", desc: "16-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_8ZONE_LITE":
@@ -1622,23 +1625,6 @@ def buildDashboard() {
         def dateMap = getDateMap(date)
        
         def dayLabel = ""
-        def wateringIconOffset = 0
-        if (dateMap == todayDateMap) { 
-            dayLabel = "Today" 
-            wateringIconOffset = 15
-        }
-        else if (date.after(today) && date.before(sevenDaysLater)) { 
-            dayLabel = date.format('EEE') 
-            wateringIconOffset = 8
-        }
-        else { 
-         //   dayLabel = date.format('M/d') 
-         //   if (dateMap.month > 9) wateringIconOffset = 11
-         //   else wateringIconOffset = 8
-            dayLabel = date.format('EEE') 
-            wateringIconOffset = 8
-            
-        }
 
         def weather = weatherData?.find { it?.date == dateMap }
         if (debugLogging) { log.debug "Weather is: ${weather}" }
@@ -1659,6 +1645,27 @@ def buildDashboard() {
         if (debugLogging) { log.debug "Future Events are: ${futureEvents}" }
         
         def irrigationIcon = getIrrigationIcon(pastEvents, futureEvents, rainSensorState)
+        
+        def wateringIconOffset = 0
+        if (dateMap == todayDateMap) { 
+            dayLabel = "Today" 
+            wateringIconOffset = 15
+        }
+        else if (date.after(today) && date.before(sevenDaysLater)) { 
+            dayLabel = date.format('EEE') 
+            wateringIconOffset = 8
+        }
+        else { 
+         //   dayLabel = date.format('M/d') 
+         //   if (dateMap.month > 9) wateringIconOffset = 11
+         //   else wateringIconOffset = 8
+            dayLabel = date.format('EEE') 
+            wateringIconOffset = 8            
+        }
+        if (irrigationIcon == rainSkip || irrigationIcon == rainSkip2) {
+            wateringIconOffset = wateringIconOffset + 2
+                // extra space for rain skip icon
+        }
         
         // Build SVG Body      
         Integer halfColumnWidth = columnWidth / 2
