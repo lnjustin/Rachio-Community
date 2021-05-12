@@ -8,14 +8,15 @@ Rachio Community builds off of the native Rachio integration. On top of the nati
 * Next event data exposed. See information about your system's next event, e.g., scheduled run or skip.
 * Monthly watering summary exposed. See the same monthly watering summary as on the Home tab of the mobile app.
 
-Filled Icon Pack
+Filled Icon Pack<br>
 ![image](https://user-images.githubusercontent.com/12822477/118013431-1ce49580-b320-11eb-824d-a81a2a92e31d.png)
 
-Outline Icon Pack
+Outline Icon Pack<br>
 ![image](https://user-images.githubusercontent.com/12822477/118013465-266dfd80-b320-11eb-9fe6-bc0c002f0dec.png)
 
 ## Icon Key:
-![image](https://user-images.githubusercontent.com/12822477/118013482-2b32b180-b320-11eb-8849-fd853cc4dea2.png) Watering
+Watering<br>
+![image](https://user-images.githubusercontent.com/12822477/118013482-2b32b180-b320-11eb-8849-fd853cc4dea2.png) 
 
 ![image](https://user-images.githubusercontent.com/12822477/118013502-2f5ecf00-b320-11eb-9d02-e8545fddd681.png) Rain Skip due to predicted rain
 
