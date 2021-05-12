@@ -18,18 +18,23 @@ Outline Icon Pack<br>
 Watering<br>
 ![image](https://user-images.githubusercontent.com/12822477/118013482-2b32b180-b320-11eb-8849-fd853cc4dea2.png) 
 
-![image](https://user-images.githubusercontent.com/12822477/118013502-2f5ecf00-b320-11eb-9d02-e8545fddd681.png) Rain Skip due to predicted rain
+Rain Skip due to predicted rain<br>
+![image](https://user-images.githubusercontent.com/12822477/118013502-2f5ecf00-b320-11eb-9d02-e8545fddd681.png) 
 
-![image](https://user-images.githubusercontent.com/12822477/118013513-32f25600-b320-11eb-81ea-1dd865a4b10c.png) Soil saturated skip
+Soil saturated skip<br>
+![image](https://user-images.githubusercontent.com/12822477/118013513-32f25600-b320-11eb-81ea-1dd865a4b10c.png) 
 
-![image](https://user-images.githubusercontent.com/12822477/118013550-3a196400-b320-11eb-8e1a-de0b26ed85d6.png) Wind skip
+Wind skip<br>
+![image](https://user-images.githubusercontent.com/12822477/118013550-3a196400-b320-11eb-8e1a-de0b26ed85d6.png) 
 
-![image](https://user-images.githubusercontent.com/12822477/118013559-3c7bbe00-b320-11eb-8db4-598ad790d59c.png) Freeze skip
+Freeze skip<br>
+![image](https://user-images.githubusercontent.com/12822477/118013559-3c7bbe00-b320-11eb-8db4-598ad790d59c.png) 
 
-![image](https://user-images.githubusercontent.com/12822477/118013569-3f76ae80-b320-11eb-9bd8-eb367fd005ae.png) Rain Sensor skip
-(Tentative skip if rain sensor remains triggered)
+Rain Sensor skip (Tentative skip if rain sensor remains triggered)<br>
+![image](https://user-images.githubusercontent.com/12822477/118013569-3f76ae80-b320-11eb-9bd8-eb367fd005ae.png) 
 
-![image](https://user-images.githubusercontent.com/12822477/118013586-42719f00-b320-11eb-8ccc-91466a841cc3.png) Manual Skip
+Manual Skip<br>
+![image](https://user-images.githubusercontent.com/12822477/118013586-42719f00-b320-11eb-8ccc-91466a841cc3.png) 
 
 **Dashboard Output Format**
 The Dashboard outputs an SVG image to a local endpoint as well as a cloud endpoint, so you can embed the resulting image into any image tile of any dashboard, e.g., Sharptools dashboard, Smartly, etc. Note that you would want to embed the image into a dashboard image tile with a dark background if you select a white color scheme, and embed the image into a dashboard image tile with a light background if you select a black color scheme.
