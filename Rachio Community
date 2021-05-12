@@ -33,7 +33,7 @@
  * V2.0.5:  Fixed issue with web browser caching dashboard image in dashboard attribute of controller
  * V2.0.6:    Fixed issue with default zone run time
  * V2.0.7:    Fixed issue with logging and with getCurrentRainDelay method
- * V2.0.8:  Added icon pack; Fixed Internal Server Error from Webhooks; Added manual skip icon; Added ability to customize device label prefix
+ * V2.1.0:  Added icon pack; Fixed Internal Server Error from Webhooks; Added manual skip icon; Added ability to customize device label prefix
  */
 
 import groovy.json.*
