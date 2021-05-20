@@ -20,6 +20,7 @@
  * V2.0:    Ported to Hubitat; Added dashboard and exposed additional information in controller/zone, including next run, last run, rain sensor state, next upcoming event, weather intelligence information, and monthly watering summary (05-31-2020) 
  * V2.0.1:    Fixed issue with default zone run time
  * V2.0.2:  Fixed null pointer errors caused by null nextRun if nothing scheduled
+ * v2.1.4: Fix debug logging
  */
 
 import java.text.SimpleDateFormat
@@ -304,7 +305,7 @@ def lastUpdatedEvent() {
 
 def markOffLine() {
 	if(isStateChange(device, "watering", "offline")) { 
-		log.trace("UPDATED: Watering (Offline)")
+		//log.trace("UPDATED: Watering (Offline)")
 		sendEvent(name: 'watering', value: "offline", displayed: true, isStateChange: true)
 		sendEvent(name: 'valve', value: "closed", displayed: false, isStateChange: true)
 		sendEvent(name: 'switch', value: "off", displayed: false, isStateChange: true)
@@ -316,7 +317,7 @@ def markOffLine() {
 
 def markStandby() {
 	if(isStateChange(device, "watering", "standby")) {
-		log.trace("UPDATED: Watering (Standby Mode)")
+		//log.trace("UPDATED: Watering (Standby Mode)")
 		sendEvent(name: 'watering', value: "standby", displayed: true, isStateChange: true)
 		sendEvent(name: 'valve', value: "closed", displayed: false, isStateChange: true)
 		sendEvent(name: 'switch', value: "off", displayed: false, isStateChange: true)
@@ -580,7 +581,7 @@ def isCmdOk2Run() {
 }
 
 def startZone() {
-    log.trace "startZone()..."
+  //  log.trace "startZone()..."
     if(!isCmdOk2Run()) { return }
     def zoneNum = device?.latestValue('zoneNumber').toInteger()
     def waterTime = device?.latestValue('zoneWaterTime')
@@ -598,7 +599,7 @@ def startZone() {
 }
 
 def on() {
-    log.trace "zone on..."
+ //   log.trace "zone on..."
     if(!isCmdOk2Run()) { return }
     def isOn = device?.currentState("switch")?.value.toString() == "on" ? true : false
     if (!isOn) { open() }
@@ -606,7 +607,7 @@ def on() {
 }
 
 def off() {
-    log.trace "zone off..."
+  //  log.trace "zone off..."
     //if(!isCmdOk2Run()) { return }
     def isOff = device?.currentState("switch")?.value.toString() == "off" ? true : false
     if (!isOff) { close() }
@@ -614,7 +615,7 @@ def off() {
 }
 
 def open() {
-    log.trace "Zone open()..."
+  //  log.trace "Zone open()..."
     if(!isCmdOk2Run()) { return }
     def isOpen = device?.currentState("valve")?.value.toString() == "open" ? true : false
     if (!isOpen) {
@@ -624,7 +625,7 @@ def open() {
 }
 
 def close() {
-    log.trace "Zone close()..."
+  //  log.trace "Zone close()..."
     //if(!isCmdOk2Run()) { return }
     def isClosed = device?.currentState("valve")?.value.toString() == "closed" ? true : false
     if (!isClosed) {
@@ -640,7 +641,7 @@ def close() {
 
 // To be used directly by smart apps
 def stopWatering() {
-    log.trace "stopWatering"
+  //  log.trace "stopWatering"
     close()
 }
 
