@@ -37,6 +37,7 @@
  * V2.1.1: Support for 12 Zone Gen 3
  * V2.1.2: Fix icon scaling
  * V2.1.3: Partly Cloudy Icon translation fix
+ * V2.1.4: Fix debug logging
  */
 
 import groovy.json.*
@@ -827,7 +828,7 @@ def getDeviceNextEvent(devId) {
     //log.trace "getDeviceNextEvent(${devId})..."
     def jsonData = new JsonBuilder("device_id":devId)
     def result = sendJsonGetResponse("events/next", jsonData?.toString(), "closed", "post")
-    log.trace "Next Event: ${result})"
+   // log.trace "Next Event: ${result})"
     return result
 }
 
@@ -841,10 +842,10 @@ def getDeviceAlerts(devId) {
 
 def getDeviceWateringSummary(devId, start_date, end_date) {
     // start_date and end_date are Date objects
-    log.trace "getDeviceWateringSummary(${devId})..."
+    if (debugLogging) { log.debug "getDeviceWateringSummary(${devId})..." }
     def jsonData = new JsonBuilder("device_id":devId, "start_date":getDateMap(start_date), "end_date":getDateMap(end_date))
     def result = sendJsonGetResponse("events/getWateringSummaryByInterval", jsonData?.toString(), "closed", "put")
-    log.trace "Watering Summary: ${result})"
+    if (debugLogging) { log.debug "Watering Summary: ${result})" }
     return result
 }
 
@@ -1135,10 +1136,10 @@ void setWateringDeviceState(devId, val) {
 void handleWateringSched(devId, val=false) {
     // log.trace "handleWateringSched($devId, $val)"
     if(val == true) {
-        log.trace "Watering is Active... Scheduling poll for every 1 minute"
+      //  log.trace "Watering is Active... Scheduling poll for every 1 minute"
         runEvery1Minute("poll")
     } else {
-        log.trace "Watering has finished... 1 minute Poll has been unscheduled"
+      //  log.trace "Watering has finished... 1 minute Poll has been unscheduled"
         unschedule("poll")
         runIn(60, "poll") // This is here just to make sure that the schedule actually stopped and that the data is really current.
     }
@@ -1351,7 +1352,7 @@ def getMonthEnd() {
     calendar.set(date[Calendar.YEAR], date[Calendar.MONTH], date[Calendar.DATE])
     def lastDayOfMonth = calendar.getActualMaximum(GregorianCalendar.DAY_OF_MONTH)
     def monthEnd = date.copyWith(date: lastDayOfMonth, hourOfDay: 23, minute: 59, second: 59)
-    log.trace "last day of month: ${monthEnd}"
+  //  log.trace "last day of month: ${monthEnd}"
     return monthEnd
 }
 
@@ -1473,7 +1474,7 @@ def getCurrentRainDelay(res) {
 def startZone(child, deviceId, zoneNum, mins) {
     def res = false
     def ctrlLbl = getControlLblById(deviceId)
-    log.trace "Starting to Water on ${ctrlLbl ? "$ctrlLbl: " : ""}(ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})"
+    if (debugLogging) { log.debug "Starting to Water on ${ctrlLbl ? "$ctrlLbl: " : ""}(ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})" }
     //child?.log("Starting to water on (ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})...")
     def zoneId = child?.device?.deviceNetworkId
     if (zoneId && zoneNum && mins) {
