@@ -1055,7 +1055,7 @@ void poll(child=null, type=null) {
             }
         }
     }
-    log.info "Updating (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices..."
+   // log.info "Updating (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices..."
     atomicState?.lastPollDt = now()
 }
 
