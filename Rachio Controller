@@ -71,7 +71,7 @@ metadata {
         attribute "nextEventType", "string"
         attribute "nextEventWeatherIntelligence", "string"
         attribute "nextEventThresholdInfo", "string"
-        attribute "rainSensorTripped", "boolean"
+        attribute "rainSensorTripped", "string"
         
         attribute "monthlyMinutesUsed", "number"
         attribute "monthlyMinutesSaved", "number"
