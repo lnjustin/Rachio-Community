@@ -23,6 +23,7 @@
  * V2.0.7:  Fixed null pointer errors caused by null nextRun if nothing scheduled
  * V2.0.8:  Added support for 12 zone gen 3
  * V2.1.4:  Fixed debug logging on/off
+ * v2.1.5: added explicit DeviceWatch-DeviceStatus attribute for Rule Machine accessibility
  */
 
 import java.text.SimpleDateFormat
@@ -71,7 +72,7 @@ metadata {
         attribute "nextEventType", "string"
         attribute "nextEventWeatherIntelligence", "string"
         attribute "nextEventThresholdInfo", "string"
-        attribute "rainSensorTripped", "string"
+        attribute "rainSensorTripped", "boolean"
         
         attribute "monthlyMinutesUsed", "number"
         attribute "monthlyMinutesSaved", "number"
@@ -79,6 +80,8 @@ metadata {
         
         attribute "lastUpdatedDt", "string"
         attribute "notificationMessage", "string"
+        
+        attribute "DeviceWatch-DeviceStatus", "string"
         
         attribute "dashboard", "string"
 
