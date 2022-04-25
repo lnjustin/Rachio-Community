@@ -24,6 +24,8 @@
  * V2.0.8:  Added support for 12 zone gen 3
  * V2.1.4:  Fixed debug logging on/off
  * v2.1.5: added explicit DeviceWatch-DeviceStatus attribute for Rule Machine accessibility
+ * V2.1.6: Added ability to configure dashboard color scheme and icon scheme from the Rachio Controller Device
+ * V2.1.7: Fixed issue with setRainDelay command
  */
 
 import java.text.SimpleDateFormat
@@ -104,6 +106,30 @@ metadata {
         command "open"
         command "close"
         //command "pause"
+        
+        command(
+             "setDashboardColorScheme", 
+             [
+                [
+                     "name":"Dashboard Color Scheme*",
+                     "description":"Choose one of several predefined color schemes for the dashboard. Custom must be specified in the Rachio Community App.).",
+                     "type":"ENUM",
+                     "constraints":["White with Color","Black with Color","White without Color","Black without Color","Custom"]
+                ]
+             ]
+        )
+        
+        command(
+             "setDashboardIconScheme", 
+             [
+                [
+                     "name":"Dashboard Icon Scheme*",
+                     "description":"Choose one of several predefined icon schemes for the dashboard.).",
+                     "type":"ENUM",
+                     "constraints":["Filled","Outline"]
+                ]
+             ]
+        )
     }
 
     tiles (scale: 2){
@@ -194,6 +220,14 @@ metadata {
     main "valveTile"
     details(["valveTile", "hardwareModel", "hardwareDesc", "activeZoneCnt", "curZoneIsCyclingTile", "leftButtonControl", "rainDelay", "rightButtonControl", "applyRainDelay",
             "leftZoneTimeButton", "curZoneWaterTime", "rightZoneTimeButton", "runAllZonesTile", "pauseZoneRunTile", "lastUpdatedDt", "standbyMode", "refresh"])
+}
+
+def setDashboardColorScheme(scheme) {
+    parent?.settingUpdate("colorSchemeSelection", scheme, "enum") 
+}
+
+def setDashboardIconScheme(scheme) {
+    parent?.settingUpdate("iconSchemeSelection", scheme, "enum") 
 }
 
 def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/$imgName" }
@@ -728,7 +762,7 @@ def stopWatering() {
 
 def setRainDelay(rainDelay) {
     sendEvent("name":"rainDelay", "value": rainDelay)
-    def res = parent?.setRainDelay(this, rainDelay);
+    def res = parent?.setRainDelay(this, state?.deviceId, rainDelay);
     //if (res) { parent?.pollChildren() }
 }
 
