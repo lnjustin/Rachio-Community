@@ -41,6 +41,7 @@
  * v2.1.5: added explicit DeviceWatch-DeviceStatus attribute for Rule Machine accessibility
  * V2.1.6: Added ability to configure dashboard color scheme and icon scheme from the Rachio Controller Device
  * V2.1.7: Fixed issue with setRainDelay command
+ * V2.1.8: Graceful handling of websocket errors
  */
 
 import groovy.json.*
@@ -871,8 +872,11 @@ def getWeather(locId, start_date, end_date) {
 }
 
 def getLocationId(devId, detailsData) {
-    def controllerDetails = detailsData.get(getDevJsonTag(devId))
-    if (controllerDetails) return controllerDetails.locationId   
+    def dev = getDevJsonTag(devId)
+    if (dev) {
+        def controllerDetails = detailsData.get(dev)
+        if (controllerDetails) return controllerDetails.locationId   
+    }
     return null
 }
 
@@ -1599,7 +1603,7 @@ def buildDashboard() {
     def jsonSlurper = new JsonSlurper()
     def weatherData = getWeather(locationId, startDate, endDate).weatherReadings
     def pastEventsData = getDevicePastEvents(devId, startDate, endDate)
-    def futureEventsData = getDeviceFutureEvents(devId, endDate).entries
+    def futureEventsData = getDeviceFutureEvents(devId, endDate)?.entries
     
     colorScheme = getColorScheme(colorSchemeSelectionSetting)
     
@@ -2033,3 +2037,4 @@ genericSkip2 = '<g transform="translate(0,0)"><path   id="path2"   d="M 14.98437
 
     
     
+
