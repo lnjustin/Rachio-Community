@@ -42,6 +42,8 @@
  * V2.1.6: Added ability to configure dashboard color scheme and icon scheme from the Rachio Controller Device
  * V2.1.7: Fixed issue with setRainDelay command
  * V2.1.8: Graceful handling of websocket errors
+ * V2.1.9: Graceful handling of read timeout
+ * V2.1.10: Added support for Gen 3 16 zone pro model
  */
 
 import groovy.json.*
@@ -490,6 +492,8 @@ def getHardwareInfo(val) {
             return [model: "12ZoneV3", desc: "12-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_16ZONE":
             return [model: "16ZoneV3", desc: "16-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+        case "GENERATION3_16ZONE_PRO":
+            return [model: "16ZoneV3Pro", desc: "16-Zone (Gen 3) Pro", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_8ZONE_LITE":
             return [model: "8ZoneV3Lite", desc: "8-Zone (Gen 3 Lite)", img: getAppImg("rachio_gen3_lite.PNG"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         
@@ -1230,7 +1234,8 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
         uri: "${baseURI}/${subUri}",
         requestContentType: "application/x-www-form-urlencoded; charset=utf-8",
         headers: ["Authorization": "Bearer ${atomicState?.authToken}", "Content-Type": "application/json"],
-        body: jsonBody
+        body: jsonBody,
+        timeout: 30
     ]
 
     try{
@@ -1262,7 +1267,7 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
 
         } else { return returnStatus }
     } catch(Exception e) {
-        log.error "sendJson Exception Error: ${e}"
+        log.error "sendJsonGetResponse Exception Error: ${e}"
     }
     return returnData
 }
@@ -1601,7 +1606,7 @@ def buildDashboard() {
     def rainSensorState = getDeviceState(devId)?.state?.rainSensorTripped
     
     def jsonSlurper = new JsonSlurper()
-    def weatherData = getWeather(locationId, startDate, endDate).weatherReadings
+    def weatherData = getWeather(locationId, startDate, endDate)?.weatherReadings
     def pastEventsData = getDevicePastEvents(devId, startDate, endDate)
     def futureEventsData = getDeviceFutureEvents(devId, endDate)?.entries
     
@@ -1814,10 +1819,10 @@ def getIrrigationIcon(pastEvents, futureEvents, rainSensorState) {
                         if (eventsList.isEmpty()) { irrigationIcon = iconPack == "Filled" ? genericSkip : genericSkip2 }
                         break
                 }
-                if(!foundEvent.isEmpty()) { eventsList.add(foundEvent) }
+                if(!foundEvent?.isEmpty()) { eventsList.add(foundEvent) }
             }
         }
-        else if (!futureEvents.isEmpty()) {
+        else if (!futureEvents?.isEmpty()) {
             for (event in futureEvents) {
                 def foundEvent = [:]
                 switch(event.type) {
@@ -2037,4 +2042,3 @@ genericSkip2 = '<g transform="translate(0,0)"><path   id="path2"   d="M 14.98437
 
     
     
-
