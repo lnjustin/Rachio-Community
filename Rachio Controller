@@ -26,6 +26,9 @@
  * v2.1.5: added explicit DeviceWatch-DeviceStatus attribute for Rule Machine accessibility
  * V2.1.6: Added ability to configure dashboard color scheme and icon scheme from the Rachio Controller Device
  * V2.1.7: Fixed issue with setRainDelay command
+ * V2.1.8: Graceful handling of websocket errors
+ * V2.1.9: Graceful handling of read timeout
+ * V2.1.10: Added support for Gen 3 16 zone pro model
  */
 
 import java.text.SimpleDateFormat
@@ -40,6 +43,7 @@ metadata {
         capability "Actuator"
         capability "Valve"
         capability "Sensor"
+        capability "WaterSensor"
         capability "Polling"
         capability "Health Check"
 
@@ -151,8 +155,9 @@ metadata {
             state "8ZoneV2", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen2.png"
             state "16ZoneV2", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen2.png"
             state "8ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
-	    state "12ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
+	        state "12ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
             state "16ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
+            state "16ZoneV3Pro", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
             state "8ZoneV3Lite", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3_lite.PNG"
         }
         valueTile("hardwareDesc", "device.hardwareDesc", inactiveLabel: false, width: 4, height: 1, decoration: "flat") {
@@ -411,6 +416,11 @@ def hardwareModelEvent(val) {
             newDesc = "16-Zone (Gen 3)"
             state?.controllerDescription = "gen3IrrigationController"
             break
+       case "GENERATION3_16ZONE_PRO":
+            newModel = "16ZoneV3Pro"
+            newDesc = "16-Zone (Gen 3) Pro"
+            state?.controllerDescription = "gen3IrrigationController"
+            break
         case "GENERATION3_8ZONE_LITE":
             newModel = "8ZoneV3Lite"
             newDesc = "8-Zone (Gen 3 Lite)"
@@ -481,6 +491,7 @@ def setZoneWaterTime(timeVal) {
 def stateDataEvent(stateData) {
     //state?.stateData = stateData
     sendEvent(name:'rainSensorTripped', value: stateData.state?.rainSensorTripped)
+    sendEvent(name:'water', value: stateData.state?.rainSensorTripped == true ? "wet" : "dry") 
     if (parent?.debugLogging) {  log.debug("Last Run is: ${stateData.state?.lastRun}") }
     if (stateData.state?.lastRun) sendEvent(name:'lastRunStr', value: formatUtcDt(stateData.state?.lastRun))
     if (stateData.state?.lastRun) sendEvent(name:'lastRun', value: getUnixDtFromUTCDt(stateData.state?.lastRun))
