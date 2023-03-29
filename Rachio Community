@@ -44,6 +44,7 @@
  * V2.1.8: Graceful handling of websocket errors
  * V2.1.9: Graceful handling of read timeout
  * V2.1.10: Added support for Gen 3 16 zone pro model
+ * V2.2.11: icon fix
  */
 
 import groovy.json.*
@@ -1758,7 +1759,7 @@ def getWeatherIcon(weatherIconText) {
         else if (weatherIconText == 'SLEET') { weatherIcon = sleet }
         else if (weatherIconText == 'SNOW') { weatherIcon = snow }
         else if (weatherIconText == 'SUNNY') { weatherIcon = sunny }
-        else if (weatherIconText == 'TSTORMS') { weatherIcon = tstorms }
+        else if (weatherIconText == 'THUNDER_STORM') { weatherIcon = tstorms }
         else if (weatherIconText == 'PARTLY_CLOUDY') { weatherIcon = partlycloudy }
         else if (weatherIconText == 'PARTLY_SUNNY') { weatherIcon = partlysunny }    
     }
@@ -1780,7 +1781,7 @@ def getWeatherIcon(weatherIconText) {
         else if (weatherIconText == 'SLEET') { weatherIcon = sleet2 }
         else if (weatherIconText == 'SNOW') { weatherIcon = snow2 }
         else if (weatherIconText == 'SUNNY') { weatherIcon = sunny2 }
-        else if (weatherIconText == 'TSTORMS') { weatherIcon = tstorms2 }
+        else if (weatherIconText == 'THUNDER_STORM') { weatherIcon = tstorms2 }
         else if (weatherIconText == 'PARTLY_CLOUDY') { weatherIcon = partlycloudy2 }
         else if (weatherIconText == 'PARTLY_SUNNY') { weatherIcon = partlysunny2 }            
     }
