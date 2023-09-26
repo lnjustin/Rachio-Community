@@ -45,6 +45,7 @@
  * V2.1.9: Graceful handling of read timeout
  * V2.1.10: Added support for Gen 3 16 zone pro model
  * V2.2.11: icon fix
+ * V2.2.12 Added support for 4 zone Gen 3 model
  */
 
 import groovy.json.*
@@ -487,6 +488,8 @@ def getHardwareInfo(val) {
             return [model: "8ZoneV2", desc: "8-Zone (Gen 2)", img: getAppImg("rachio_gen2.png"), gen: "Gen2", jsonTag: "gen2IrrigationController"]
         case "GENERATION2_16ZONE":
             return [model: "16ZoneV2", desc: "16-Zone (Gen 2)", img: getAppImg("rachio_gen2.png"), gen: "Gen2", jsonTag: "gen2IrrigationController"]
+        case "GENERATION3_4ZONE":
+            return [model: "4ZoneV3", desc: "4-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_8ZONE":
             return [model: "8ZoneV3", desc: "8-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_12ZONE":
