@@ -29,6 +29,8 @@
  * V2.1.8: Graceful handling of websocket errors
  * V2.1.9: Graceful handling of read timeout
  * V2.1.10: Added support for Gen 3 16 zone pro model
+ * V2.2.11: icon fix
+ * V2.2.12 Added support for 4 zone Gen 3 model
  */
 
 import java.text.SimpleDateFormat
@@ -400,6 +402,11 @@ def hardwareModelEvent(val) {
             newModel = "16ZoneV2"
             newDesc = "16-Zone (Gen 2)"
             state?.controllerDescription = "gen2IrrigationController"
+            break
+        case "GENERATION3_4ZONE":
+            newModel = "4ZoneV3"
+            newDesc = "4-Zone (Gen 3)"
+            state?.controllerDescription = "gen3IrrigationController"
             break
         case "GENERATION3_8ZONE":
             newModel = "8ZoneV3"
