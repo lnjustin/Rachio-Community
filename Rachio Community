@@ -46,6 +46,7 @@
  * V2.1.10: Added support for Gen 3 16 zone pro model
  * V2.2.11: icon fix
  * V2.2.12 Added support for 4 zone Gen 3 model
+ * V2.3.0 Added support for Rachio Hose Timer; Improved logging customization; Differntiate schedules/programs in dashboard
  */
 
 import groovy.json.*
@@ -82,13 +83,18 @@ mappings {
     path("/rachioDashboard/:controllerID") { action: [ GET: "buildDashboard"] }
 }
 
-String appVer() { return "2.1.3" }
+String appVer() { return "2.3.0" }
 
 @Field Integer zoneRunTimeDefault = 10
+@Field Integer programRunTimeDefault = 10
 @Field String deviceLabelPrefixDefault = "Rachio - "
 
 def getZoneRunTimeDefaultSetting() {
     return (defaultZoneTime != null) ? defaultZoneTime : zoneRunTimeDefault
+}
+
+def getProgramRunTimeDefaultSetting() {
+    return (defaultProgramTime != null) ? defaultProgramTime : programRunTimeDefault
 }
 
 def getDeviceLabelPrefixSetting() {
@@ -143,6 +149,7 @@ def authPage()  {
         oauthTokenProvided = true
     }
     if(atomicState?.authToken) {
+        atomicState.userId = getUserId();
         getRachioDeviceData(true)
         def usrName = atomicState?.userName ?: ""
         description = usrName ? "You are signed in as $usrName" : "You are connected."
@@ -152,7 +159,7 @@ def authPage()  {
         description = "Login to Rachio Web App to get your API Key"
     }
     
-    if (!oauthTokenProvided) { log.info "No Rachio AuthToken Found... Please Login to Web App > Account Settings > Get API Key..." }
+    if (!oauthTokenProvided) { LOG("No Rachio AuthToken Found... Please Login to Web App > Account Settings > Get API Key...", 1, "warn") }
     def authPara = !oauthTokenProvided ? "Please Login to Web App\n• Tap on More Tab\n• Click on Account Settings\n• Click Get API Key\n• Tap the Copy Icon\n• Press the back button\n• Paste the key in the input below" : "Tap Next to setup your sprinklers."
     return dynamicPage(name: "authPage", title: "Auth Page", nextPage: (oauthTokenProvided ? "devicePage" : null), uninstall: uninstallAllowed) {
        section() {
@@ -183,15 +190,15 @@ def removeSect() {
 
 // This method is called after "auth" page is done with Oauth2 authorization, then page "deviceList" with content of devicePage()
 def devicePage() {
-    //log.trace "devicePage()..."
+    LOG("devicePage()...", 5, "trace")
     if(!atomicState?.authToken) {
-        if (debugLogging) { log.debug "No accesstoken" }
+        LOG("No accesstoken", 1, "debug") }
         return
     }
     // Step 1: get (list) of available devices associated with the login account.
     def devData = getRachioDeviceData()
     def devices = getDeviceInputEnum(devData)
-    if (debugLogging) { log.debug "rachioDeviceList(): ${devices}" }
+    LOG("rachioDeviceList(): ${devices}", 3, "debug") }
 
     //step2: render the page for user to select which device
     return dynamicPage(name: "devicePage", install: true, uninstall: true) {
@@ -247,6 +254,13 @@ def devicePage() {
                 if (getHaveDeviceLabelPrefixSetting() == true) input(name: "deviceLabelPrefix", title: "Device Label Prefix", type: "text", defaultValue: "Rachio - ", required: false, submitOnChange: true)
                 input "debugLogging", "bool", title: "Activate Debug Logging?", defaultValue: false, submitOnChange: true
             }
+
+            section(title: smallerTitle("Debug Log Level")){
+			    paragraph("Select the debug logging level. Higher levels send more information to IDE Live Logging.", width: 8)
+			    input(name: "debugLevel", title:inputTitle("Select Debug Log Level"), type: 'enum', required:false, multiple:false, defaultValue:"2", description: "2",
+					options:["5", "4", "3", "2", "1", "0"], width: 4)
+			if(settings.debugLevel == null){ app.updateSetting('debugLevel', "2") }
+		    }
             
 
         }
@@ -334,7 +348,7 @@ def getSectionTitle(txt) {
 }
 
 void settingUpdate(name, value, type=null) {
-	//log.trace "settingUpdate($name, $value, $type)..."
+	LOG("settingUpdate($name, $value, $type)...", 5, "trace")
 	if(name && type) {
 		app?.updateSetting("$name", [type: "$type", value: value])
 	}
@@ -342,14 +356,14 @@ void settingUpdate(name, value, type=null) {
 }
 
 void settingRemove(name) {
-	//log.trace "settingRemove($name)..."
+	LOG("settingRemove($name)...", 5, "trace")
     
      // if(name) { app?.deleteSetting("$name") }
 	if(name) { app?.removeSetting("$name") }  // ported line
 }
 
 void appCleanup() {
-  //  log.trace "appCleanup()"
+    LOG("appCleanup()", 5, "trace")
     def stateItems = ["deviceId", "selectedDevice", "selectedZones", "inStandbyMode", "isWateringMap", "inStandbyModeMap"]
     def setItems = ["sprinklers", "selectedZones"]
     stateItems?.each { if(state?.containsKey(it as String)) {state.remove(it)} }
@@ -376,14 +390,14 @@ def supportPage() {
 }
 
 def zoneSelections(devData, devId=null) {
-    //log.debug "zoneSelections: $devData"
+    LOG("zoneSelections: $devData", 4, "debug")
     def res = [:]
     if(!devData) { return res }
     devData?.devices.sort {it?.name}.each { dev ->
         if(dev?.id == devId) {
             dev?.zones?.sort {it?.zoneNumber }.each { zone ->
                 def str = (zone?.enabled == true) ? "" : " (Disabled)"
-                //log.debug "zoneId: $zone.id"
+                LOG("zoneId: $zone.id", 4, "debug")
                 def adni = [zone?.id].join('.')
                 res[adni] = "${zone?.name}$str"
             }
@@ -403,22 +417,21 @@ def getAccessToken() {
     catch (ex) {
         def msg = "Error: OAuth is not Enabled for the Rachio Community application!!!.  Please click remove and Enable Oauth under the App Settings..."
         // sendPush(msg)
-        log.warn "getAccessToken Exception | ${msg}"
+        LOG("getAccessToken Exception | ${msg}", 1, "warn")
         return false
     }
 }
 
 def getRachioDeviceData(noData=false) {
-    //log.trace "getRachioDevicesData($noData)..."
+    LOG("getRachioDevicesData($noData)...", 5, "trace")
 
     //Step1: GET account info "userId"
-    atomicState.userId = getUserId();
     if (!atomicState?.userId) {
-        log.error "No user Id found exiting"
+        LOG("No user Id found exiting", 1, "warn")
         return
     }
     def userInfo = getUserInfo(atomicState?.userId)
-    if (debugLogging) { log.debug "userInfo: ${userInfo}" }
+    LOG("userInfo: ${userInfo}", 3, "debug")
     atomicState?.userName = userInfo?.username
 
     if(!noData) { return userInfo }
@@ -429,22 +442,22 @@ def getDeviceInputEnum(data) {
     def devices = [:]
     if(!data) { return devices }
     data?.devices.sort { it?.name }.each { sid ->
-       //log.info "systemId: ${sid.id}"
+       LOG("systemId: ${sid.id}", 3, "debug")
        def dni = sid?.id
        devices[dni] = sid?.name
-       //log.info "Found sprinkler with dni(locationId.gatewayId.systemId.zoneId): $dni and displayname: ${devices[dni]}"
+       LOG("Found sprinkler with dni(locationId.gatewayId.systemId.zoneId): $dni and displayname: ${devices[dni]}", 3, "debug")
     }
-    // log.info "getRachioDevicesData() >> sprinklers: $devices"
+    LOG("getRachioDevicesData() >> sprinklers: $devices", 3, "debug")
     return devices
 }
 
 def getUserInfo(userId) {
-    //log.trace "getUserInfo ${userId}"
+    LOG("getUserInfo ${userId}", 5, "trace")
     return _httpGet("person/${userId}");
 }
 
 def getUserId() {
-    //log.trace "getUserId()"
+    LOG("getUserId()", 5, "trace")
     def res = _httpGet("person/info");
     if (res) {
         return res?.id;
@@ -508,7 +521,7 @@ def getHardwareInfo(val) {
 def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/$imgName" }
 
 def _httpGet(subUri, endpoint="open") {
-    if (debugLogging) { log.debug "_httpGet($subUri)" }
+    LOG("_httpGet($subUri)", 3, "debug")
     try {
         def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
         def params = [
@@ -521,12 +534,12 @@ def _httpGet(subUri, endpoint="open") {
             } else {
                 //refresh the auth token
                 if (resp?.status == 500 && resp?.data?.status?.code == 14) {
-                    if (debugLogging) { log.debug "Storing the failed action to try later" }
+                    LOG("Storing the failed action to try later", 4, "debug")
                     data.action = "getRachioDeviceData"
-                    if (debugLogging) { log.debug "Refreshing your authToken!" }
+                    LOG("Refreshing your authToken!", 4, "debug")
                     // refreshAuthToken()
                 } else {
-                    log.error "Authentication error, invalid authentication method, lack of credentials, etc."
+                    LOG("Authentication error, invalid authentication method, lack of credentials, etc.", 1, "error")
                 }
               return null
             }
@@ -534,10 +547,10 @@ def _httpGet(subUri, endpoint="open") {
     } catch (ex) {
         if(ex instanceof groovyx.net.http.HttpResponseException) {
             if(ex?.response) {
-                log.error("httpGet() Response Exception | Status: ${ex?.response?.status} | Data: ${ex?.response?.data}")
+                LOG("httpGet() Response Exception | Status: ${ex?.response?.status} | Data: ${ex?.response?.data}", 1, "error")
             }
         } else {
-            log.error "_httpGet exception: ${ex.message}"
+            LOG("_httpGet exception: ${ex.message}", 1, "error")
         }
     }
 }
@@ -552,19 +565,19 @@ def getDisplayName(iroName, zname) {
 
 //Section3: installed, updated, initialize methods
 def installed() {
-    log.trace "Installed with settings: ${settings}"
+    LOG("Installed with settings: ${settings}", 5, "debug")
     initialize()
     atomicState?.installed = true
 }
 
 def updated() {
-    if (debugLogging) { log.debug "Updated with settings: ${settings}" }
+    LOG("Updated with settings: ${settings}", 5, "debug")
     unsubscribe()
     initialize()
 }
 
 def initialize() {
-    log.trace "initialized..."
+    LOG("initialized...", 5, "trace")
     unschedule()
     scheduler()
     subscribe(app, onAppTouch)
@@ -586,7 +599,7 @@ void initStep3() {
 }
 
 def uninstalled() {
-    if (debugLogging) { log.debug "uninstalled() called... removing app and devices" }
+    LOG("uninstalled() called... removing app and devices", 5, "trace")
     unschedule()
     //Remove any existing webhooks before uninstall...
     removeAllWebhooks()
@@ -613,7 +626,7 @@ def scheduler() {
 }
 
 def heartbeat() {
-   // log.trace "heartbeat 15 minute keep alive poll()..."
+   LOG("heartbeat 15 minute keep alive poll()...", 5, "trace")
     poll()
 }
 
@@ -621,14 +634,14 @@ void initWebhooks() {
     settings?.controllers?.each { c->
         if(c) { 
             initWebhook(c)
-            if (debugLogging) { log.debug "webhooks($c): ${getWebhookIdsForDev(c)}" }
+            LOG("webhooks($c): ${getWebhookIdsForDev(c)}", 4, "debug")
         }
     }
 }
 
 //Subscribes to the selected controllers API events that will be used to trigger a poll
 def initWebhook(controlId) {
-    //log.trace "initWebhook..."
+    LOG("initWebhook...", 5, "trace")
     def result = false
     def webhookIds = getWebhookIdsForDev(controlId)
     def cmdType = webhookIds == null ? "put" : "put"
@@ -642,11 +655,11 @@ def initWebhook(controlId) {
     }
     try {
         if(webhookHttp(apiWebhookUrl, bodyData, cmdType, controlId)) {
-            log.info "Successfully ${cmdType == "post" ? "Created" : "Updated"} API Webhook Subscription for Controller (${controlId})!!!"
+            LOG("Successfully ${cmdType == "post" ? "Created" : "Updated"} API Webhook Subscription for Controller (${controlId})!!!", 5, "trace")
             result = true
         }
     } catch(ex) {
-        log.error "initWebhook Exception: ${ex.message} | Data sent: ${bodyData}"
+        LOG("initWebhook Exception: ${ex.message} | Data sent: ${bodyData}", 1, "error")
     }
     return result
 }
@@ -656,7 +669,7 @@ def getWebhookIdsForDev(devId) {
     def data = _httpGet("notification/${devId}/webhook")
     def res = null
     if(data) { res = data?.findAll { it?.externalId == app?.name }?.collect { it?.id } }
-    if (debugLogging) { log.debug "Get webhookIdsForDevice received data: ${data}. Webhook IDs for Device ${devId} include: ${res}" }
+    LOG("Get webhookIdsForDevice received data: ${data}. Webhook IDs for Device ${devId} include: ${res}", 3, "debug")
     return res
 }
 
@@ -664,17 +677,17 @@ void removeWebhookByDevId(devId) {
     def webhookIds = getWebhookIdsForDev(devId)
     for (webhookId in webhookIds) {
         if(webhookHttp("${rootApiUrl()}/notification/webhook/${webhookId}", "", "delete", devId)) {
-            log.warn "Removed API Webhook Subscription for (${webhookId})"
+            LOG("Removed API Webhook Subscription for (${webhookId})", 2, "warn")
         }
         else {
-            log.error "Failed to remove API Webhook Subscription for (${webhookId})"
+            LOG("Failed to remove API Webhook Subscription for (${webhookId})", 1, "error")
         }
     }
 }
 
 //Removes the webhook subscription for the device.
 void removeAllWebhooks() {
-    if (debugLogging) { log.debug "removeAllWebhooks called." }
+    LOG("removeAllWebhooks called.", 5, "trace")
     if(settings?.controllers) {
         settings?.controllers?.each { c->
             if(c) {
@@ -686,7 +699,7 @@ void removeAllWebhooks() {
 
 //Returns the available event types to subscribe to.
 def webhookEvtTypes() {
-    if (debugLogging) { log.debug "Updating webhook event types" }
+    LOG("Updating webhook event types", 5, "trace")
     def typeIds = []
     def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT"] 
     def data = _httpGet("notification/webhook_event_type")
@@ -698,7 +711,7 @@ def webhookEvtTypes() {
 
 //Handles the http requests for the webhook methods
 def webhookHttp(url, jsonBody, type=null, ctrlId) {
-    if (debugLogging) { log.debug "webhookHttp($url, $jsonBody, $type, $ctrlId)" }
+    LOG("webhookHttp($url, $jsonBody, $type, $ctrlId)", 3, "debug")
     def returnStatus = false
     def response = null
     def cmdParams = [
@@ -725,24 +738,24 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
             }
         }
         if(response) {
-            if (debugLogging) { log.debug "webhook http response status: ${response?.status} | data: ${response?.data}" }
+            LOG("webhook http response status: ${response?.status} | data: ${response?.data}", 3, "debug")
             if(response?.status in [200, 201, 204]) {
                 returnStatus = true
             } else {
                 //refresh the auth token
                 if (response?.status == 401) {
-                    if (debugLogging) { log.debug "Refreshing your authToken!" }
+                    LOG("Refreshing your authToken!", 3, "debug")
                     // refreshAuthToken()
                 } else {
-                    log.error "Authentication error, invalid authentication method, lack of credentials, etc."
+                    LOG("Authentication error, invalid authentication method, lack of credentials, etc.", 1, "error")
                 }
             }
         } else { 
-            log.error "Return Status in webhook Http: ${returnStatus}"
+            LOG("Return Status in webhook Http: ${returnStatus}", 1, "error")
             return returnStatus 
         }
     } catch(Exception e) {
-        log.error "webhookHttp Exception Error: ${e.message}"
+        LOG("webhookHttp Exception Error: ${e.message}", 1, "error")
     }
     return returnStatus
 }
@@ -780,102 +793,102 @@ void updateDevZoneStates() {
 }
 
 def getDeviceInfo(devId) {
-    //log.trace "getDeviceInfo..."
+    LOG("getDeviceInfo...", 5, "trace")
     return _httpGet("device/${devId}")
 }
 
 def getCurSchedule(devId) {
-    //log.trace "getCurSchedule..."
+    LOG("getCurSchedule...", 5, "trace")
     return _httpGet("device/${devId}/current_schedule")
 }
 
 def getDeviceData(devId) {
-    //log.trace "getDeviceData($devId)..."
+    LOG("getDeviceData($devId)...", 5, "trace")
     def result = _httpGet("device_with_current_schedule/${devId}")
-   // log.trace "getDeviceData: ${result}"
+    LOG("getDeviceData: ${result}", 5, "trace")
     return result
 }
 
 def getDeviceState(devId) {
-    //log.trace "getDeviceState($devId)..."
+    LOG("getDeviceState($devId)...", 5, "trace")
     def result = _httpGet("device/getDeviceState/${devId}", "closed")
-  //  log.trace "getDeviceState: ${result}"
+    LOG("getDeviceState: ${result}", 5, "trace")
     return result
 }
 
 // Gets location id for device
 def getDeviceDetails(devId) {
-    //log.trace "getDeviceDetails($devId)..."
+    LOG("getDeviceDetails($devId)...", 5, "trace")
     def result = _httpGet("device/getDeviceDetails/${devId}", "closed")
-  //  log.trace "getDeviceDetails: ${result}"
+    LOG("getDeviceDetails: ${result}", 5, "trace")
     return result
 }
 
 def getZoneDetails(devId) {
-    //log.trace "getZoneDetails($devId)..."
+    LOG("getZoneDetails($devId)...", 5, "trace")
     def result = _httpGet("device/listZones/${devId}", "closed")
-  //  log.trace "getZoneDetails: ${result}"
+    LOG("getZoneDetails: ${result}", 5, "trace")
     return result
 }
 
 def getDevicePastEvents(devId, start_time, end_time) {
     // start_time and end_time are Date objects
-    //log.trace "getDeviceEvents($devId)..."
+    LOG("getDeviceEvents($devId)...", 5, "trace")
     def result = _httpGet("device/${devId}/event?startTime=${start_time.getTime()}&endTime=${end_time.getTime()}", "open")
-  //  log.trace "getDeviceEvents: ${result}"
+    LOG("getDeviceEvents: ${result}", 5, "trace")
     return result
 }
 
 def getDeviceFutureEvents(devId, end_time) {
     // end_time is a Date object
-   // log.trace "getDeviceUpcomingEvents(${devId})..."
+    LOG( "getDeviceUpcomingEvents(${devId})...", 5, "trace")
     def jsonData = new JsonBuilder("device_id":devId, "hours_ahead":GetHoursUntilDate(end_time))
     def result = sendJsonGetResponse("events/upcoming", jsonData?.toString(), "closed", "post")
-   // log.trace "Upcoming Events: ${result})"
+    LOG("Upcoming Events: ${result})", 5, "trace")
     return result
 }
 
 
 def getDeviceNextEvent(devId) {
-    //log.trace "getDeviceNextEvent(${devId})..."
+    LOG("getDeviceNextEvent(${devId})...", 5, "trace")
     def jsonData = new JsonBuilder("device_id":devId)
     def result = sendJsonGetResponse("events/next", jsonData?.toString(), "closed", "post")
-   // log.trace "Next Event: ${result})"
+     LOG("Next Event: ${result})", 5, "trace")
     return result
 }
 
 def getDeviceAlerts(devId) {
-    //log.trace "getDeviceAlerts(${devId})..."
+    LOG("getDeviceAlerts(${devId})...", 5, "trace")
     def jsonData = new JsonBuilder("device_id":devId)
     def result = sendJsonGetResponse("device/getActiveAlerts", jsonData?.toString(), "closed", "post")
-    //log.trace "Active Alerts: ${result})"
+    LOG("Active Alerts: ${result})", 5, "trace")
     return result
 }
 
 def getDeviceWateringSummary(devId, start_date, end_date) {
     // start_date and end_date are Date objects
-    if (debugLogging) { log.debug "getDeviceWateringSummary(${devId})..." }
+    LOG("getDeviceWateringSummary(${devId})...", 3, "debug")
     def jsonData = new JsonBuilder("device_id":devId, "start_date":getDateMap(start_date), "end_date":getDateMap(end_date))
     def result = sendJsonGetResponse("events/getWateringSummaryByInterval", jsonData?.toString(), "closed", "put")
-    if (debugLogging) { log.debug "Watering Summary: ${result})" }
+    LOG("Watering Summary: ${result})", 3, "debug")
     return result
 }
 
 def getCalendar(locId, start_time, end_time) {
     // start_date and end_date are Date objects
-    //log.trace "getCalendar(${locId})..."
+    LOG("getCalendar(${locId})...", 5, "trace")
     def jsonData = new JsonBuilder("location_id":locId, "start_time":formatDateToUtc(start_time), "end_time":formatDateToUtc(end_time))
     def result = sendJsonGetResponse("location/getCalendarForTimeRange", jsonData?.toString(), "closed", "post")
-    //log.trace "Calendar: ${result})"
+    LOG("Calendar: ${result})", 5, "trace")
     return result
 }
 
 def getWeather(locId, start_date, end_date) {
     // start_date and end_date are Date objects
-    //log.trace "getWeather(${locId})..."
+    LOG("getWeather(${locId})...", 5, "trace")
     def jsonData = new JsonBuilder("location_id":locId, "start_date":getDateMap(start_date), "end_date":getDateMap(end_date))
     def result = sendJsonGetResponse("location/getWeatherByLocation", jsonData?.toString(), "closed", "post")
-    //log.trace "Weather: ${result})"
+    LOG("Weather: ${result})", 5, "trace")
     return result
 }
 
@@ -942,7 +955,7 @@ def setDashboard(deviceId) {
 }
 
 def addRemoveDevices(uninst=false) {
-    //log.trace "addRemoveDevices($uninst)..."
+    LOG("addRemoveDevices($uninst)...", 5, "trace")
     try {
         def delete = []
         if(uninst == false) {
@@ -965,9 +978,9 @@ def addRemoveDevices(uninst=false) {
                     dashboard += '</table>'
                     d.sendEvent(name: 'dashboard', value: dashboard, displayed: true, isStateChange: true)
                  //   d.completedSetup = true
-                    log.info "Controller Device Created: (${d?.displayName}) with id: [${contDev?.key}]"
+                    LOG("Controller Device Created: (${d?.displayName}) with id: [${contDev?.key}]", 4, "info")
                 } else {
-                    if (debugLogging) { log.debug "found ${d?.displayName} with dni: ${dni?.key} already exists" }
+                    LOG("found ${d?.displayName} with dni: ${dni?.key} already exists", 3, "debug")
                 }
                 devsInUse += contDev.key
                 contDev?.value?.zones?.each { zoneDni ->
@@ -976,38 +989,38 @@ def addRemoveDevices(uninst=false) {
                     if(!d2) {
                         d2 = addChildDevice("lnjustin", getChildZoneName(), zoneDni?.key, null, [label: getDeviceLabelStr(zoneDni?.value), completedSetup: true])
                       //  d2.completedSetup = true
-                        log.info "Zone Device Created: (${d2?.displayName}) with id: [${zoneDni?.key}]"
+                        LOG("Zone Device Created: (${d2?.displayName}) with id: [${zoneDni?.key}]", 4, "info")
                     } else {
-                        if (debugLogging) { log.debug "found ${d2?.displayName} with dni: ${zoneDni?.key} already exists" }
+                        LOG("found ${d2?.displayName} with dni: ${zoneDni?.key} already exists", 3, "debug")
                     }
                     devsInUse += zoneDni?.key
                 }
             }
-            if (debugLogging) { log.debug "devicesInUse: ${devsInUse}" }
+            LOG("devicesInUse: ${devsInUse}", 3, "debug")
             delete = app.getChildDevices().findAll { !(it?.deviceNetworkId in devsInUse) }
         } else {
             atomicState?.selectedDevices = []
             delete = app.getChildDevices()
         }
         if(delete?.size() > 0) {
-            log.warn "Device Delete: ${delete} | Removing (${delete?.size()}) Devices..."
+            LOG("Device Delete: ${delete} | Removing (${delete?.size()}) Devices...", 1, "warn")
             delete?.each {
                 cleanupObjects(it?.deviceNetworkId)
                 deleteChildDevice(it?.deviceNetworkId)
-                log.warn "Deleted the Device: ${it?.displayName}"
+                LOG("Deleted the Device: ${it?.displayName}"1, "warn")
             }
         }
         return true
     } catch (ex) {
         if(ex instanceof hubitat.exception.ConflictException) {
             def msg = "Error: Can't Delete App because Devices are still in use in other Apps, Routines, or Rules.  Please double check before trying again."
-            log.warn "addRemoveDevices Exception | $msg"
+            LOG("addRemoveDevices Exception | $msg", 1, "warn")
         }
    /*     else if(ex instanceof hubitat.app.exception.UnknownDeviceTypeException) {
             def msg = "Error: Device Handlers are likely Missing or Not Published.  Please verify all device handlers are present before continuing."
             log.warn "addRemoveDevices Exception | $msg"
         }
-   */     else { log.error "addRemoveDevices Exception: ${ex}" }
+   */     else { LOG("addRemoveDevices Exception: ${ex}", 1, "error") }
         return false
     }
 }
@@ -1025,8 +1038,8 @@ def getTimeSinceInSeconds(time) {
 def rachioReceiveHandler() {
     def reqData = request.JSON
     if(reqData?.size() || reqData == [:]) {
-        // log.trace "eventDatas: ${reqData?.summary}"
-       // log.trace "Rachio Device Event | Summary: (${reqData?.summary}) | Requesting Latest Data from API | DeviceID: ${reqData?.deviceId}"
+       LOG("eventDatas: ${reqData?.summary}", 5, "trace")
+       LOG("Rachio Device Event | Summary: (${reqData?.summary}) | Requesting Latest Data from API | DeviceID: ${reqData?.deviceId}", 3, "debug")
         if(reqData?.deviceId) {
             def dev = getChildDevice(reqData?.deviceId)
             poll(dev, "api")
@@ -1039,10 +1052,10 @@ def rachioReceiveHandler() {
 void poll(child=null, type=null) {
     def lastPollSec = getTimeSinceInSeconds(atomicState?.lastPollDt)
     if(child && !type) { type = "device" }
-    log.info "${app.label} -- Polling API for Latest Data -- Last Update was ($lastPollSec seconds ago)${type ? " | Reason: [$type]" : ""}"
+    LOG("${app.label} -- Polling API for Latest Data -- Last Update was ($lastPollSec seconds ago)${type ? " | Reason: [$type]" : ""}", 5, "trace")
     if(lastPollSec < 2) {
         runIn(3, "poll", [overwrite: true])
-        //log.warn "Delaying poll... It's too soon to request new data"
+        LOG("Delaying poll... It's too soon to request new data", 3, "debug")
         return
     }
     def selectedDevices = atomicState?.selectedDevices
@@ -1070,7 +1083,7 @@ void poll(child=null, type=null) {
             }
         }
     }
-   // log.info "Updating (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices..."
+    LOG("Updating (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices...", 4, "info")
     atomicState?.lastPollDt = now()
 }
 
@@ -1081,7 +1094,7 @@ def pollChild(child, devData, devDetails, devState, devZoneDetails, devMonthlyWa
 }
 
 def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent) {
-    if (debugLogging) { log.debug "updating child device ${childDev} with device data ${devData}" }
+    LOG("updating child device ${childDev} with device data ${devData}", 3, "debug")
     try {
         if(childDev && devData) {
             String dni = childDev?.device?.deviceNetworkId
@@ -1102,17 +1115,17 @@ def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMon
             selectedDevices?.each { contDev ->
                 if(dni == contDev?.key) {
                     updateStandbyItem(dni, inStandby)
-                    // log.debug "schedRunning: ${schedRunning} | isWatering: ${isWatering()}"
+                    LOG("schedRunning: ${schedRunning} | isWatering: ${isWatering()}", 3, "debug")
                     
                     def controllerWebhookIDs = getWebhookIdsForDev(contDev?.key)
-                    if (debugLogging) { log.debug "Webhook IDs for controller ${contDev?.key} include: ${controllerWebhookIDs}" }
+                    LOG("Webhook IDs for controller ${contDev?.key} include: ${controllerWebhookIDs}", 3, "debug")
                     if (isWatering() && !schedRunning) {
                         handleWateringSched(dni, false)
                     }
                     def newLabel = getDeviceLabelStr(devData?.name).toString()
                     if(devLabel != newLabel) {
                         childDev?.label = newLabel
-                        log.info "Controller Label has changed from (${devLabel}) to [${newLabel}]"
+                        LOG("Controller Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
                     }
 
                     data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails, wateringSummaryData: devMonthlyWateringSummary, nextEvent: devNextEvent]
@@ -1124,7 +1137,7 @@ def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMon
                             def newLabel = getDeviceLabelStr(zone?.value).toString()
                             if(devLabel != newLabel) {
                                 childDev?.label = newLabel
-                                log.info "Zone Label has changed from (${devLabel}) to [${newLabel}]"
+                                LOG("Zone Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
                             }
                             data = [data: zoneData, schedData: schedData, devId: contDev?.key, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: zoneState]
                         }
@@ -1135,26 +1148,26 @@ def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMon
                 childDev?.generateEvent(data)
                 childDev?.sendEvent(name: "DeviceWatch-DeviceStatus", value: onlStatus, displayed: false)
             }
-        } else { log.warn "pollChildren cannot update children because it is missing the required parameters..." }
+        } else { LOG("pollChildren cannot update children because it is missing the required parameters...", 1, "warn")
         
     } catch (e) {
-        log.error "exception polling children: ${e}"
+        LOG("exception polling children: ${e}", 1, "error")
     }
     return result
 }
 
 void setWateringDeviceState(devId, val) {
-    // log.trace "setWateringDeviceState($devId, $val)"
+    LOG("setWateringDeviceState($devId, $val)", 5, "trace")
     updateWateringItem(devId, val)
 }
 
 void handleWateringSched(devId, val=false) {
-    // log.trace "handleWateringSched($devId, $val)"
+    LOG("handleWateringSched($devId, $val)", 5, "trace")
     if(val == true) {
-      //  log.trace "Watering is Active... Scheduling poll for every 1 minute"
+        LOG("Watering is Active... Scheduling poll for every 1 minute", 5, "trace")
         runEvery1Minute("poll")
     } else {
-      //  log.trace "Watering has finished... 1 minute Poll has been unscheduled"
+        LOG("Watering has finished... 1 minute Poll has been unscheduled", 5, "trace")
         unschedule("poll")
         runIn(60, "poll") // This is here just to make sure that the schedule actually stopped and that the data is really current.
     }
@@ -1174,7 +1187,7 @@ def findZoneState(zoneId, zoneDetails) {
         if (zone) {
             if (zone.zoneState != null) {
                 zoneState = zone.zoneState
-               // log.trace("Found Zone State: ${zoneState}")
+                LOG("Found Zone State: ${zoneState}", 5, "trace")
                 return zoneState
             }
         }
@@ -1189,7 +1202,7 @@ def setValue(child, deviceId, newValue) {
 }
 
 def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
-    //log.trace "Sending: ${jsonBody}"
+    LOG("Sending: ${jsonBody}", 5, "trace")
     def returnStatus = false
     
     def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
@@ -1202,7 +1215,7 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
 
     try{
         if(!standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
-            if (debugLogging) { log.debug "Skipping this command while controller is in 'Standby Mode'..." }
+            LOG("Skipping this command while controller is in 'Standby Mode'...", 3, "debug")
             return true
         }
 
@@ -1214,22 +1227,22 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
             } else {
                 //refresh the auth token
                 if (resp.status == 401) {
-                    if (debugLogging) { log.debug "Refreshing your authToken!" }
+                    LOG("Refreshing your authToken!", 3, "debug")
                     // refreshAuthToken()
                 } else {
-                    log.error "Authentication error, invalid authentication method, lack of credentials, etc."
+                    LOG("Authentication error, invalid authentication method, lack of credentials, etc.", 1, "error")
                 }
             }
 
         }
     } catch(Exception e) {
-        log.error "sendJson Exception Error: ${e}"
+        LOG("sendJson Exception Error: ${e}", 1, "error")
     }
     return returnStatus
 }
 
 def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
-   // log.trace "Send JSON With Response: ${jsonBody}"
+    LOG("Send JSON With Response: ${jsonBody}", 5, "trace")
     def returnStatus = false
     def returnData = null
     def response = null
@@ -1262,16 +1275,16 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
             } else {
                 //refresh the auth token
                 if (response?.status == 401) {
-                    if (debugLogging) { log.debug "Refreshing your authToken!" }
+                    LOG("Refreshing your authToken!", 3, "debug")
                     // refreshAuthToken()
                 } else {
-                    log.error "Response status: ${response?.status} - Authentication error, invalid authentication method, lack of credentials, etc."
+                    LOG("Response status: ${response?.status} - Authentication error, invalid authentication method, lack of credentials, etc.", 1, "error")
                 }
             }
 
         } else { return returnStatus }
     } catch(Exception e) {
-        log.error "sendJsonGetResponse Exception Error: ${e}"
+        LOG("sendJsonGetResponse Exception Error: ${e}", 1, "error")
     }
     return returnData
 }
@@ -1294,7 +1307,7 @@ def formatDt(dt) {
     def tf = new SimpleDateFormat("MMM d, yyyy - h:mm:ss a")
     if(location?.timeZone) { tf?.setTimeZone(location?.timeZone) }
     else {
-        log.warn "Hubitat TimeZone is not found or is not set... Please Try to open your Hubitat location and Press Save..."
+        LOG("Hubitat TimeZone is not found or is not set... Please Try to open your Hubitat location and Press Save...", 1, "warn")
         return null
     }
     return tf.format(dt)
@@ -1317,10 +1330,10 @@ def GetTimeValDiff(timeVal) {
         def start = new Date(timeVal).getTime()
         def now = new Date().getTime()
         def diff = (int) (long) (now - start) / 1000
-        //log.debug "diff: $diff"
+        LOG("diff: $diff", 3, "debug")
         return diff
     } catch (ex) {
-        log.error "GetTimeValDiff Exception: ${ex}"
+        LOG("GetTimeValDiff Exception: ${ex}", 1, "error")
         return 1000
     }
 }
@@ -1333,7 +1346,7 @@ def GetHoursUntilDate(futureDate) {
         def difference = futureDate.getTime() - currentTime.getTime()
         return Math.round(difference/3600000)
     } catch (ex) {
-        log.error "GetTimeValDiffHours Exception: ${ex}"
+        LOG("GetTimeValDiffHours Exception: ${ex}", 1, "error")
         return 1000
     }
 }
@@ -1344,7 +1357,7 @@ def formatDateToUtc(date) {
   //  if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
        
     def formattedDate = outFormat.format(date)
-   // log.trace "formatted date = ${formattedDate}"
+    LOG("formatted date = ${formattedDate}", 5, "trace")
 	return formattedDate
 }
 
@@ -1368,7 +1381,7 @@ def getMonthEnd() {
     calendar.set(date[Calendar.YEAR], date[Calendar.MONTH], date[Calendar.DATE])
     def lastDayOfMonth = calendar.getActualMaximum(GregorianCalendar.DAY_OF_MONTH)
     def monthEnd = date.copyWith(date: lastDayOfMonth, hourOfDay: 23, minute: 59, second: 59)
-  //  log.trace "last day of month: ${monthEnd}"
+    LOG("last day of month: ${monthEnd}", 5, "trace")
     return monthEnd
 }
 
@@ -1413,7 +1426,7 @@ def sendActivityFeeds(notificationMessage) {
 }
 
 def standbyOn(child, deviceId) {
-    if (debugLogging) { log.debug "standbyOn() command received from ${child?.device?.displayName}" }
+    LOG("standbyOn() command received from ${child?.device?.displayName}", 3, "debug")
     if(deviceId) {
         def jsonData = new JsonBuilder("id":deviceId)
         def res = sendJson("device/off", jsonData.toString(), deviceId, true)
@@ -1424,7 +1437,7 @@ def standbyOn(child, deviceId) {
 }
 
 def standbyOff(child, deviceId) {
-    if (debugLogging) { log.debug "standbyOff() command received from ${child?.device?.displayName}" }
+    LOG("standbyOff() command received from ${child?.device?.displayName}", 3, "debug")
     if(deviceId) {
         def jsonData = new JsonBuilder("id":deviceId)
         def res = sendJson("device/on", jsonData.toString(), deviceId, true)
@@ -1435,11 +1448,11 @@ def standbyOff(child, deviceId) {
 }
 
 def on(child, deviceId) {
-    //log.trace "App on()..."
+    LOG("App on()...", 5, "trace")
 }
 
 def off(child, deviceId) {
-    //log.trace "Received off() command from (${child?.device?.displayName})..."
+    LOG("Received off() command from (${child?.device?.displayName})...", 5, "trace")
     // child?.log("Stop Watering - Received from (${child?.device.displayName})")
     if(deviceId) {
         def jsonData = new JsonBuilder("id":deviceId)
@@ -1464,7 +1477,7 @@ def setRainDelay(child, deviceId, delayVal) {
 }
 
 def isWatering(devId) {
-    //log.debug "isWatering()..."
+    LOG("isWatering()...", 5, "trace")
     def res = _httpGet("device/${devId}/current_schedule");
     def result = (res && res?.status) ? true : false
     return result
@@ -1480,7 +1493,7 @@ def getControlLblById(id) {
 }
 
 def getCurrentRainDelay(res) {
-    if (debugLogging) { log.debug "getCurrentRainDelay with input ${res}" }
+    LOG("getCurrentRainDelay with input ${res}", 5, "trace")
     // convert to configured rain delay to days.
     def ret =  (res?.rainDelayExpirationDate && res?.rainDelayStartDate) ? (res?.rainDelayExpirationDate - res?.rainDelayStartDate)/(26*60*60*1000) : 0
     def value = (long) Math.floor(ret + 0.5d)
@@ -1490,21 +1503,21 @@ def getCurrentRainDelay(res) {
 def startZone(child, deviceId, zoneNum, mins) {
     def res = false
     def ctrlLbl = getControlLblById(deviceId)
-    if (debugLogging) { log.debug "Starting to Water on ${ctrlLbl ? "$ctrlLbl: " : ""}(ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})" }
+    LOG("Starting to Water on ${ctrlLbl ? "$ctrlLbl: " : ""}(ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})", 3, "debug")
     //child?.log("Starting to water on (ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})...")
     def zoneId = child?.device?.deviceNetworkId
     if (zoneId && zoneNum && mins) {
         def duration = mins.toInteger() * 60
         def jsonData = new JsonBuilder("id":zoneId, "duration":duration)
-        //log.debug "startZone jsonData: ${jsonData}"
+        LOG("startZone jsonData: ${jsonData}", 3, "debug")
         res = sendJson("zone/start", jsonData?.toString(), deviceId)
-    } else { log.error "startZone Missing ZoneId or duration... ${zoneId} | ${mins}" }
+    } else { LOG("startZone Missing ZoneId or duration... ${zoneId} | ${mins}", 1, "error")
     return res
 }
 
 def runAllZones(child, deviceId, mins) {
     def res = false
-    //log.trace "runAllZones(ZoneName: ${child?.device?.displayName}, Duration: ${mins})..."
+    LOG("runAllZones(ZoneName: ${child?.device?.displayName}, Duration: ${mins})...", 5, "trace")
     //child?.log("runAllZones(ZoneName: ${child?.device?.displayName} | Duration: ${mins})")
     def selectedDevices = atomicState?.selectedDevices ?: [:]
     if (deviceId && selectedDevices[deviceId] && selectedDevices[deviceId]?.zones && mins) {
@@ -1518,13 +1531,13 @@ def runAllZones(child, deviceId, mins) {
         def jsonData = new JsonBuilder("zones":zoneData)
         //child?.log("runAllZones  jsonData: ${jsonData}")
         res = sendJson("zone/start_multiple", jsonData?.toString(), deviceId)
-    } else { log.error "runAllZones Missing ZoneIds or Duration... ${selectedDevices[deviceId]?.zones} | ${mins}" }
+    } else { LOG("runAllZones Missing ZoneIds or Duration... ${selectedDevices[deviceId]?.zones} | ${mins}", 1, "error")
     return res
 }
 
 // TO DO: update this method with the latest API that includes pause zone
 def pauseScheduleRun(child) {
-    //log.trace "pauseScheduleRun..."
+    LOG("pauseScheduleRun...", 5, "trace")
     def schedData = getCurSchedule(atomicState?.deviceId)
     def schedRuleData = getScheduleRuleInfo(schedData?.scheduleRuleId)
     child?.log "schedRuleData: $schedRuleData"
@@ -1556,7 +1569,7 @@ def resumeZoneRun(child, devId) {
 
 //Required by child devices
 def getZones(device) {
-   // log.trace "getZones(${device.label})..."
+    LOG("getZones(${device.label})...", 5, "trace")
     def res = _httpGet("device/${device?.deviceNetworkId}")
     return !res ? null : res?.zones
 }
@@ -1619,7 +1632,7 @@ def buildDashboard() {
     Integer columnWidth = 64 + extraHorizontalSpaceSetting
     Integer numDays = 1 + numPastDaysDashboardSetting + numFutureDaysDashboardSetting
     Integer svgWidth = columnWidth * numDays
-    if (debugLogging) { log.debug("Column Width = ${columnWidth}. numDays = ${numDays}. svgWidth = ${svgWidth}") }
+    LOG("Column Width = ${columnWidth}. numDays = ${numDays}. svgWidth = ${svgWidth}", 3, "debug")
     svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="100%" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 140"  xml:space="preserve">'
     
     svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropAccent{fill:' + colorScheme.rainDropAccentColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:' + colorScheme.skipStrikethroughColor + '} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip0{fill:' + colorScheme.freezeSkip0Color + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:10px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style> <defs> <linearGradient id="bicolored"> <stop offset="50%" stop-color="' + colorScheme.highTempTextColor + '"/> <stop offset="50%" stop-color="' + colorScheme.lowTempTextColor + '"/> </linearGradient> </defs>'
@@ -1646,7 +1659,7 @@ def buildDashboard() {
         def dayLabel = ""
 
         def weather = weatherData?.find { it?.date == dateMap }
-        if (debugLogging) { log.debug "Weather is: ${weather}" }
+        LOG("Weather is: ${weather}", 3, "debug")
         def precipPercent = (weather.precipProbability > 0) ? ((int) (weather.precipProbability * 100)).toString() + "%" : ""
         def precipAmount = (weather.calculatedPrecip > 0) ? weather.calculatedPrecip + "\"" : ""
         def highTemp = weather.temperatureMax
@@ -1654,14 +1667,14 @@ def buildDashboard() {
         def weatherIconText = weather.weatherType
         def weatherIcon = null
         
-        if (debugLogging) { log.debug "Weather icon text for ${dayLabel} is ${weatherIconText}" }
+        LOG("Weather icon text for ${dayLabel} is ${weatherIconText}", 3, "debug")
         
         weatherIcon = getWeatherIcon(weatherIconText)
 
         def pastEvents = pastEventsData?.findAll { getDateMap(new Date(it?.eventDate)) == dateMap }
-        if (debugLogging) { log.debug "Past Events are: ${pastEvents}" }
+        LOG("Past Events are: ${pastEvents}", 3, "debug")
         def futureEvents = futureEventsData?.findAll { getDateMap(getDateObjectFromUTCDt(it?.timestamp)) == dateMap }
-        if (debugLogging) { log.debug "Future Events are: ${futureEvents}" }
+        LOG("Future Events are: ${futureEvents}", 3, "debug")
         
         def irrigationIcon = getIrrigationIcon(pastEvents, futureEvents, rainSensorState)
         
@@ -1896,7 +1909,7 @@ def getColorScheme(schemeSelection) {
     else if (schemeSelection == "Custom") {
         return [cloudColor: cloudColorCustom, lightColor: lightColorCustom, precipColor: precipColorCustom, rainDropWateringColor: rainDropWateringColorCustom, rainDropAccentColor: rainDropAccentColorCustom, rainDropSkipColor:rainDropSkipColorCustom, skipStrikethroughColor: skipStrikethroughColorCustom, saturatedSoilColor: saturatedSoilColorCustom, rainDropsPredictedColor: rainDropsPredictedColorCustom, freezeSkip0Color: freezeSkip0ColorCustom, freezeSkip1Color: freezeSkip1ColorCustom, windSkipColor: windSkipColorCustom, rainSensorSkipColor: rainSensorSkipColorCustom, strokeColor: strokeColorCustom, dayTextColor: dayTextColorCustom, precipTextColor: precipTextColorCustom, highTempTextColor: highTempTextColorCustom, lowTempTextColor: lowTempTextColorCustom]  
     }
-    if (debugLogging) { log.debug("Error getting color scheme") }
+    LOG("Error getting color scheme", 3, "debug")
     return
 }
 
@@ -1938,6 +1951,33 @@ def getInterface(type, txt="", link="") {
     }
 } 
 
+@Field static final List<String> lLOGTYPES =	['error', 'debug', 'info', 'trace', 'warn']
+
+void LOG(String message, Integer level=3, String logType="debug") {
+    String dbg=settings.debugLevel == null ? "2" : settings.debugLevel
+	Integer dbgLevel = dbg.toInteger()
+	if (logType == "error") {
+		String a=getTimestamp()
+		state.lastLOGerror="${message} @ "+a
+		state.LastLOGerrorDate=a
+	} else {
+		if(level > dbgLevel) return
+	}
+
+	if(!lLOGTYPES.contains(logType)){
+		logerror("LOG() - Received logType (${logType}) which is not in the list of allowed types ${lLOGTYPES}, message: ${message}, level: ${level}")
+		logType="debug"
+	}
+    if (logType == "debug") log.debug(message)
+    else if (logType == "error") log.error(message)
+    else if (logType == "info") log.info(message)
+    else if (logType == "trade") log.trace(message)
+    else if (logType == "warn") log.warn(message)
+}
+
+static String getTimestamp(){
+	return new Date().format("yyyy-MM-dd HH:mm:ss z")
+}
 
 // Filled icons
 chanceflurries = '<g transform="scale(2) translate(0,0)" id="chanceflurries"><path style="stroke-width:0.999998" class="light" d="m 17.779297,1.5312153 c -0.24,0 -0.439375,0.08977 -0.609375,0.259766 -0.17,0.17 -0.25,0.369609 -0.25,0.599609 v 2.041016 c 0,0.23 0.09977,0.430078 0.259766,0.580078 0.16,0.15 0.369609,0.230469 0.599609,0.230469 0.23,0 0.429609,-0.07047 0.599609,-0.230469 0.17,-0.16 0.25,-0.350078 0.25,-0.580078 v -2.050781 c 0,-0.23 -0.08,-0.42961 -0.25,-0.59961 -0.17,-0.17 -0.359609,-0.25 -0.599609,-0.25 z m -6.90039,2.84961 c -0.23,0 -0.438672,0.08 -0.638672,0.25 -0.15,0.18 -0.230469,0.381328 -0.230469,0.611328 0,0.24 0.08023,0.449375 0.240235,0.609375 l 1.458984,1.429688 c 0.15,0.16 0.349844,0.240234 0.589844,0.240234 0.24,0 0.439609,-0.08023 0.599609,-0.240234 0.16,-0.160001 0.240234,-0.35961 0.240234,-0.59961 0,-0.24 -0.08023,-0.439844 -0.240234,-0.589844 L 11.46875,4.6210593 c -0.17,-0.16 -0.369843,-0.240234 -0.589843,-0.240234 z m 13.800781,0.0098 c -0.22,0 -0.419844,0.08023 -0.589844,0.240234 l -1.419922,1.470703 c -0.15,0.14 -0.230469,0.339844 -0.230469,0.589844 0,0.24 0.08047,0.439609 0.230469,0.59961 0.15,0.16 0.328594,0.240234 0.558594,0.240234 0.22,0 0.421562,-0.08023 0.601562,-0.240234 l 1.458985,-1.429688 c 0.16,-0.16 0.240234,-0.369141 0.240234,-0.619141 0,-0.23 -0.08,-0.431562 -0.25,-0.601562 -0.16,-0.17 -0.359609,-0.25 -0.599609,-0.25 z m -6.910157,2.550781 c -0.93,0 -1.789609,0.229219 -2.599609,0.699219 -0.81,0.47 -1.440156,1.110156 -1.910156,1.910156 -0.47,0.7999997 -0.701172,1.6696097 -0.701172,2.5996097 0,0.94 0.241406,1.811093 0.691406,2.621091 0.47,0.800001 1.098438,1.43039 1.898438,1.900391 0.8,0.47 1.671328,0.69922 2.611328,0.69922 0.94,0 1.809375,-0.22922 2.609375,-0.69922 0.8,-0.47 1.43039,-1.100391 1.90039,-1.900391 0.47,-0.8 0.699219,-1.669375 0.699219,-2.609375 0,-0.699998 -0.140156,-1.381482 -0.410156,-2.021482 -0.27,-0.6399997 -0.639375,-1.1901557 -1.109375,-1.6601557 -0.46,-0.47 -1.020156,-0.839141 -1.660156,-1.119141 -0.65,-0.28 -1.319532,-0.419922 -2.019532,-0.419922 z M 8.000035,11.291016 c -0.22,0 -0.431563,0.08023 -0.601563,0.240233 -0.17,0.17 -0.25,0.379142 -0.25,0.619142 0,0.24 0.09172,0.441329 0.261719,0.611328 0.17,0.17 0.369609,0.25 0.599609,0.25 h 2.039063 c 0.23,0 0.430078,-0.08 0.580078,-0.25 0.15,-0.169999 0.220703,-0.371328 0.220703,-0.611328 0,-0.24 -0.08047,-0.439375 -0.230469,-0.609375 -0.16,-0.17 -0.350078,-0.25 -0.580078,-0.25 z m 17.509765,0 c -0.22,0 -0.410313,0.08023 -0.570313,0.240233 -0.16,0.18 -0.240234,0.379142 -0.240234,0.619142 0,0.24 0.08047,0.431562 0.230469,0.601562 0.15,0.17 0.350078,0.25 0.580078,0.25 h 2.019531 c 0.23,0 0.429609,-0.08 0.599609,-0.25 0.17,-0.17 0.259766,-0.371563 0.259766,-0.601562 0,-0.23 -0.08977,-0.42961 -0.259766,-0.59961 -0.17,-0.17 -0.369609,-0.259765 -0.599609,-0.259765 z m -13.210971,5.519526 c -0.24,0 -0.439844,0.07047 -0.589844,0.230467 l -1.46875,1.429689 c -0.15,0.18 -0.230469,0.381327 -0.230469,0.611328 0,0.229999 0.08023,0.429844 0.240235,0.589844 0.409999,0.32 0.818515,0.32 1.228515,0 l 1.419922,-1.419952 c 0.16,-0.18 0.240234,-0.400627 0.240234,-0.640625 0,-0.229998 -0.08023,-0.42031 -0.240234,-0.570314 -0.16,-0.149998 -0.359609,-0.230467 -0.599609,-0.230467 z m 10.929687,0.0098 c -0.22,3e-6 -0.408594,0.07047 -0.558594,0.230469 -0.15,0.140002 -0.230469,0.330547 -0.230469,0.560547 0,0.260001 0.08047,0.470394 0.230469,0.650394 l 1.419922,1.41992 c 0.4,0.31 0.799219,0.31 1.199219,0 0.16,-0.16 0.240234,-0.359844 0.240234,-0.589844 0,-0.23 -0.08023,-0.441328 -0.240234,-0.611328 l -1.458985,-1.429718 c -0.16,-0.15 -0.361562,-0.230469 -0.601562,-0.23047 z" id="path2" /><path id="path849" d="M 11.160157,8 C 9.750156,8 8.509688,8.440547 7.429688,9.310547 c -1.08,0.87 -1.780078,1.989609 -2.080078,3.349609 -1.12,0.26 -2.028282,0.830469 -2.738282,1.730469 -0.71,0.9 -1.070312,1.920313 -1.070312,3.070313 0,0.9 0.220156,1.730234 0.660156,2.490234 C 2.641172,20.711172 3.24,21.31 4,21.75 c 0.76,0.44 1.580703,0.660156 2.470703,0.660156 h 10.830078 c 0.890002,0 1.720469,-0.220156 2.480469,-0.660156 0.76,-0.44 1.368594,-1.038828 1.808594,-1.798828 0.44,-0.76 0.669922,-1.590234 0.669922,-2.490234 0,-0.595125 -0.129762,-1.19868 -0.357422,-1.802735 -0.289942,-0.712862 -0.55802,-1.154541 -1.279297,-1.796875 -0.936402,-0.857226 -2.037123,-1.300781 -3.322266,-1.300781 h -0.320312 c -0.180857,-0.788537 -0.529944,-1.518006 -1.039062,-2.191406 -0.02329,-0.03076 -0.04472,-0.06579 -0.06836,-0.0957 -0.0015,-0.0019 -0.0024,-0.004 -0.0039,-0.0059 C 15.754214,10.121576 15.619138,9.984247 15.488281,9.84375 14.818229,9.160538 14.039562,8.724549 13.203125,8.353516 12.590468,8.119718 11.910966,8 11.160157,8 Z" class="cloud" /><path class="frozenPrecip" d="m 11.919922,19.021485 c -0.23,0 -0.420078,0.07828 -0.580078,0.238281 -0.16,0.16 -0.240235,0.371562 -0.240235,0.601562 0,0.23 0.08024,0.420078 0.240235,0.580078 0.16,0.16 0.360078,0.238282 0.580078,0.238282 0.24,0 0.439609,-0.07828 0.599609,-0.238282 0.17,-0.16 0.25,-0.351796 0.25,-0.591797 0,-0.23 -0.08,-0.429843 -0.25,-0.589843 -0.17,-0.16 -0.369609,-0.238282 -0.599609,-0.238281 z M 8.75,20.720703 c -0.2300001,0 -0.4298436,0.08023 -0.5898439,0.240235 -0.16,0.16 -0.2402343,0.360078 -0.2402343,0.580078 0,0.24 0.080234,0.439375 0.2402343,0.609375 0.1600003,0.17 0.3498438,0.25 0.5898439,0.25 0.23,0 0.4298435,-0.08 0.5898438,-0.25 0.16,-0.17 0.2402342,-0.369375 0.2402342,-0.609375 0,-0.23 -0.080234,-0.420078 -0.2402342,-0.580078 C 9.1798435,20.800938 8.99,20.720703 8.75,20.720703 Z m 6.400391,0 c -0.24,0 -0.429844,0.08023 -0.589844,0.240235 -0.16,0.16 -0.240234,0.360078 -0.240235,0.580078 0,0.24 0.08024,0.439375 0.240235,0.609375 0.16,0.17 0.359844,0.25 0.589844,0.25 0.23,0 0.429843,-0.08 0.589843,-0.25 0.16,-0.17 0.240235,-0.369375 0.240235,-0.609375 0,-0.23 -0.08024,-0.420078 -0.240235,-0.580078 -0.16,-0.16 -0.349843,-0.240235 -0.589843,-0.240235 z m -3.230469,1.890625 c -0.23,0 -0.420078,0.08 -0.580078,0.25 -0.16,0.17 -0.240235,0.36961 -0.240235,0.59961 0,0.22 0.08024,0.419609 0.240235,0.599609 0.16,0.16 0.360078,0.240234 0.580078,0.240234 0.24,0 0.439609,-0.08023 0.599609,-0.240234 0.16,-0.16 0.25,-0.359609 0.25,-0.599609 0,-0.23 -0.08,-0.42961 -0.25,-0.59961 -0.17,-0.17 -0.369609,-0.25 -0.599609,-0.25 z m -3.1894532,1.738281 c -0.2300001,0 -0.4298438,0.08047 -0.5898438,0.230469 -0.1400001,0.15 -0.2207032,0.349844 -0.2207032,0.589844 0,0.21 0.080234,0.400313 0.2402343,0.570313 0.18,0.16 0.3700782,0.240234 0.5800783,0.240234 0.24,0 0.4298436,-0.08047 0.5898436,-0.230469 0.16,-0.16 0.2304689,-0.350078 0.2304689,-0.580078 0,-0.24 -0.080234,-0.429844 -0.2402344,-0.589844 -0.1600001,-0.16 -0.349844,-0.230469 -0.5898437,-0.230469 z m 6.4101562,0 c -0.24,0 -0.441561,0.08023 -0.601563,0.240235 -0.139998,0.15 -0.218747,0.350078 -0.21875,0.580078 0,0.21 0.08047,0.400313 0.230469,0.570313 0.18,0.16 0.37961,0.240234 0.59961,0.240234 0.24,0 0.429843,-0.08047 0.589843,-0.230469 0.16,-0.16 0.230469,-0.350078 0.230469,-0.580078 0,-0.24 -0.08023,-0.429844 -0.240234,-0.589844 -0.16,-0.16 -0.349844,-0.230469 -0.589844,-0.230469 z m -3.220703,1.921876 c -0.22,0 -0.410078,0.08 -0.580078,0.25 -0.16,0.17 -0.240235,0.369609 -0.240235,0.599609 0,0.22 0.08024,0.410312 0.240235,0.570312 0.17,0.17 0.360078,0.25 0.580078,0.25 0.24,0 0.439609,-0.08047 0.599609,-0.230468 0.17,-0.16 0.25,-0.349844 0.25,-0.589844 0,-0.24 -0.08,-0.439611 -0.25,-0.599609 -0.17,-0.170001 -0.369609,-0.25 -0.599609,-0.25 z" id="path893" /></g>'
