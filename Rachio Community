@@ -46,7 +46,7 @@
  * V2.1.10: Added support for Gen 3 16 zone pro model
  * V2.2.11: icon fix
  * V2.2.12 Added support for 4 zone Gen 3 model
- * V2.3.0 Added support for Rachio Hose Timer; Improved logging customization; Differntiate schedules/programs in dashboard
+ * V3.0.0 Major rewrite to add support for Rachio Hose Timer; Improve logging customization; Differntiate schedules/programs in dashboard
  */
 
 import groovy.json.*
@@ -79,22 +79,20 @@ preferences {
 }
 
 mappings {
-    path("/rachioReceiver") { action: [ POST: "rachioReceiveHandler" ] }
-    path("/rachioDashboard/:controllerID") { action: [ GET: "buildDashboard"] }
+    path("/rachioIrrigationReceiver") { action: [ POST: "rachioIrrigationReceiveHandler" ] }
+    path("/rachioHoseTimerReceiver") { action: [ POST: "rachioHoseTimerReceiveHandler" ] }
+    path("/rachioDashboard/controller/:controllerID") { action: [ GET: "buildControllerDashboard"] }
+    path("/rachioDashboard/baseStation/:baseStationID") { action: [ GET: "buildBaseStationDashboard"] }
+    path("/rachioDashboard") { action: [ GET: "buildDashboard"] }
 }
 
 String appVer() { return "2.3.0" }
 
 @Field Integer zoneRunTimeDefault = 10
-@Field Integer programRunTimeDefault = 10
 @Field String deviceLabelPrefixDefault = "Rachio - "
 
 def getZoneRunTimeDefaultSetting() {
     return (defaultZoneTime != null) ? defaultZoneTime : zoneRunTimeDefault
-}
-
-def getProgramRunTimeDefaultSetting() {
-    return (defaultProgramTime != null) ? defaultProgramTime : programRunTimeDefault
 }
 
 def getDeviceLabelPrefixSetting() {
@@ -139,7 +137,7 @@ def noOauthPage() {
 }
 
 def authPage()  {
-    //log.debug "authPage()"
+    LOG("authPage()", 5, "trace")
     def description = null
     def uninstallAllowed = false
     def oauthTokenProvided = false
@@ -150,7 +148,7 @@ def authPage()  {
     }
     if(atomicState?.authToken) {
         atomicState.userId = getUserId();
-        getRachioDeviceData(true)
+        atomicState?.userName = getUserName()
         def usrName = atomicState?.userName ?: ""
         description = usrName ? "You are signed in as $usrName" : "You are connected."
         uninstallAllowed = true
@@ -188,78 +186,101 @@ def removeSect() {
 }
 
 
-// This method is called after "auth" page is done with Oauth2 authorization, then page "deviceList" with content of devicePage()
+// This method is called after "auth" page is done with Oauth2 authorization
+// devices include both irrigation controllers and hose timer base stations
 def devicePage() {
     LOG("devicePage()...", 5, "trace")
     if(!atomicState?.authToken) {
-        LOG("No accesstoken", 1, "debug") }
+        LOG("No accesstoken", 1, "debug")
         return
     }
     // Step 1: get (list) of available devices associated with the login account.
-    def devData = getRachioDeviceData()
-    def devices = getDeviceInputEnum(devData)
-    LOG("rachioDeviceList(): ${devices}", 3, "debug") }
 
-    //step2: render the page for user to select which device
+    // Get Irrigation System Controllers
+    def controllers = getControllers()
+    def controllerList = getControllerInputEnum(controllers)
+    LOG("rachioControllerList(): ${controllers}", 3, "debug")
+
+    // Get Smart Hose Timer Base Stations (wifi hubs)
+    def baseStations = getBaseStations()
+    def baseStationList = getBaseStationInputEnum(baseStations)
+    LOG("rachioBaseStationList(): ${baseStations}", 3, "debug")
+
+    //step2: render the page for user to select which controller
     return dynamicPage(name: "devicePage", install: true, uninstall: true) {
         
         section {
              header()   
         }
-        section(getInterface("header","Controller Configuration")) {
+        section(getInterface("header","Irrigation System Configuration")) {
             
-            input "controllers", "enum", title: "Select your controllers", description: "Tap to Select", required: true, multiple: true, options: devices, submitOnChange: true, image: (atomicState?.modelInfo ? atomicState?.modelInfo.img : "")
-            atomicState?.controllerIds = settings?.controllers
+            // TO DO: Fix images from modelInfo state
+            input "controllers", "enum", title: "Select your irrigation system controllers", description: "Tap to Select", required: true, multiple: true, options: controllerList, submitOnChange: true
         
             if(settings?.controllers) {
-                updateHwInfoMap(devData?.devices)
-                devices?.sort { it?.value }?.each { cont->
+                controllerList?.sort { it?.value }?.each { cont->
                     if(cont?.key in settings?.controllers) {
-                            if(settings?."${cont?.key}_zones") {
-                                def dData = devData?.devices?.find { it?.id == cont?.key }
-                               // if(dData) { devDesc(dData) }
-                            }
-                            def zoneData = zoneSelections(devData, cont?.key)
-                            input "${cont?.key}_zones", "enum", title: "Select Zones for ${cont?.value}", description: "Tap to Select", required: true, multiple: true, options: zoneData, submitOnChange: true
+                        def zoneData = zoneSelections(controllers, cont?.key)
+                        input "${cont?.key}_zones", "enum", title: "Select Zones for ${cont?.value}", description: "Tap to Select", required: true, multiple: true, options: zoneData, submitOnChange: true
                     }
                 }
             }
         }
-        if(settings?.controllers) {
+         section(getInterface("header","Hose Timer Configuration")) {
+            
+            // TO DO: Fix images from model info state
+            input "baseStations", "enum", title: "Select your hose timer wifi hubs", description: "Tap to Select", required: true, multiple: true, options: baseStationList, submitOnChange: true
+        
+            if(settings?.baseStations) {
+                baseStationList?.sort { it?.value }?.each { station ->
+                    if(station?.key in settings?.baseStations) {
+                        def valveInputEnum = hoseTimerValveSelections(station?.key)
+                        input "${station?.key}_valves", "enum", title: "Select Valves for hose timer wifi hub ${station?.value}", description: "Tap to Select", required: true, multiple: true, options: valveInputEnum, submitOnChange: true
+                    }
+                }
+            }
+        }       
+        if(settings?.controllers || settings?.baseStations) {
+
+            updateHwInfoMap(controllers, baseStations)
             
             section(getInterface("header","Dashboard")) {
                 href "dashboardSettingsPage", title: "Dashboard Setup", description: ""
                 
                 settings?.controllers?.each { contID ->
                     if(contID) { 
-                      //  def localUri = getFullLocalApiServerUrl() + "/rachioDashboard/${contID}?access_token=${state.accessToken}"
-                        def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${contID}?access_token=${state.accessToken}"
+                      //  def localUri = getFullLocalApiServerUrl() + "/rachioDashboard/controller/${contID}?access_token=${state.accessToken}"
+                        def cloudUri = getFullApiServerUrl() + "/rachioDashboard/controller/${contID}?access_token=${state.accessToken}"
                         paragraph("<a href='${cloudUri}'>Link for Dashboard of Controller ${contID}</a>")
-                         //   d = getChildDevice(contID)
-                          //  if (d) {
-                          //     paragraph("<a href='${cloudUri}'>" + d.currentValue('dashboard') + "</a>")
-                          //  }
+                    }
+                }
+
+                settings?.baseStations?.each { baseStationID ->
+                    if(baseStationID) { 
+                      //  def localUri = getFullLocalApiServerUrl() + "/rachioDashboard/controller/${contID}?access_token=${state.accessToken}"
+                        def cloudUri = getFullApiServerUrl() + "/rachioDashboard/baseStation/${baseStationID}?access_token=${state.accessToken}"
+                        paragraph("<a href='${cloudUri}'>Link for Dashboard of Hose Timer Wifi Hub ${baseStationID}</a>")
                     }
                 }
             }
             
              section(getInterface("header","Preferences")) {
-             //  href "supportPage", title: "Rachio Support", description: ""
                 href "authPage", title: "Manage Login", description: ""
                 
-                input(name: "pauseInStandby", title: "Disable Actions while in Standby?", type: "bool", defaultValue: true, multiple: false, submitOnChange: true,
+                if(settings?.controllers) {
+                    input(name: "defaultZoneTime", title: "Default Zone Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
+                    input(name: "pauseInStandby", title: "Disable Actions while in Standby?", type: "bool", defaultValue: true, multiple: false, submitOnChange: true,
                         description: "Allow your device to be disabled in Hubitat when you place your controller in Standby Mode...")
-                input(name: "defaultZoneTime", title: "Default Zone Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
+                }
+                if(settings?.baseStations) {
+                  //  input(name: "defaultHoseTimerRunTime", title: "Default Hose Timer Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
+                }
                 input(name: "haveDeviceLabelPrefix", title: "Add Prefix to Device Labels?", type: "bool", required: true, defaultValue: true, submitOnChange: true)
                 if (getHaveDeviceLabelPrefixSetting() == true) input(name: "deviceLabelPrefix", title: "Device Label Prefix", type: "text", defaultValue: "Rachio - ", required: false, submitOnChange: true)
-                input "debugLogging", "bool", title: "Activate Debug Logging?", defaultValue: false, submitOnChange: true
-            }
-
-            section(title: smallerTitle("Debug Log Level")){
-			    paragraph("Select the debug logging level. Higher levels send more information to IDE Live Logging.", width: 8)
-			    input(name: "debugLevel", title:inputTitle("Select Debug Log Level"), type: 'enum', required:false, multiple:false, defaultValue:"2", description: "2",
-					options:["5", "4", "3", "2", "1", "0"], width: 4)
-			if(settings.debugLevel == null){ app.updateSetting('debugLevel', "2") }
+			    input(name: "debugLevel", title:"Debug Log Level", type: 'enum', required:false, multiple:false, defaultValue:"2", description: "2",
+					options:["5", "4", "3", "2", "1", "0"], width: 6)
+                paragraph(" Higher levels send more information to IDE Live Logging.", width: 6)
+			    if(settings.debugLevel == null){ app.updateSetting('debugLevel', "2") }
 		    }
             
 
@@ -357,27 +378,15 @@ void settingUpdate(name, value, type=null) {
 
 void settingRemove(name) {
 	LOG("settingRemove($name)...", 5, "trace")
-    
-     // if(name) { app?.deleteSetting("$name") }
 	if(name) { app?.removeSetting("$name") }  // ported line
 }
 
 void appCleanup() {
     LOG("appCleanup()", 5, "trace")
-    def stateItems = ["deviceId", "selectedDevice", "selectedZones", "inStandbyMode", "isWateringMap", "inStandbyModeMap"]
+    def stateItems = ["selectedDevices", "selectedZones", "inStandbyMode", "isWateringMap", "inStandbyModeMap"]
     def setItems = ["sprinklers", "selectedZones"]
     stateItems?.each { if(state?.containsKey(it as String)) {state.remove(it)} }
     setItems?.each { if(settings?.containsKey(it as String)) {settingRemove(it)} }
-}
-
-def devDesc(dev) {
-    if(dev) {
-        def str = ""
-        def zoneCnt = dev?.zones?.findAll { it?.id in settings?."${dev?.id}_zones" }?.size() ?: 0
-        str += "${atomicState?.installed ? "Installed" : "Installing"} Device:\n${atomicState?.modelInfo[dev?.id]?.desc}"
-        str += "\n($zoneCnt) Zone(s) ${atomicState?.installed ? "are selected" :  "will be installed"}"
-        paragraph "${str}", state: "complete", image: (atomicState?.modelInfo[dev?.id]?.img ?: "")
-    }
 }
 
 def supportPage() {
@@ -389,19 +398,37 @@ def supportPage() {
     }
 }
 
-def zoneSelections(devData, devId=null) {
-    LOG("zoneSelections: $devData", 4, "debug")
+def zoneSelections(controllers, controllerId=null) {
+    LOG("zoneSelections: $controllers", 4, "debug")
     def res = [:]
-    if(!devData) { return res }
-    devData?.devices.sort {it?.name}.each { dev ->
-        if(dev?.id == devId) {
-            dev?.zones?.sort {it?.zoneNumber }.each { zone ->
+    if(!controllers) { return res }
+    controllers.sort {it?.name}.each { cont ->
+        if(cont?.id == controllerId) {
+            cont?.zones?.sort {it?.zoneNumber }.each { zone ->
                 def str = (zone?.enabled == true) ? "" : " (Disabled)"
                 LOG("zoneId: $zone.id", 4, "debug")
                 def adni = [zone?.id].join('.')
                 res[adni] = "${zone?.name}$str"
             }
         }
+    }
+    return res
+}
+
+def hoseTimerValveSelections(baseStationId) {
+    LOG("hoseTimerValveSelections: $baseStationId", 4, "debug")
+    def res = [:]
+
+    def valves = getHoseTimerValves(baseStationId)
+    if (!valves) {
+        LOG("No valves found for: $baseStationId", 1, "warn")
+        return res
+    }
+
+    valves?.sort {it?.name }.each { valve ->
+        LOG("valveId: $valve.id", 4, "debug")
+        def dni = [zone?.id].join('.')
+        res[dni] = "${valve?.name}"
     }
     return res
 }
@@ -422,33 +449,45 @@ def getAccessToken() {
     }
 }
 
-def getRachioDeviceData(noData=false) {
-    LOG("getRachioDevicesData($noData)...", 5, "trace")
-
-    //Step1: GET account info "userId"
+def getUserName() {
+    LOG("getUserName...", 5, "trace")
     if (!atomicState?.userId) {
         LOG("No user Id found exiting", 1, "warn")
         return
     }
     def userInfo = getUserInfo(atomicState?.userId)
     LOG("userInfo: ${userInfo}", 3, "debug")
-    atomicState?.userName = userInfo?.username
-
-    if(!noData) { return userInfo }
+    return userInfo?.username
 }
 
-def getDeviceInputEnum(data) {
-    //Step3: Obtain device information for a location
-    def devices = [:]
-    if(!data) { return devices }
-    data?.devices.sort { it?.name }.each { sid ->
-       LOG("systemId: ${sid.id}", 3, "debug")
-       def dni = sid?.id
-       devices[dni] = sid?.name
-       LOG("Found sprinkler with dni(locationId.gatewayId.systemId.zoneId): $dni and displayname: ${devices[dni]}", 3, "debug")
+def getControllers() {
+    LOG("getControllers...", 5, "trace")
+
+    if (!atomicState?.userId) {
+        LOG("No user Id found exiting", 1, "warn")
+        return
     }
-    LOG("getRachioDevicesData() >> sprinklers: $devices", 3, "debug")
-    return devices
+    def userInfo = getUserInfo(atomicState?.userId)
+
+    if (!userInfo?.devices) {
+        LOG("No controllers found exiting", 1, "warn")
+        return
+    }
+
+    return userInfo.devices
+}
+
+def getControllerInputEnum(controllers) {
+    //Step3: Obtain controller information for a location
+    def controllerInputEnum = [:]
+    if(!controllers) { return controllerInputEnum }
+    controllers.sort { it?.name }.each { controller ->
+       LOG("systemId: ${controller.id}", 3, "debug")
+       def dni = controller?.id
+       controllerInputEnum[dni] = controller?.name
+       LOG("Found controller with dni(locationId.gatewayId.systemId.zoneId): $dni and displayname: ${controllerInputEnum[dni]}", 3, "debug")
+    }
+    return controllerInputEnum
 }
 
 def getUserInfo(userId) {
@@ -459,39 +498,74 @@ def getUserInfo(userId) {
 def getUserId() {
     LOG("getUserId()", 5, "trace")
     def res = _httpGet("person/info");
+    LOG("person Info: ${res}", 3, "debug")
     if (res) {
         return res?.id;
     }
     return null
 }
 
-void updateHwInfoMap(devdata) {
+def getBaseStations(userId) {
+    LOG("getBaseStations ${userId}", 5, "trace")
+    return _httpGet("valve/listBaseStations/${userId}");
+}
+
+def getHoseTimerValves(baseStationId) {
+    LOG("getHoseTimerValves ${baseStationId)}", 5, "trace")
+    return _httpGet("valve/listValves/${baseStationId}");
+}
+
+def getBaseStationInputEnum(baseStations) {
+    def baseStationInputEnum = [:]
+    if(!baseStations) { return baseStationInputEnum }
+    baseStations.sort { it?.serialNumber }.each { baseStation ->
+       LOG("systemId: ${baseStation.serialNumber}", 3, "debug")
+       def dni = baseStation?.id
+       baseStationInputEnum[dni] = baseStation?.serialNumber
+       LOG("Found baseStation with dni: $dni and serialNumber: ${baseStationInputEnum[dni]}", 3, "debug")
+    }
+    return controllerInputEnum
+}
+
+void updateHwInfoMap(controllers, baseStations) {
     def result = [:]
-    if(devdata && settings?.controllers) {
+    result.controllers = [:]
+    result.baseStations = [:]
+
+    if(controllers && settings?.controllers) {
         def results = null
-        results = devdata?.findAll { it?.id in settings?.controllers }
-        results?.each { dev ->
-            result[dev?.id] = getHardwareInfo(dev?.model)
+        results = controllers?.findAll { it?.id in settings?.controllers }
+        results?.each { controller ->
+            result.controllers[controller?.id] = getControllerHardwareInfo(controller?.model)
         }
     }
+
+    if(baseStations && settings?.baseStations) {
+        def results = null
+        results = baseStations?.findAll { it?.id in settings?.baseStations }
+        results?.each { baseStation ->
+            result.baseStations[baseStation?.id] = getBaseStationHardwareInfo(baseStation?.id)
+        }
+    }    
+
     atomicState?.modelInfo = result
 }
 
-def getDevGeneration(devId) {
-    if(devId && atomicState?.modelInfo[devId] && atomicState?.modelInfo[devId]?.gen) {
-        return atomicState?.modelInfo[devId]?.gen
+def getControllerGeneration(controllerId) {
+    if(controllerId && atomicState?.modelInfo.controllers[controllerId] && atomicState?.modelInfo.controllers[controllerId]?.gen) {
+        return atomicState?.modelInfo.controllers[controllerId]?.gen
     } 
     return null
 }
 
-def getDevJsonTag(devId) {
-    if(devId && atomicState?.modelInfo[devId] && atomicState?.modelInfo[devId]?.jsonTag) {
-        return atomicState?.modelInfo[devId]?.jsonTag
+def getControllerJsonTag(controllerId) {
+    if(devId && atomicState?.modelInfo.controllers[controllerId] && atomicState?.modelInfo.controllers[controllerId]?.jsonTag) {
+        return atomicState?.modelInfo.controllers[controllerId]?.jsonTag
     } 
     return null
 }
 
-def getHardwareInfo(val) {
+def getControllerHardwareInfo(val) {
     switch(val) {
         case "GENERATION1_8ZONE":
             return [model: "8ZoneV1", desc: "8-Zone (Gen 1)", img: getAppImg("rachio_gen1.png"), gen: "Gen1", jsonTag: "gen1IrrigationController"]
@@ -516,6 +590,10 @@ def getHardwareInfo(val) {
         
     }
     return [desc: null, model: null, img: "", gen: null]
+}
+
+def getBaseStationHardwareInfo(val) {
+    return [model: "V1", desc: "Gen 1", img: getAppImg("rachioHoseTimer.jpeg"), gen: "Gen1", jsonTag: "gen1HoseTimerHub"]
 }
 
 def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/$imgName" }
@@ -581,7 +659,7 @@ def initialize() {
     unschedule()
     scheduler()
     subscribe(app, onAppTouch)
-    updateDevZoneStates() //Creates the selectedDevices maps in state
+    updateDeviceStates() //Creates the selectedDevices maps in state
     runIn(2, "initStep2", [overwrite: true])
     sendActivityFeeds("is connected to Hubitat")
     atomicState.timeSendPush = null
@@ -655,7 +733,7 @@ def initWebhook(controlId) {
     }
     try {
         if(webhookHttp(apiWebhookUrl, bodyData, cmdType, controlId)) {
-            LOG("Successfully ${cmdType == "post" ? "Created" : "Updated"} API Webhook Subscription for Controller (${controlId})!!!", 5, "trace")
+            LOG("Successfully ${cmdType == "post" ? "Created" : "Updated"} API Webhook Subscription for Controller (${controlId})", 5, "trace")
             result = true
         }
     } catch(ex) {
@@ -760,59 +838,73 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
     return returnStatus
 }
 
-def getDeviceIds() {
-    return settings?.controllers ?: null
-}
-
-def getZoneIds(devId) {
-    return settings?."${devId}_zones" ?: null
-}
-
-def getZoneData(userId, zoneId) {
-    return _httpGet("person/${userId}/${zoneId}")
-}
-
-void updateDevZoneStates() {
+void updateDeviceStates() {
     def devMap = [:]
-    def userInfo = getUserInfo(atomicState?.userId)
-    userInfo?.devices?.each { dev ->
-        if(dev?.id in settings?.controllers) {
-            devMap[dev?.id] = [:]
-            devMap[dev?.id]["name"] = dev?.name
+    devMap.controllers = [:]
+    devMap.baseStations = [:]
+
+    def controllers = getControllers()
+    if(controllers && settings?.controllers) {
+        def results = null
+        results = controllers?.findAll { it?.id in settings?.controllers }
+        results?.each { controller ->
+            devMap.controllers[controller?.id] = [:]
+            devMap.controllers[controller?.id]["name"] = controller?.name
             def zoneMap = [:]
-            dev?.zones?.each { zone ->
-               if(zone?.id in settings?."${dev?.id}_zones") {
+            controller?.zones?.each { zone ->
+               if(zone?.id in settings?."${controller?.id}_zones") {
                     zoneMap[zone?.id] = [:]
                     zoneMap[zone?.id] = zone?.name
                 }
             }
-            devMap[dev?.id]["zones"] = zoneMap
+            devMap.controllers[controller?.id]["zones"] = zoneMap
         }
     }
+
+    def baseStations = getBaseStations()
+    if(baseStations && settings?.baseStations) {
+        def results = null
+        results = baseStations?.findAll { it?.id in settings?.baseStations }
+        results?.each { baseStation ->
+            result.baseStations[baseStation?.id] = getBaseStationHardwareInfo(baseStation?.id)
+            devMap.baseStations[baseStation?.id] = [:]
+            devMap.baseStations[baseStation?.id]["serialNumber"] = baseStation?.serialNumber
+            def valveMap = [:]
+            def valves = getHoseTimerValves(baseStation?.id)
+            valves.each { valve ->
+               if(valve?.id in settings?."${baseStation?.id}_valves") {
+                    valveMap[valve?.id] = [:]
+                    valveMap[valve?.id] = valve?.name
+                }
+            }
+            devMap.baseStations[baseStation?.id]["valves"] = valveMap
+        }
+    }   
     atomicState?.selectedDevices = devMap
 }
 
-def getDeviceInfo(devId) {
-    LOG("getDeviceInfo...", 5, "trace")
-    return _httpGet("device/${devId}")
-}
-
-def getCurSchedule(devId) {
+def getCurSchedule(controllerId) {
     LOG("getCurSchedule...", 5, "trace")
-    return _httpGet("device/${devId}/current_schedule")
+    return _httpGet("device/${controllerId}/current_schedule")
 }
 
-def getDeviceData(devId) {
+def getDeviceData(devId, type="controller") {
     LOG("getDeviceData($devId)...", 5, "trace")
-    def result = _httpGet("device_with_current_schedule/${devId}")
-    LOG("getDeviceData: ${result}", 5, "trace")
+    def result = null
+    if (type == "controller") {
+        result = _httpGet("device_with_current_schedule/${devId}")
+    }
+    else if (type == "baseStation") {
+        result = _httpGet("valve/getBaseStation/${devId}")
+    }
+    LOG("getDeviceData: ${result}", 3, "debug")
     return result
 }
 
 def getDeviceState(devId) {
     LOG("getDeviceState($devId)...", 5, "trace")
     def result = _httpGet("device/getDeviceState/${devId}", "closed")
-    LOG("getDeviceState: ${result}", 5, "trace")
+    LOG("getDeviceState: ${result}", 3, "debug")
     return result
 }
 
@@ -820,14 +912,14 @@ def getDeviceState(devId) {
 def getDeviceDetails(devId) {
     LOG("getDeviceDetails($devId)...", 5, "trace")
     def result = _httpGet("device/getDeviceDetails/${devId}", "closed")
-    LOG("getDeviceDetails: ${result}", 5, "trace")
+    LOG("getDeviceDetails: ${result}", 3, "debug")
     return result
 }
 
 def getZoneDetails(devId) {
     LOG("getZoneDetails($devId)...", 5, "trace")
     def result = _httpGet("device/listZones/${devId}", "closed")
-    LOG("getZoneDetails: ${result}", 5, "trace")
+    LOG("getZoneDetails: ${result}", 3, "debug")
     return result
 }
 
@@ -835,7 +927,7 @@ def getDevicePastEvents(devId, start_time, end_time) {
     // start_time and end_time are Date objects
     LOG("getDeviceEvents($devId)...", 5, "trace")
     def result = _httpGet("device/${devId}/event?startTime=${start_time.getTime()}&endTime=${end_time.getTime()}", "open")
-    LOG("getDeviceEvents: ${result}", 5, "trace")
+    LOG("getDeviceEvents: ${result}", 3, "debug")
     return result
 }
 
@@ -844,16 +936,15 @@ def getDeviceFutureEvents(devId, end_time) {
     LOG( "getDeviceUpcomingEvents(${devId})...", 5, "trace")
     def jsonData = new JsonBuilder("device_id":devId, "hours_ahead":GetHoursUntilDate(end_time))
     def result = sendJsonGetResponse("events/upcoming", jsonData?.toString(), "closed", "post")
-    LOG("Upcoming Events: ${result})", 5, "trace")
+    LOG("Upcoming Events: ${result})", 3, "debug")
     return result
 }
-
 
 def getDeviceNextEvent(devId) {
     LOG("getDeviceNextEvent(${devId})...", 5, "trace")
     def jsonData = new JsonBuilder("device_id":devId)
     def result = sendJsonGetResponse("events/next", jsonData?.toString(), "closed", "post")
-     LOG("Next Event: ${result})", 5, "trace")
+     LOG("Next Event: ${result})", 3, "debug")
     return result
 }
 
@@ -861,7 +952,7 @@ def getDeviceAlerts(devId) {
     LOG("getDeviceAlerts(${devId})...", 5, "trace")
     def jsonData = new JsonBuilder("device_id":devId)
     def result = sendJsonGetResponse("device/getActiveAlerts", jsonData?.toString(), "closed", "post")
-    LOG("Active Alerts: ${result})", 5, "trace")
+    LOG("Active Alerts: ${result})", 3, "debug")
     return result
 }
 
@@ -879,30 +970,67 @@ def getCalendar(locId, start_time, end_time) {
     LOG("getCalendar(${locId})...", 5, "trace")
     def jsonData = new JsonBuilder("location_id":locId, "start_time":formatDateToUtc(start_time), "end_time":formatDateToUtc(end_time))
     def result = sendJsonGetResponse("location/getCalendarForTimeRange", jsonData?.toString(), "closed", "post")
-    LOG("Calendar: ${result})", 5, "trace")
+    LOG("Calendar: ${result})", 3, "debug")
     return result
 }
 
 def getWeather(locId, start_date, end_date) {
+    // currently unknown how to get the locId if user only has hose timer, not irrigation controller
     // start_date and end_date are Date objects
     LOG("getWeather(${locId})...", 5, "trace")
     def jsonData = new JsonBuilder("location_id":locId, "start_date":getDateMap(start_date), "end_date":getDateMap(end_date))
     def result = sendJsonGetResponse("location/getWeatherByLocation", jsonData?.toString(), "closed", "post")
-    LOG("Weather: ${result})", 5, "trace")
+    LOG("Weather: ${result})", 3, "debug")
     return result
 }
 
 def getLocationId(devId, detailsData) {
-    def dev = getDevJsonTag(devId)
-    if (dev) {
-        def controllerDetails = detailsData.get(dev)
+    def controller = getControllerJsonTag(devId)
+    if (controller) {
+        def controllerDetails = detailsData.get(controller)
         if (controllerDetails) return controllerDetails.locationId   
     }
     return null
 }
 
+def getValveListData(baseStationId) {
+    LOG("getValveListData($baseStationId)...", 5, "trace")
+    def result = _httpGet("valve/listValves/${baseStationId}")
+    LOG("getValveListData: ${result}", 3, "debug")
+    return result    
+}
+
+def getValveData(valveId) {
+    LOG("getValveData($valveId)...", 5, "trace")
+    def allPrograms = _httpGet("valve/getValve/${valveId}")
+    LOG("getValveData: ${result}", 3, "debug")
+    return result    
+}
+
+def getValvePrograms(valveId) {
+    LOG("getValvePrograms($valveId)...", 5, "trace")
+    def result = _httpGet("program/listPrograms/${valveId}")
+    LOG("getValvePrograms: ${result}", 3, "debug")
+    return result  
+}
+
+def getValveDayViews(baseStationId, Date start, Date end) {
+    LOG(" getValveDayViews($baseStationId)...", 5, "trace")
+    def res = null
+    if (baseStationId && start && end) {
+        def id = [baseStationId:baseStationId]
+        def startMap = getDateMap(start)
+        def endMap = getDateMap(end)
+        def jsonData = new JsonBuilder("start":startMap, "end":endMap, "resourceId":id)
+        LOG("getValveDayViews jsonData: ${jsonData}", 3, "debug")
+        res = sendJsonGetResponse("summary/getValveDayViews", jsonData?.toString(), "open", "post")
+    } else { LOG("getValveDayViews Missing baseStationId, start date, or end date... ${baseStationId} | ${start} | ${end}", 1, "error") }
+    return res
+}
+
 def cleanupObjects(id){
     if(settings?."${id}_zones") { settingRemove("${id}_zones") }
+    if(settings?."${id}_valves") { settingRemove("${id}_valves") }
     removeWebhookByDevId(id)
 }
 
@@ -935,14 +1063,14 @@ def updateStandbyItem(String id, Boolean val) {
     atomicState?.inStandbyModeMap = i
 }
 
-def setDashboard(deviceId) {
+def setDashboard(deviceId, type) {
     if (!state.refreshNum) state.refreshNum = 0
     state.refreshNum++
-    def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${deviceId}?access_token=${state.accessToken}&refreshNum=${refreshNum}"  // refreshNum forces the browser to retrieve the image instead of caching it
+    def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${type}/${deviceId}?access_token=${state.accessToken}&refreshNum=${refreshNum}"  // refreshNum forces the browser to retrieve the image instead of caching it
         
     String dashboard = '<style type=\'text/css\'>'
 	dashboard += '.centerImage'
-	dashboard += '{text-align:center;display:inline;height:50%;}'
+	dashboard += '{text-align:center;display:inline;height:100%;}'
 	dashboard += '</style>'
 	dashboard += '<table align="center" style="width:100%">'
 	dashboard += '<tr>'
@@ -951,7 +1079,7 @@ def setDashboard(deviceId) {
     dashboard += '</table>'
 
     d = getChildDevice(deviceId)
-    d.sendEvent(name: 'dashboard', value: dashboard, displayed: true)   
+    d.sendEvent(name: 'dashboard', value: dashboard, displayed: true, isStateChange: true)   
 }
 
 def addRemoveDevices(uninst=false) {
@@ -961,23 +1089,12 @@ def addRemoveDevices(uninst=false) {
         if(uninst == false) {
             def devsInUse = []
             def selectedDevices = atomicState?.selectedDevices
-            selectedDevices?.each { contDev ->
+            selectedDevices?.controllers.each { contDev ->
                 //Check if the discovered sprinklers are already initiated with corresponding device types.
                 def d = getChildDevice(contDev?.key)
                 if(!d) {
                     d = addChildDevice("lnjustin", getChildContName(), contDev?.key, null, [label: getDeviceLabelStr(contDev?.value?.name), completedSetup: true])
-                    def localUri = getFullLocalApiServerUrl() + "/rachioDashboard/${contDev?.key}?access_token=${state.accessToken}"
-                    String dashboard = '<style type=\'text/css\'>'
-		            dashboard += '.centerImage'
-		            dashboard += '{text-align:center;display:inline;width:100%;}'
-		            dashboard += '</style>'
-		            dashboard += '<table align="center" style="width:100%">'
-		            dashboard += '<tr>'
-                    dashboard += '<td width="100%"><img width="100%" src="' + localUri + '"/></td>'
-                    dashboard += '</tr>'
-                    dashboard += '</table>'
-                    d.sendEvent(name: 'dashboard', value: dashboard, displayed: true, isStateChange: true)
-                 //   d.completedSetup = true
+                    setDashboard(contDev?.key, "controller")
                     LOG("Controller Device Created: (${d?.displayName}) with id: [${contDev?.key}]", 4, "info")
                 } else {
                     LOG("found ${d?.displayName} with dni: ${dni?.key} already exists", 3, "debug")
@@ -988,12 +1105,35 @@ def addRemoveDevices(uninst=false) {
                     def d2 = getChildDevice(zoneDni?.key)
                     if(!d2) {
                         d2 = addChildDevice("lnjustin", getChildZoneName(), zoneDni?.key, null, [label: getDeviceLabelStr(zoneDni?.value), completedSetup: true])
-                      //  d2.completedSetup = true
                         LOG("Zone Device Created: (${d2?.displayName}) with id: [${zoneDni?.key}]", 4, "info")
                     } else {
                         LOG("found ${d2?.displayName} with dni: ${zoneDni?.key} already exists", 3, "debug")
                     }
                     devsInUse += zoneDni?.key
+                }
+            }
+
+            selectedDevices?.baseStations.each { baseStation ->
+                //Check if the discovered hubs are already initiated with corresponding device types.
+                def d = getChildDevice(baseStation?.key)
+                if(!d) {
+                    d = addChildDevice("lnjustin", getChildBaseStationName(), baseStation?.key, null, [label: getDeviceLabelStr(baseStation?.value?.name), completedSetup: true])
+                    setDashboard(baseStation?.key, "baseStation")
+                    LOG("Base Station Device Created: (${d?.displayName}) with id: [${baseStation?.key}]", 4, "info")
+                } else {
+                    LOG("found ${d?.displayName} with dni: ${dni?.key} already exists", 3, "debug")
+                }
+                devsInUse += baseStation?.key
+                baseStation?.value?.valves?.each { valve ->
+                    //Check if the discovered valves are already initiated with corresponding device types.
+                    def d2 = getChildDevice(valve?.key)
+                    if(!d2) {
+                        d2 = addChildDevice("lnjustin", getChildValveName(), valve?.key, null, [label: getDeviceLabelStr(valve?.value), completedSetup: true])
+                        LOG("Valve Device Created: (${d2?.displayName}) with id: [${valve?.key}]", 4, "info")
+                    } else {
+                        LOG("found ${d2?.displayName} with dni: ${valve?.key} already exists", 3, "debug")
+                    }
+                    devsInUse += valve?.key
                 }
             }
             LOG("devicesInUse: ${devsInUse}", 3, "debug")
@@ -1007,7 +1147,7 @@ def addRemoveDevices(uninst=false) {
             delete?.each {
                 cleanupObjects(it?.deviceNetworkId)
                 deleteChildDevice(it?.deviceNetworkId)
-                LOG("Deleted the Device: ${it?.displayName}"1, "warn")
+                LOG("Deleted the Device: ${it?.displayName}", 1, "warn")
             }
         }
         return true
@@ -1035,125 +1175,204 @@ def getTimeSinceInSeconds(time) {
 }
 
 // This is the endpoint the webhook sends the events to...
-def rachioReceiveHandler() {
+def rachioIrrigationReceiveHandler() {
     def reqData = request.JSON
     if(reqData?.size() || reqData == [:]) {
        LOG("eventDatas: ${reqData?.summary}", 5, "trace")
-       LOG("Rachio Device Event | Summary: (${reqData?.summary}) | Requesting Latest Data from API | DeviceID: ${reqData?.deviceId}", 3, "debug")
+       LOG("Rachio Irrigation Device Event | Summary: (${reqData?.summary}) | Requesting Latest Data from API | DeviceID: ${reqData?.deviceId}", 3, "debug")
         if(reqData?.deviceId) {
             def dev = getChildDevice(reqData?.deviceId)
-            poll(dev, "api")
+            poll(dev, "irrigationDevice")
         } else { poll() }
     }
 }
 
+def rachioHoseTimerReceiveHandler() {
+    def reqData = request.JSON
+    if(reqData?.size() || reqData == [:]) {
+       LOG("eventDatas: ${reqData?.summary}", 5, "trace")
+       LOG("Rachio Hose Timer Device Event | Summary: (${reqData?.summary}) | Requesting Latest Data from API | DeviceID: ${reqData?.deviceId}", 3, "debug")
+        if(reqData?.deviceId) {
+            def dev = getChildDevice(reqData?.deviceId)
+            poll(dev, "hoseTimerDevice")
+        } else { poll() }
+    }
+}
 
 //Section4: polling device info methods
 void poll(child=null, type=null) {
     def lastPollSec = getTimeSinceInSeconds(atomicState?.lastPollDt)
-    if(child && !type) { type = "device" }
     LOG("${app.label} -- Polling API for Latest Data -- Last Update was ($lastPollSec seconds ago)${type ? " | Reason: [$type]" : ""}", 5, "trace")
     if(lastPollSec < 2) {
         runIn(3, "poll", [overwrite: true])
         LOG("Delaying poll... It's too soon to request new data", 3, "debug")
         return
     }
+
     def selectedDevices = atomicState?.selectedDevices
+
+    // poll a specific device and all children of that specific device
+    if (child && type) {
+        pollChild(child, type)
+        // now poll any children if the child is a controller or base station
+        String dni = child.device?.deviceNetworkId
+        if (type == "irrigationDevice") {
+            def contDev = selectedDevices?.controllers[dni]
+            if (contDev) {
+                contDev?.zones?.each { zone->
+                    def zDev = getChildDevice(zone?.key)
+                    if(zDev) { pollChild(zDev, "irrigationDevice") }
+                }
+            }
+        }
+        else if (type == "hoseTimerDevice") {
+            def baseStation = selectedDevices?.baseStations[dni]
+            if (baseStation) {
+                baseStation?..valves?.each { valve->
+                    def zDev = getChildDevice(valve?.key)
+                    if(zDev) { pollChild(zDev, "hoseTimerDevice") }
+                }
+            }
+        }
+        atomicState?.lastPollDt = now()
+        return
+    }
+    
+    // poll all devices and all children
     def ctrlCnt = 0
     def zoneCnt = 0
-    selectedDevices?.each { cont->
-        def devData = getDeviceData(cont?.key)
-        if (debugLogging) { log.debug "devData for device ID ${cont?.key} is ${devData}" }
-        def devDetails = getDeviceDetails(cont?.key)
-        if (debugLogging) { log.debug "devDetails for device ID${cont?.key} is ${devDetails}" }
-        def devState = getDeviceState(cont?.key)
-        def devZoneDetails = getZoneDetails(cont?.key)
-        def devNextEvent = getDeviceNextEvent(cont?.key)
-        def devMonthlyWateringSummary = getDeviceWateringSummary(cont?.key, getMonthStart(), getMonthEnd()) 
-        
+    selectedDevices?.controllers.each { cont->
         def cDev = getChildDevice(cont?.key)
         if(cDev) {
             ctrlCnt = ctrlCnt+1
-            pollChild(cDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent)
+            pollChild(cDev, "irrigationDevice")
             cont?.value?.zones?.each { zone->
                 zoneCnt = zoneCnt+1
                 def zDev = getChildDevice(zone?.key)
-               // def zoneWateringJournal = getDashboardWateringJournalData(zone?.key)
-                if(zDev) { pollChild(zDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent) }
+                if(zDev) { pollChild(zDev, "irrigationDevice") }
             }
         }
     }
     LOG("Updating (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices...", 4, "info")
+
+    def baseStationCnt = 0
+    def valveCnt = 0
+    selectedDevices?.baseStations.each { baseStation >
+        def bDev = getChildDevice(baseStation?.key)
+        if(bDev) {
+            ctrlCnt = baseStationCnt+1
+            pollChild(cDev, "hoseTimerDevice")
+            bDev?.value?.valves?.each { valve->
+                valveCnt = valveCnt+1
+                def vDev = getChildDevice(zone?.key)
+                if(vDev) { pollChild(zvev, "hoseTimerDevice") }
+            }
+        }
+    }
+    LOG("Updating (${baseStationCnt}) Base Stations and (${valveCnt}) $baseStationCount one devices...", 4, "info")
+
     atomicState?.lastPollDt = now()
 }
 
-def pollChild(child, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent) {
-    if (pollChildren(child, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent)){
-        //generate event for each (child) device type identified by different dni
-    }
-}
-
-def pollChildren(childDev, devData, devDetails, devState, devZoneDetails, devMonthlyWateringSummary, devNextEvent) {
-    LOG("updating child device ${childDev} with device data ${devData}", 3, "debug")
+def pollChild(childDev, type) {
+    LOG("updating child device ${childDev}", 3, "debug")
     try {
-        if(childDev && devData) {
+        if(childDev && type) {
             String dni = childDev?.device?.deviceNetworkId
             String devLabel = childDev?.label
-            def schedData = devData.currentSchedule
-            def devStatus = devData
-            
-            def rainDelay = getCurrentRainDelay(devStatus)
-            
-            def status = devStatus?.status
-            def onlStatus = status?.toString()?.toLowerCase() == "online" ? "online" : "offline"
-            if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
             Boolean pauseInStandby = settings?.pauseInStandby == false ? false : true
-            Boolean inStandby = devData?.on.toString() != "true" ? true : false
-            Boolean schedRunning = (schedData?.status == "PROCESSING") ? true : false
             def data = []
             Map selectedDevices = atomicState?.selectedDevices ?: [:]
-            selectedDevices?.each { contDev ->
-                if(dni == contDev?.key) {
-                    updateStandbyItem(dni, inStandby)
-                    LOG("schedRunning: ${schedRunning} | isWatering: ${isWatering()}", 3, "debug")
-                    
-                    def controllerWebhookIDs = getWebhookIdsForDev(contDev?.key)
-                    LOG("Webhook IDs for controller ${contDev?.key} include: ${controllerWebhookIDs}", 3, "debug")
-                    if (isWatering() && !schedRunning) {
-                        handleWateringSched(dni, false)
-                    }
-                    def newLabel = getDeviceLabelStr(devData?.name).toString()
-                    if(devLabel != newLabel) {
-                        childDev?.label = newLabel
-                        LOG("Controller Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
-                    }
 
-                    data = [data: devData, schedData: schedData, rainDelay: rainDelay, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails, wateringSummaryData: devMonthlyWateringSummary, nextEvent: devNextEvent]
-                } else {
-                    contDev?.value?.zones?.each { zone ->
-                        if (dni == zone?.key) {
-                            def zoneData = findZoneData(zone?.key, devData)
-                            def zoneState = findZoneState(zone?.key, devZoneDetails)
-                            def newLabel = getDeviceLabelStr(zone?.value).toString()
-                            if(devLabel != newLabel) {
-                                childDev?.label = newLabel
-                                LOG("Zone Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
+            if (type == "irrigationDevice") {
+                selectedDevices?.controllers.each { contDev ->
+                    if(dni == contDev?.key) {
+                        def devData = getDeviceData(contDev?.key)
+
+                        Boolean inStandby = devData?.on.toString() != "true" ? true : false
+                        updateStandbyItem(dni, inStandby)
+
+                        Boolean schedRunning = (devData?.currentSchedule?.status == "PROCESSING") ? true : false
+                        if (isWatering() && !schedRunning) { handleWateringSched(dni, false) }
+                        
+                        def newLabel = getDeviceLabelStr(devData?.name).toString()
+                        if(devLabel != newLabel) {
+                            childDev?.label = newLabel
+                            LOG("Controller Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
+                        }
+
+                        def devState = getDeviceState(contDev?.key)
+                        def devDetails = getDeviceDetails(contDev?.key)
+                        def devMonthlyWateringSummary = getDeviceWateringSummary(contDev?.key, getMonthStart(), getMonthEnd()) 
+                        def devNextEvent = getDeviceNextEvent(contDev?.key)
+
+                        if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
+                        data = [data: devData, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails, wateringSummaryData: devMonthlyWateringSummary, nextEvent: devNextEvent]
+                    } else {
+                        contDev?.value?.zones?.each { zone ->
+                            if (dni == zone?.key) {
+
+                                def devData = getDeviceData(zone?.key)
+                                def devZoneDetails = getZoneDetails(zone?.key)
+
+                                def zoneData = findZoneData(zone?.key, devData)
+                                def zoneState = findZoneState(zone?.key, devZoneDetails)
+
+                                def newLabel = getDeviceLabelStr(zone?.value).toString()
+                                if(devLabel != newLabel) {
+                                    childDev?.label = newLabel
+                                    LOG("Zone Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
+                                }
+                                data = [data: zoneData, devId: contDev?.key, pauseInStandby: pauseInStandby, stateData: zoneState]
                             }
-                            data = [data: zoneData, schedData: schedData, devId: contDev?.key, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: zoneState]
                         }
                     }
                 }
             }
+            else if (type == "hoseTimerDevice") {
+                selectedDevices?.baseStations.each { baseStation ->
+                    if(dni == baseStation?.key) {
+                        def baseStationData = getDeviceData(baseStation?.key, "baseStation")
+                        def valvesData = getValveListData(baseStation?.key)
+                        def programDataByValve = [:]
+                        baseStation?.value?.valves?.each { valve ->
+                            programData[valve?.key] = getValvePrograms(valve?.key)
+                        }
+                       // def summaryData = getSummaryData(baseStation?.key)
+
+                      //  Boolean programRunning = (devData?.currentSchedule?.status == "PROCESSING") ? true : false
+                     //   if (isWatering() && !schedRunning) { handleWateringSched(dni, false) }
+
+                        if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
+                        data = [baseStationData: baseStationData, valvesData: valvesData, programDataByValve: programDataByValve]
+                    } else {
+                        baseStation?.value?.valves?.each { valve ->
+                            if (dni == valve?.key) {
+
+                                def baseStationData = getDeviceData(baseStation?.key, "baseStation")
+                                def valveData = getValveData(valve?.key)
+                                def programData = getValvePrograms(valve?.key)
+
+                                def newLabel = getDeviceLabelStr(valve?.value).toString()
+                                if(devLabel != newLabel) {
+                                    childDev?.label = newLabel
+                                    LOG("Valve Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
+                                }
+                                data = [baseStationData: baseStationData, valveData: valveData, programData: programData]
+                            }
+                        }
+                    }
+                }
+
+            }
             if (childDev && data != []) {
                 childDev?.generateEvent(data)
-                childDev?.sendEvent(name: "DeviceWatch-DeviceStatus", value: onlStatus, displayed: false)
             }
-        } else { LOG("pollChildren cannot update children because it is missing the required parameters...", 1, "warn")
+        } else { LOG("pollChild cannot update child because it is missing the required parameters...", 1, "warn") }
         
     } catch (e) {
-        LOG("exception polling children: ${e}", 1, "error")
+        LOG("exception polling child: ${e}", 1, "error")
     }
-    return result
 }
 
 void setWateringDeviceState(devId, val) {
@@ -1387,6 +1606,8 @@ def getMonthEnd() {
 
 def getChildContName()	{ return "Rachio Controller" }
 def getChildZoneName()	{ return "Rachio Zone" }
+def getChildBaseStationName()	{ return "Rachio Wifi Hub" }
+def getChildValveName()	{ return "Rachio Hose Timer" }
 // def getServerUrl()		{ return "https://graph.api.smartthings.com" }    // commented out in port - doesn't seem to be needed?
 def getShardUrl()		{ return getApiServerUrl() }
 def getAppEndpoint()	{ return "https://app.rach.io" }
@@ -1487,22 +1708,14 @@ def getDeviceStatus(devId) {
     return _httpGet("device/${devId}")
 }
 
-def getControlLblById(id) {
+def getChildById(id) {
     def dev = getChildDevice(id)
     return dev ? dev?.displayName : null
 }
 
-def getCurrentRainDelay(res) {
-    LOG("getCurrentRainDelay with input ${res}", 5, "trace")
-    // convert to configured rain delay to days.
-    def ret =  (res?.rainDelayExpirationDate && res?.rainDelayStartDate) ? (res?.rainDelayExpirationDate - res?.rainDelayStartDate)/(26*60*60*1000) : 0
-    def value = (long) Math.floor(ret + 0.5d)
-    return value
-}
-
 def startZone(child, deviceId, zoneNum, mins) {
     def res = false
-    def ctrlLbl = getControlLblById(deviceId)
+    def ctrlLbl = getChildById(deviceId)
     LOG("Starting to Water on ${ctrlLbl ? "$ctrlLbl: " : ""}(ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})", 3, "debug")
     //child?.log("Starting to water on (ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})...")
     def zoneId = child?.device?.deviceNetworkId
@@ -1511,7 +1724,7 @@ def startZone(child, deviceId, zoneNum, mins) {
         def jsonData = new JsonBuilder("id":zoneId, "duration":duration)
         LOG("startZone jsonData: ${jsonData}", 3, "debug")
         res = sendJson("zone/start", jsonData?.toString(), deviceId)
-    } else { LOG("startZone Missing ZoneId or duration... ${zoneId} | ${mins}", 1, "error")
+    } else { LOG("startZone Missing ZoneId or duration... ${zoneId} | ${mins}", 1, "error") }
     return res
 }
 
@@ -1531,7 +1744,7 @@ def runAllZones(child, deviceId, mins) {
         def jsonData = new JsonBuilder("zones":zoneData)
         //child?.log("runAllZones  jsonData: ${jsonData}")
         res = sendJson("zone/start_multiple", jsonData?.toString(), deviceId)
-    } else { LOG("runAllZones Missing ZoneIds or Duration... ${selectedDevices[deviceId]?.zones} | ${mins}", 1, "error")
+    } else { LOG("runAllZones Missing ZoneIds or Duration... ${selectedDevices[deviceId]?.zones} | ${mins}", 1, "error") }
     return res
 }
 
@@ -1579,6 +1792,101 @@ def getScheduleRuleInfo(schedId) {
     return res
 }
 
+def startValve(child, mins) {
+    // child is valve
+    def res = false
+    LOG("Starting to Water | ValveName: ${child?.device.displayName} | RunDuration: ${mins})", 3, "debug")
+    def valveId = child?.device?.deviceNetworkId
+    if (valveId && mins) {
+        def secs = mins.toInteger() * 60
+        def jsonData = new JsonBuilder("valveId":valveId, "durationSeconds":secs)
+        LOG("startValve jsonData: ${jsonData}", 3, "debug")
+        res = sendJson("valve/startWatering", jsonData?.toString(), valveId )
+    } else { LOG("startValve Missing valveId or duration... ${valveId} | ${secs}", 1, "error") }
+    return res
+}
+
+def runAllValves(child, mins) {
+    // child is baseStation
+    def allTrue = true
+    def anyFalse = false
+    def selectedDevices = atomicState?.selectedDevices?.baseStations ?: [:]
+    def baseStationId = child?.device?.deviceNetworkId
+    if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves &&) {
+        selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
+            def valveChild = getChildById(valve?.key)
+            def valveRes = valveChild.startWatering(mins)
+            if (valveRes == false) anyFalse = true
+            else if (valveRes == true && allTrue == true) allTrue = true
+        }
+    } else { LOG("runAllValves Missing valveIds or Duration... ${selectedDevices.baseStations[baseStationId]?.valves} | ${mins}", 1, "error") }
+    if (anyFalse == false && allTrue == true) return true
+    else return false
+}
+
+def stopValve(child) {
+    // child is valve
+    def res = false
+    LOG("Stopping Water | ValveName: ${child?.device.displayName})", 3, "debug")
+    def valveId = child?.device?.deviceNetworkId
+    if (valveId) {
+        def jsonData = new JsonBuilder("valveId":valveId)
+        LOG("stopValve jsonData: ${jsonData}", 3, "debug")
+        res = sendJson("valve/stopWatering", jsonData?.toString(), valveId )
+    } else { LOG("stopValve Missing valveId... ${valveId}", 1, "error") }
+    return res
+}
+
+def stopAllValves(child) {
+    // child is baseStation
+    def res = false
+    def selectedDevices = atomicState?.selectedDevices?.baseStations ?: [:]
+    def baseStationId = child?.device?.deviceNetworkId
+    if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves) {
+        selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
+            def valveChild = getChildById(valve?.key)
+            res = stopValve(valveChild, mins)
+        }
+    } else { LOG("stopAllValves Missing valveIds.. ${selectedDevices.baseStations[baseStationId]?.valves}", 1, "error") }
+    return res
+}
+
+def anyValveRunning(child) {
+    // child is baseStation
+    def isAnyRunning = false
+    def selectedDevices = atomicState?.selectedDevices?.baseStations ?: [:]
+    def baseStationId = child?.device?.deviceNetworkId
+    if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves) {
+        selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
+            def valveChild = getChildById(valve?.key)
+            def isRunning = valveChild.isWatering()
+            if (isRunning == true) isAnyRunning = true
+        }
+    } else { LOG("anyValveRunning Missing valveIds.. ${selectedDevices.baseStations[baseStationId]?.valves}", 1, "error") }
+    return isAnyRunning
+}
+
+def updateBaseStationWateringState(baseStationId) {
+    def bDev = getChildDevice(baseStationId)
+    if (bDev) {
+        bDev.updateWateringStateFromValves()
+    }
+    else { LOG("Unable to retrieve device for base station ID ${baseStationId}. Watering State not updated.}", 1, "warn") }
+}
+
+def setValveDefaultRunTime(child, mins) {
+    // child is valve
+    def res = false
+    LOG("Setting Default RunTime | ValveName: ${child?.device.displayName} | Default Rune Time: ${mins})", 3, "debug")
+    def valveId = child?.device?.deviceNetworkId
+    if (valveId && mins) {
+        def secs = mins.toInteger() * 60
+        def jsonData = new JsonBuilder("valveId":valveId, "defaultRuntimeSeconds":secs)
+        LOG("setValveDefaultRunTime jsonData: ${jsonData}", 3, "debug")
+        res = sendJson("valve/setDefaultRuntime", jsonData?.toString(), valveId )
+    } else { LOG("setValveDefaultRunTime Missing valveId or duration... ${valveId} | ${secs}", 1, "error") }
+    return res
+}
 // Dashboard
 
 def getDashboardStartDate() {
@@ -1598,7 +1906,7 @@ def getDashboardEndDate() {
 }
 
 
-def buildDashboard() {
+def buildControllerDashboard() {
     
     def numPastDaysDashboardSetting = (numPastDaysDashboard == null) ? numPastDaysDashboardDefault : numPastDaysDashboard
     def numFutureDaysDashboardSetting = (numFutureDaysDashboard == null) ? numFutureDaysDashboardDefault : numFutureDaysDashboard
@@ -1964,7 +2272,7 @@ void LOG(String message, Integer level=3, String logType="debug") {
 		if(level > dbgLevel) return
 	}
 
-	if(!lLOGTYPES.contains(logType)){
+	if(!lLOGTYPES.contains(logType)) {
 		logerror("LOG() - Received logType (${logType}) which is not in the list of allowed types ${lLOGTYPES}, message: ${message}, level: ${level}")
 		logType="debug"
 	}
@@ -1975,7 +2283,7 @@ void LOG(String message, Integer level=3, String logType="debug") {
     else if (logType == "warn") log.warn(message)
 }
 
-static String getTimestamp(){
+static String getTimestamp() {
 	return new Date().format("yyyy-MM-dd HH:mm:ss z")
 }
 

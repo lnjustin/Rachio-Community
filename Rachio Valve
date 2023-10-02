@@ -1,0 +1,543 @@
+/**
+ *  Rachio Hose Timer Valve Device Handler
+ *
+ *  Copyright\u00A9 2023 Justin Leonard
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ *  in compliance with the License. You may obtain a copy of the License at:
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+ *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
+ *  for the specific language governing permissions and limitations under the License.
+ *
+ * Version info in Rachio Community App
+ */
+
+import java.text.SimpleDateFormat
+
+Integer statusRefresh() { return 60 }
+
+metadata {
+    definition (name: "Rachio Valve", namespace: "lnjustin", author: "Justin Leonard") {
+        capability "Refresh"
+        capability "Switch"
+        capability "Actuator"
+        capability "Valve"
+        capability "Sensor"
+        capability "Polling"
+        capability "Health Check"
+
+        attribute "valveName", "string"
+        attribute "valveColor", "string"
+      //  attribute "valvePhoto", "string"
+
+        attribute "watering", "string"
+        attribute "valveWaterTime", "number"
+        
+        attribute "connected", "string"
+        attribute "lastSeen", "string"
+        attribute "batteryStatus", "string"
+        attribute "firmwareVersion", "string"  
+        attribute "defaultRunTimeSecs", "number"
+        attribute "stateTentative", "string"
+
+        attribute "lastActionStr", "string"
+        attribute "lastActionReason", "string"
+        attribute "lastActionStart", "string"
+        attribute "lastActionSecsDuration", "string"
+        attribute "lastActionProgramId", "string"
+        attribute "lastActionFlowDetected", "string"
+
+        attribute "nextRunStr", "string"
+        attribute "nextRun", "string"
+
+        attribute "lastUpdatedDt", "string"
+        attribute "notificationMessage", "string"
+
+        attribute "DeviceWatch-DeviceStatus", "string"
+
+        command "stopWatering"
+
+        command "startWatering"
+        command "decValveWaterTime"
+        command "incValveWaterTime"
+        command "setValveWaterTime", ["number"]
+
+        command "setValveDefaultWaterTime", ["number"]
+
+        command "skipNextRun"
+        command "cancelSkip"
+    }
+
+    simulator {
+        // TODO: define status and reply messages here
+    }
+
+    tiles (scale: 2){
+        multiAttributeTile(name: "valveTile", type: "generic", width: 6, height: 4) {
+            tileAttribute("device.watering", key: "PRIMARY_CONTROL" ) {
+                attributeState "on", label: 'Watering', action: "close", icon: "st.valves.water.open", backgroundColor: "#00A7E1", nextState: "updating"
+                attributeState "off", label: 'Off', action: "open", icon: "st.valves.water.closed", backgroundColor: "#7e7d7d", nextState:"updating"
+                attributeState "offline", label: 'Offline', icon: "st.valves.water.closed", backgroundColor: "#FE2E2E"
+                attributeState "updating", label:"Working"
+            }
+        }
+        valueTile("valveName", "device.valveName", inactiveLabel: true, width: 3, height: 1, decoration: "flat", wordWrap: true) {
+            state("default", label: 'Valve:\n${currentValue}')
+        }
+
+        valueTile("blank11", "device.blank", width: 1, height: 1, decoration: "flat") {
+            state("default", label: '')
+        }
+
+        valueTile("valveWaterTime", "device.valveWaterTime", width: 2, height: 1, decoration: "flat") {
+            state "default", label:'Manual Valve Time:\n${currentValue} Minutes'
+        }
+        
+        //Valve Water time control
+        valueTile("setValveDefaultWaterTime", "device.setValveDefaultWaterTime", width: 2, height: 1, decoration: "flat") {
+            state "default", label:'Default Watering Time:\n${currentValue} Minutes'
+        }
+        controlTile("valveWaterTimeSliderTile", "device.valveWaterTime", "slider", width: 4, height: 1, range:'(0..60)') {
+            state "default", label: 'Manual Valve Time', action:"setValveWaterTime"
+        }
+        standardTile("rightValveTimeButton", "device.valveWaterTime", inactiveLabel: false, decoration: "flat") {
+            state "default", action:"incValveWaterTime", icon:"st.thermostat.thermostat-right"
+        }
+        valueTile("valveWaterTimeVal", "device.valveWaterTime", inactiveLabel: false, width: 2 , height: 1, decoration: "flat") {
+            state "default", label: 'Water Time\n${currentValue} Minutes'
+        }
+        valueTile("startWateringTile", "device.valveWaterTime", inactiveLabel: false, width: 2 , height: 1, decoration: "flat") {
+            state "default", label: 'Run This Valve\n${currentValue} Minutes', action:'startWatering'
+        }
+
+        standardTile("refresh", "device.power", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
+            state "default", label:'', action:"refresh.refresh", icon:"st.secondary.refresh"
+        }
+    }
+    main "valveTile"
+    details(["valveTile", "valveName", "leftValveTimeButton", "valveWaterTime", "rightValveTimeButton", "startWateringTile", "lastUpdatedDt", "refresh"])
+}
+
+// parse events into attributes
+def parse(String description) {
+    LOG("Parsing '${description}'", 5, "trace")
+}
+
+def initialize() {
+    sendEvent(name: "DeviceWatch-DeviceStatus", value: "online", displayed: false, isStateChange: true)
+    sendEvent(name: "DeviceWatch-Enroll", value: groovy.json.JsonOutput.toJson(["protocol":"cloud", "scheme":"untracked"]), displayed: false)
+    verifyDataAttr()
+}
+
+def verifyDataAttr() {
+    updateDataValue("HealthEnrolled", "true")
+    updateDataValue("manufacturer", "Rachio")
+    def gen = state?.deviceId ? parent?.getDevGeneration(state?.deviceId) : null
+    updateDataValue("model", "${device?.name}${gen ? " ($gen)" : ""}")
+}
+
+void installed() {
+    state.isInstalled = true
+    initialize()
+}
+
+void updated() {
+    initialize()
+}
+
+def generateEvent(Map results) {
+    if(results) {
+        LOG("generate Event for Valve. Results:" + results, 3, "debug")
+        state?.valveId = results?.valveData?.valve.id
+        state?.baseStationId = results?.baseStationData?.baseStation.id
+
+        valveNameEvent(results?.valveData?.valve.name)
+        valveColorEvent(results?.valveData?.valve.color)
+      //  valvePhotoEvent(results?.valveData?.photo.id)
+
+        valveStateEvent(results?.valveData?.valve.state)
+        if(state?.isOnline == false) markOffLine()
+        else if (state?.isOnline == true) valveFlowEvent(results?.valveData?.valve.detectFlow)
+
+        valveProgramEvent(results?.programData.programs)
+
+        if(!device?.currentState("valveWaterTime")?.value) {
+            setValveWaterTime(parent?.getValveRunTimeDefaultSetting())
+        }
+
+        if(isOnline) { lastUpdatedEvent() }
+    }
+    return "hello from zone"
+}
+
+def getDurationDesc(long secondsCnt) {
+    int seconds = secondsCnt %60
+    secondsCnt -= seconds
+    long minutesCnt = secondsCnt / 60
+    long minutes = minutesCnt % 60
+    minutesCnt -= minutes
+    long hoursCnt = minutesCnt / 60
+    return "${minutes} min ${(seconds >= 0 && seconds < 10) ? "0${seconds}" : "${seconds}"} sec"
+}
+
+def getDurationMinDesc(long secondsCnt) {
+    int seconds = secondsCnt %60
+    secondsCnt -= seconds
+    long minutesCnt = secondsCnt / 60
+    long minutes = minutesCnt % 60
+    minutesCnt -= minutes
+    long hoursCnt = minutesCnt / 60
+    return "${minutes}"
+}
+
+def lastUpdatedEvent() {
+    def lastDt = formatDt(new Date())
+    def lastUpd = device?.currentState("lastUpdatedDt")?.stringValue
+    state?.lastUpdatedDt = lastDt?.toString()
+    if(isStateChange(device, "lastUpdatedDt", lastDt.toString())) {
+        LOG("${device?.displayName} is ${state?.isOnline ? "Online and Active" : "OFFLINE"}) - Last Updated: (${lastDt})", 4, "info")
+        sendEvent(name: 'lastUpdatedDt', value: lastDt?.toString(), displayed: false)
+    }
+}
+
+def markOffLine() {
+	if(isStateChange(device, "watering", "offline")) { 
+		LOG("UPDATED: Watering (Offline)", 5, "trace")
+		sendEvent(name: 'watering', value: "offline", displayed: true, isStateChange: true)
+		sendEvent(name: 'valve', value: "closed", displayed: false, isStateChange: true)
+		sendEvent(name: 'switch', value: "off", displayed: false, isStateChange: true)
+	}
+	if(isStateChange(device, "valveRunStatus", "Device in Offline")) {
+		sendEvent(name: 'valveRunStatus', value: "Device is Offline", displayed: false, isStateChange: true)
+	}
+    setWatchDogStatus()
+}
+
+def valveFlowEvent(isFlowDetected) {
+    LOG("valveFlowEvent...", 5, "trace")
+    def curState = device?.currentState("watering")?.value.toString()
+    def newState = isFlowDetected == "true" ? "on" : "off"
+    if(isStateChange(device, "watering", newState.toString())) {
+        LOG("UPDATED: Watering (${newState}) | Previous: (${curState})", 3, "debug")
+        sendEvent(name: 'watering', value: newState, displayed: true, isStateChange: true)
+        sendEvent(name: 'switch', value: (isFlowDetected == "true" ? "on" : "off"), displayed: false, isStateChange: true)
+        sendEvent(name: 'valve', value: (isFlowDetected == "true" ? "open" : "closed"), displayed: false, isStateChange: true)
+    }
+}
+
+def valveNameEvent(val) {
+    def curState = device?.currentState("valveName")?.value.toString()
+    def newState = val ? val.toString() : "unknown"
+    if(isStateChange(device, "valveName", newState.toString())) {
+        LOG("UPDATED: Valve Name (${newState}) | Previous: (${curState})", 3, "debug")
+        sendEvent(name:'valveName', value: newState, displayed: true)
+    }
+}
+
+def valveColorEvent(val) {
+    def curState = device?.currentState("valveColor")?.value.toString()
+    def newState = val ? val.toString() : "unknown"
+    if(isStateChange(device, "valveColor", newState.toString())) {
+        LOG("UPDATED: Valve Color (${newState}) | Previous: (${curState})", 3, "debug")
+        sendEvent(name:'valveColor', value: newState, displayed: true)
+    }
+}
+
+def setWatchDogStatus() {
+    def onlStatus = state?.isOnline == true ? "online" : "offline"
+    sendEvent(name: "DeviceWatch-DeviceStatus", value: onlStatus, displayed: false)
+}
+
+def valveStateEvent(stateData) {
+    state?.stateData = stateData
+
+    def reportedState = stateData?.reportedState
+    if (reportedState.connected != null) sendEvent(name:'connected', value: reportedState?.connected)
+    state?.isOnline = reportedState.connected == "true" ? true : false
+    if(!state?.isOnline) markOffLine()
+    setWatchDogStatus()
+
+    if (reportedState.lastSeen) sendEvent(name:'lastSeen', value: formatUtcDt(reportedState.lastSeen))
+    if (reportedStaet.batteryStatus) sendEvent(name:'batteryStatus', value: reportedStaet.batteryStatus)
+    if (reportedStaet.firmwareVersion) sendEvent(name:'firmwareVersion', value: reportedStaet.firmwareVersion)
+
+    if (reportedStaet.defaultRuntimeSeconds) sendEvent(name:'defaultRunTimeSecs', value: reportedStaet.defaultRuntimeSeconds)
+    
+    if (stateData.matches != null) {
+        def stateTentativeVal = stateData.matches == "true" ? true : false
+        sendEvent(name:'stateTentative', value: stateTentativeVal)
+        if (stateTentativeVal == true) handleTentativeState()
+    }
+}
+
+def valveProgramEvent(programs) {
+    if (!state.programs) state.programs = [:]
+    programs.each { program ->
+        state.programs[program.id] = program.name
+    }
+}
+
+def handleTentativeState() {
+    LOG("State of Valve is only tentative. Asycnhronous changes have not yet been downloaded to the value.)", 1, "warn")
+}
+
+def fmtString(str) {
+    if(!str) { return null }
+    def out = []
+    def tmp = str?.replaceAll("_", " ")?.toLowerCase()?.split(" ")
+    tmp?.each { out.push(it?.toString().capitalize()) }
+    return out.join(" ")
+}
+
+def refresh() {
+    LOG("refresh...", 5, "trace")
+    poll()
+}
+
+void poll() {
+    LOG("Requested Parent Poll...", 5, "trace");
+    parent?.poll(this)
+}
+
+def setValveWaterTime(timeVal) {
+    def curState = device?.currentState("valveWaterTime")?.value.toString()
+    def newVal = timeVal ? timeVal.toInteger() : getDefaultRunTime()
+    if(isStateChange(device, "valveWaterTime", newVal.toString())) {
+        LOG("UPDATED: Manual Valve Water Time (${newVal}) | Previous: (${curState})", 3, "debug"
+        sendEvent(name: 'valveWaterTime', value: newVal, displayed: true)
+    }
+}
+
+def getDefaultRunTime() {
+    return device?.currentState("defaultRunTimeSecs")?.value ?: 10
+}
+
+def incValveWaterTime() {
+    LOG("Decrease Valve Runtime", 5, "trace")
+    def value = device.latestValue('valveWaterTime')
+    setValveWaterTime(value + 1)
+}
+
+def decValveWaterTime() {
+    LOG("Increase Valve Runtime", 5, "trace")
+    def value = device.latestValue('valveWaterTime')
+    setValveWaterTime(value - 1)
+}
+
+def isCmdOk2Run() {
+    LOG("isCmdOk2Run...", 5, "trace")
+    if(state?.isOnline == false) {
+        LOG("Skipping the request... Because the valve is unable to send commands while it's in an Offline State.", 1, "warn")
+        return false
+    }
+    else { return true }
+}
+
+def startWatering(mins=null) {
+    // mins may be set by the wifi hub device
+    LOG("startWatering()...", 5, "trace")
+    if(!isCmdOk2Run()) { return }
+    def waterTime = getDefaultRunTime()
+    if (mins == null && device?.latestValue('valveWaterTime') != null) waterTime = device?.latestValue('valveWaterTime')
+    else if (mins != null) waterTime = mins
+    LOG("Starting Watering for (${waterTime}) Minutes", 3, "debug")
+    def res = parent?.startValve(this, waterTime)
+    if (res) {
+        LOG("startWatering was Sent Successfully: ${res}", 3, "debug")
+        sendWateringEvents(true)
+    }
+    else {
+        markOffLine()
+    }
+    return res
+}
+
+def stopWatering() {
+    LOG("stopWatering()...", 5, "trace")
+   // if(!isCmdOk2Run()) { return }
+    def isClosed = device?.currentState("valve")?.value.toString() == "closed" ? true : false
+    if (!isClosed) {
+        def res = parent?.stopValve(this)
+        if (res) {
+            LOG("Valve was Stopped Successfully...", 4, "info")
+            sendWateringEvents(false)
+        }
+        else {
+            markOffLine()
+        }
+    } else { LOG("Valve is Already Closed... Ignoring...", 4, "info") }
+}
+
+def on() {
+    LOG("valve on...", 5, "trace")
+    if(!isCmdOk2Run()) { return }
+    def isOn = device?.currentState("switch")?.value.toString() == "on" ? true : false
+    if (!isOn) { startWatering() }
+    else { LOG("Valve is Already ON... Ignoring...", 4, "info") }
+}
+
+def off() {
+    LOG("valve off...", 5, "trace")
+    //if(!isCmdOk2Run()) { return }
+    def isOff = device?.currentState("switch")?.value.toString() == "off" ? true : false
+    if (!isOff) { stopWatering() }
+    else { LOG("Valve is Already OFF... Ignoring...", 4, "info") }
+}
+
+def open() {
+    LOG("Valve open()...", 5, "trace")
+    if(!isCmdOk2Run()) { return }
+    def isOpen = device?.currentState("valve")?.value.toString() == "open" ? true : false
+    if (!isOpen) {
+        startWatering()
+    }
+    else { LOG("Valve is Already Open... Ignoring...", 4, "info") }
+}
+
+def close() {
+    LOG("Valve close()...", 5, "trace")
+    //if(!isCmdOk2Run()) { return }
+    def isClosed = device?.currentState("valve")?.value.toString() == "closed" ? true : false
+    if (!isClosed) {
+        stopWatering()
+    } else { LOG("Valve is Already Closed... Ignoring...", 4, "info") }
+}
+
+def sendWateringEvents(isWatering) {
+    if (isWatering == true) {
+        sendEvent(name:'switch', value: "on", displayed: false, isStateChange: true)
+        sendEvent(name:'valve', value: "open", displayed: false, isStateChange: true)
+        sendEvent(name:'watering', value: "on", displayed: true, isStateChange: true)
+    }
+    else {
+        sendEvent(name:'switch', value: "off", displayed: false, isStateChange: true)
+        sendEvent(name:'valve', value: "closed", displayed: false, isStateChange: true)
+        sendEvent(name:'watering', value: "off", displayed: true, isStateChange: true)
+    }
+    if (state?.baseStationId != null) parent?.updateBaseStationWateringState(state?.baseStationId)
+}
+
+def isWatering() {
+    return device?.currentState("valve")?.value.toString() == "open" ? true : false
+}
+
+def setValveDefaultWaterTime(waterTime) {
+    LOG("setValveDefaultWaterTime(${waterTime})...", 5, "trace")
+    if(!isCmdOk2Run()) { return }
+    def res = parent?.setValveDefaultRunTime(this, waterTime)
+    if (res) {
+        LOG("setValveDefaultWaterTime was Sent Successfully: ${res}", 3, "debug")
+    }
+    else {
+        LOG("setValveDefaultWaterTime was unsuccessful. Marking valve as offline: ${res}", 3, "debug")
+        markOffLine()
+    }
+}
+
+def getDtNow() {
+	def now = new Date()
+	return formatDt(now, false)
+}
+
+def epochToDt(val) {
+    if(val) { return formatDt(new Date(val)) }
+}
+
+def formatDt(dt, mdy = true) {
+	def formatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
+	def tf = new SimpleDateFormat(formatVal)
+	if(location?.timeZone) { tf.setTimeZone(location?.timeZone) }
+	return tf.format(dt)
+}
+
+//Returns time differences is seconds
+def GetTimeValDiff(timeVal) {
+    try {
+        def start = new Date(timeVal).getTime()
+        def now = new Date().getTime()
+        def diff = (int) (long) (now - start) / 1000
+        LOG("diff: $diff", 3, "debug")
+        return diff
+    }
+    catch (ex) {
+        LOG("GetTimeValDiff Exception: ${ex}", 1, "error")
+        return 1000
+    }
+}
+
+def getTimeDiffSeconds(strtDate, stpDate=null) {
+	if((strtDate && !stpDate) || (strtDate && stpDate)) {
+		def now = new Date()
+		def stopVal = stpDate ? stpDate.toString() : formatDt(now, false)
+		def start = Date.parse("E MMM dd HH:mm:ss z yyyy", strtDate).getTime()
+		def stop = Date.parse("E MMM dd HH:mm:ss z yyyy", stopVal).getTime()
+		def diff = (int) (long) (stop - start) / 1000
+		return diff
+	} else { return null }
+}
+
+def getTimeDiffSecondsUtc(strtDate, stpDate) {
+	if(strtDate && stpDate) {
+		def start = getUnixDtFromUTCDt(strtDate)
+        def stop = getUnixDtFromUTCDt(stpDate)
+		def diff = (int) (long) (stop - start) / 1000
+		return diff
+	} else { return null }
+}
+
+def getUnixDtFromUTCDt(utcDt) {
+    return Date.parse("yyyy-MM-dd'T'HH:mm:ss'Z'", utcDt).getTime()
+}
+
+def formatUtcDt(utcDt, mdy = true) {
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    
+	LOG("formatDt($dt, $mdy)...", 5, "trace")
+	def formatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
+	def outFormat = new SimpleDateFormat(formatVal)
+    if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
+    
+	return outFormat.format(inFormat.parse(utcDt))
+}
+
+def convertSecstoTimeStr(int secondsToConvert) {
+    long hours = TimeUnit.SECONDS.toHours(secondsToConvert)
+    long minutes = TimeUnit.SECONDS.toMinutes(secondsToConvert) % TimeUnit.HOURS.toMinutes(1)
+    long seconds = TimeUnit.SECONDS.toSeconds(secondsToConvert) % TimeUnit.MINUTES.toSeconds(1)
+
+    if (hours == 0) return String.format("%02d:%02d", Math.abs(minutes), Math.abs(seconds))
+    else return String.format("%02d:%02d:%02d", Math.abs(hours), Math.abs(minutes), Math.abs(seconds))
+}
+
+// generate custom mobile activity feeds event
+void generateActivityFeedsEvent(notificationMessage) {
+	sendEvent(name: "notificationMessage", value: "${device.name} ${notificationMessage}", descriptionText: "${device.name} ${notificationMessage}", isStateChange: true)
+}
+
+@Field static final List<String> lLOGTYPES =	['error', 'debug', 'info', 'trace', 'warn']
+
+void LOG(String message, Integer level=3, String logType="debug") {
+    String dbg=parent.settings.debugLevel == null ? "2" : settings.debugLevel
+	Integer dbgLevel = dbg.toInteger()
+	if (logType == "error") {
+		String a=getTimestamp()
+		state.lastLOGerror="${message} @ "+a
+		state.LastLOGerrorDate=a
+	} else {
+		if(level > dbgLevel) return
+	}
+
+	if(!lLOGTYPES.contains(logType)) {
+		logerror("LOG() - Received logType (${logType}) which is not in the list of allowed types ${lLOGTYPES}, message: ${message}, level: ${level}")
+		logType="debug"
+	}
+    if (logType == "debug") log.debug(message)
+    else if (logType == "error") log.error(message)
+    else if (logType == "info") log.info(message)
+    else if (logType == "trade") log.trace(message)
+    else if (logType == "warn") log.warn(message)
+}
