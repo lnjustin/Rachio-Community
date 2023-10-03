@@ -43,15 +43,18 @@ metadata {
         attribute "defaultRunTimeSecs", "number"
         attribute "stateTentative", "string"
 
-        attribute "lastActionStr", "string"
-        attribute "lastActionReason", "string"
+        attribute "lastAction", "string"
         attribute "lastActionStart", "string"
-        attribute "lastActionSecsDuration", "string"
-        attribute "lastActionProgramId", "string"
+        attribute "lastActionStartStr", "string"
+        attribute "lastActionMinsDuration", "string"
+        attribute "lastActionProgramName", "string"
         attribute "lastActionFlowDetected", "string"
 
-        attribute "nextRunStr", "string"
-        attribute "nextRun", "string"
+        attribute "nextAction", "string"
+        attribute "nextActionStart", "string"
+        attribute "nextActionStartStr", "string"
+        attribute "nextActionMinsDuration", "string"
+        attribute "nextActionProgramName", "string"
 
         attribute "lastUpdatedDt", "string"
         attribute "notificationMessage", "string"
@@ -67,8 +70,8 @@ metadata {
 
         command "setValveDefaultWaterTime", ["number"]
 
-        command "skipNextRun"
-        command "cancelSkip"
+        command "skipNextProgramRun"
+        command "cancelPendingSkip"
     }
 
     simulator {
@@ -158,11 +161,14 @@ def generateEvent(Map results) {
         valveColorEvent(results?.valveData?.valve.color)
       //  valvePhotoEvent(results?.valveData?.photo.id)
 
+        // process programs before state, so that program names will be available
+        valveProgramEvent(results?.programData.programs)
+
         valveStateEvent(results?.valveData?.valve.state)
         if(state?.isOnline == false) markOffLine()
         else if (state?.isOnline == true) valveFlowEvent(results?.valveData?.valve.detectFlow)
 
-        valveProgramEvent(results?.programData.programs)
+        dayViewEvent(results?.dayViewData?.valveDayViews)
 
         if(!device?.currentState("valveWaterTime")?.value) {
             setValveWaterTime(parent?.getValveRunTimeDefaultSetting())
@@ -271,6 +277,19 @@ def valveStateEvent(stateData) {
         sendEvent(name:'stateTentative', value: stateTentativeVal)
         if (stateTentativeVal == true) handleTentativeState()
     }
+
+    def lastAction = reportedState.lastWateringAction
+    if (lastAction.start) {
+        sendEvent(name:'lastActionStartStr', value: formatUtcDt(lastAction.start))
+        sendEvent(name:'lastActionStart', value: getUnixDtFromUTCDt(lastAction.start) )
+    }
+    if (lastAction.durationSeconds) {
+        def mins - (lastAction.durationSeconds/60).round()
+        sendEvent(name:'lastActionMinsDuration', value: mins)
+    }
+    if (lastAction.reason) sendEvent(name:'lastAction', value: lastAction.reason)
+    if (lastAction.flowDetected) sendEvent(name:'lastActionFlowDetected', value: lastAction.flowDetected)
+    if (lastAction.programId && state.programs[lastAction.programId]) sendEvent(name:'lastActionProgramName', value: state.programs[lastAction.programId])
 }
 
 def valveProgramEvent(programs) {
@@ -278,6 +297,97 @@ def valveProgramEvent(programs) {
     programs.each { program ->
         state.programs[program.id] = program.name
     }
+}
+
+def dayViewEvent(dayViewData) {
+    setNextActionEvents(dayViewData)
+}
+
+def setNextActionEvents(dayViewData) {
+    // API provides no guarantee about the sorting of this data structure, so need to ensure select the earliest next action
+    if (!dayViewData) {
+        LOG("No upcoming actions for valve.", 4, "info")
+        return
+    }
+    def nextAction = [:]
+    def dayDate = new Date()
+    dayDate.clearTime()
+    dayViewData.each { day ->
+        def processDay = true
+        if (nextAction != [:]) {
+            // if have already determined a next action, cut processing short if this day is already after the next action
+            dayDate.set(year: day.year, month: day.month, date: day.day)
+            def nextActionDate = getDateObjectFromUTCDt(nextAction?.start)
+            if (dayDate.after(nextActionDate)) processDay = false
+        }
+        if (processDay) {
+            day.valveProgramRunSummaries?.each { programAction ->
+                if (state.programs?.containsKey(programAction?.programId)) {
+                    // program contains this valve
+                    programAction?.valveRunSummaries?.each { valveRun ->
+                        nextAction = processValveRunForNextAction("Program Run", valveRun, nextAction, programAction)
+                    }
+                }
+            }
+            day.valveQuickRunSummaries?.each { quickAction ->
+                quickAction?.valveRunSummaries?.each { valveRun ->
+                    nextAction = processValveRunForNextAction("Quick Run", valveRun, nextAction)
+                }
+            }
+            day.valveManualRunSummaries?.each { manualAction ->
+                manualAction?.valveRunSummaries?.each { valveRun ->
+                    nextAction = processValveRunForNextAction("Manual Run", valveRun, nextAction)
+                }
+            }
+        }
+    }
+    if (nextAction != [:]) {
+        if (nextAction.action) sendEvent(name:'nextAction', value: nextAction.action)
+        if (nextAction.start) {
+            sendEvent(name:'nextActionStartStr', value: formatUtcDt(nextAction.start))
+            sendEvent(name:'nextActionStart', value: getUnixDtFromUTCDt(nextAction.start) )
+        }
+        if (nextAction.durationSeconds) {
+            def mins - (nextAction.durationSeconds/60).round()
+            sendEvent(name:'nextActionMinsDuration', value: mins)
+        }
+        sendEvent(name:'nextActionProgramName', value: nextAction.programName ?: "None")
+
+        if (nextAction.programId != null) {
+            // save next action state for creating or deleting skips if needed
+            state.nextActionProgramId = nextAction.programId
+            state.nextActionProgramTimestamp = nextAction.programTime
+        }
+        else {
+            state.nextActionProgramId = null
+            state.nextActionProgramTimestamp = null
+        }
+        
+    }
+    else LOG("No upcoming runs of valveId ${state.valveId}.", 4, "info")
+}
+
+def processValveRunForNextAction(runType, valveRun, nextAction, programAction = null) {
+    def newNextAction = nextAction
+    if (valveRun.valveId == state?.valveId) {
+        def now = new Date()
+        def action = runType
+        if (valveRun.skip) {
+            if (valveRun.skip?.manualOverrideTrigger) action = "Manual Skip"
+            else if (valveRun.skip?.rainOverrideTrigger) action = "Rain Skip"
+        }
+        if (nextAction == [:]) {
+            newNextAction = [action: action, start: valveRun.start, durationSeconds: valveRun.durationSeconds, programName: programAction?.programName, programId: programAction?.programId, programTime: programAction?.start]
+        }
+        else {
+            def startDate = getDateObjectFromUTCDt(valveRun.start)
+            def nextActionDate = getDateObjectFromUTCDt(nextAction?.start)
+            if (startDate.after(now) && nextActionDate.after(startDate)) {
+                newNextAction = [action: action, start: valveRun.start, durationSeconds: valveRun.durationSeconds, programName: programAction?.programName, programId: programAction?.programId, programTime: programAction?.start]
+            }
+        }
+    }
+    return newNextAction
 }
 
 def handleTentativeState() {
@@ -437,6 +547,32 @@ def setValveDefaultWaterTime(waterTime) {
     }
 }
 
+def skipNextProgramRun() {
+    if (device.latestValue('nextAction') == "Program Run" && state.nextActionProgramId && state.nextActionProgramTimestamp) {
+        def res = parent?.createHoseTimerProgramSkip(state.nextActionProgramId, state.nextActionProgramTimestamp)
+        if (res) {
+            runIn(10, "poll") // resynch 
+        }
+        else LOG("Error skipping next run", 1, "warn")
+    }
+    else {
+        LOG("No Next Run to Skip", 1, "warn")
+    }
+}
+
+def cancelPendingSkip() {
+    if ((device.latestValue('nextAction') == "Manual Skip" || device.latestValue('nextAction') == "Rain Skip") && state.nextActionProgramId && state.nextActionProgramTimestamp) {
+        def res = parent?.deleteHoseTimerProgramSkip(state.nextActionProgramId, state.nextActionProgramTimestamp)
+        if (res) {
+            runIn(10, "poll") // resynch 
+        }
+        else LOG("Error canceling pending skip", 1, "warn")
+    }
+    else {
+        LOG("No Pending Skip to Cancel", 1, "warn")
+    }
+}
+
 def getDtNow() {
 	def now = new Date()
 	return formatDt(now, false)
@@ -490,6 +626,10 @@ def getTimeDiffSecondsUtc(strtDate, stpDate) {
 
 def getUnixDtFromUTCDt(utcDt) {
     return Date.parse("yyyy-MM-dd'T'HH:mm:ss'Z'", utcDt).getTime()
+}
+
+def getDateObjectFromUTCDt(utcDt) {
+    return Date.parse("yyyy-MM-dd'T'HH:mm:ss'Z'", utcDt)
 }
 
 def formatUtcDt(utcDt, mdy = true) {

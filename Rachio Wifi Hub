@@ -51,9 +51,6 @@ metadata {
         command "incAllValveWaterTime"
         command "setAllValveWaterTime", ["number"]
 
-        command "skipNextRunAllValves"
-        command "cancelSkipAllValves"
-
         command(
              "setDashboardColorScheme", 
              [

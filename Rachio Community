@@ -1014,7 +1014,7 @@ def getValvePrograms(valveId) {
     return result  
 }
 
-def getValveDayViews(baseStationId, Date start, Date end) {
+def getBaseStationDayViews(baseStationId, Date start, Date end) {
     LOG(" getValveDayViews($baseStationId)...", 5, "trace")
     def res = null
     if (baseStationId && start && end) {
@@ -1334,17 +1334,20 @@ def pollChild(childDev, type) {
                     if(dni == baseStation?.key) {
                         def baseStationData = getDeviceData(baseStation?.key, "baseStation")
                         def valvesData = getValveListData(baseStation?.key)
+
+                        /*
                         def programDataByValve = [:]
                         baseStation?.value?.valves?.each { valve ->
                             programData[valve?.key] = getValvePrograms(valve?.key)
                         }
-                       // def summaryData = getSummaryData(baseStation?.key)
+                        def summaryData = getSummaryData(baseStation?.key)
+                        */
 
                       //  Boolean programRunning = (devData?.currentSchedule?.status == "PROCESSING") ? true : false
                      //   if (isWatering() && !schedRunning) { handleWateringSched(dni, false) }
 
                         if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
-                        data = [baseStationData: baseStationData, valvesData: valvesData, programDataByValve: programDataByValve]
+                        data = [baseStationData: baseStationData, valvesData: valvesData]
                     } else {
                         baseStation?.value?.valves?.each { valve ->
                             if (dni == valve?.key) {
@@ -1353,12 +1356,19 @@ def pollChild(childDev, type) {
                                 def valveData = getValveData(valve?.key)
                                 def programData = getValvePrograms(valve?.key)
 
+                                // retrieve dayView data to get next run data
+                                def today = new Date()
+                             //   def startDate = offsetDateByNumDays(today, -10)
+                                def startDate = today
+                                def endDate = offsetDateByNumDays(today, 10)
+                                def dayViewData = getBaseStationeDayViews(baseStation?.key, startDate, endDate)
+
                                 def newLabel = getDeviceLabelStr(valve?.value).toString()
                                 if(devLabel != newLabel) {
                                     childDev?.label = newLabel
                                     LOG("Valve Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
                                 }
-                                data = [baseStationData: baseStationData, valveData: valveData, programData: programData]
+                                data = [baseStationData: baseStationData, valveData: valveData, programData: programData, dayViewData: dayViewData]
                             }
                         }
                     }
@@ -1887,6 +1897,28 @@ def setValveDefaultRunTime(child, mins) {
     } else { LOG("setValveDefaultRunTime Missing valveId or duration... ${valveId} | ${secs}", 1, "error") }
     return res
 }
+
+def createHoseTimerProgramSkip(programId, timestamp) {
+    LOG(" createHoseTimerProgramSkip($programId, $timestamp)...", 5, "trace")
+    def res = null
+    if (programId && timestamp) {
+        def jsonData = new JsonBuilder("programId":programId, "timestamp":timestamp)
+        LOG("createHoseTimerProgramSkip jsonData: ${jsonData}", 3, "debug")
+        res = sendJsonGetResponse("program/createSkipOverrides", jsonData?.toString(), "open", "post")
+    } else { LOG("createHoseTimerProgramSkip Missing programId or timestamp... ${programId} | ${timestamp}", 1, "error") }
+    return res
+}
+
+def deleteHoseTimerProgramSkip(programId, timestamp) {
+    LOG(" deleteHoseTimerProgramSkip($programId, $timestamp)...", 5, "trace")
+    def res = null
+    if (programId && timestamp) {
+        def jsonData = new JsonBuilder("programId":programId, "timestamp":timestamp)
+        LOG("deleteHoseTimerProgramSkip jsonData: ${jsonData}", 3, "debug")
+        res = sendJsonGetResponse("program/deleteSkipOverrides", jsonData?.toString(), "open", "post")
+    } else { LOG("deleteHoseTimerProgramSkip Missing programId or timestamp... ${programId} | ${timestamp}", 1, "error") }
+    return res
+}
 // Dashboard
 
 def getDashboardStartDate() {
@@ -1905,6 +1937,13 @@ def getDashboardEndDate() {
     return today+intDays
 }
 
+def offsetDateByNumDays(Date date, Integer numDays) {
+    // set numDays to negative to offset into the past, positive to offset into the future
+    def d = date
+    if (numDays > 0) d.set(hourOfDay: 23, minute: 59, second: 59)
+    else if (numeDays < 0) d.set(hourOfDay: 0, minute: 0, second: 0)
+    return d+numDays
+}
 
 def buildControllerDashboard() {
     
