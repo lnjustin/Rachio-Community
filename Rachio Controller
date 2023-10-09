@@ -700,7 +700,7 @@ def pauseScheduleRun() {
    LOG("pauseScheduleRun...", 5, "trace")
     if(state?.curSchedType == "automatic") {
         def res = parent?.pauseScheduleRun(this)
-        if(res) { LOG("Successfully Paused Scheduled Run...", 3, "debug")
+        if(res) { LOG("Successfully Paused Scheduled Run...", 3, "debug") }
     }
 }
 
@@ -862,8 +862,6 @@ void generateActivityFeedsEvent(notificationMessage) {
 	sendEvent(name: "notificationMessage", value: "${device.name} ${notificationMessage}", descriptionText: "${device.name} ${notificationMessage}", isStateChange: true)
 }
 
-@Field static final List<String> lLOGTYPES =	['error', 'debug', 'info', 'trace', 'warn']
-
 void LOG(String message, Integer level=3, String logType="debug") {
     String dbg=parent.settings.debugLevel == null ? "2" : settings.debugLevel
 	Integer dbgLevel = dbg.toInteger()
@@ -874,7 +872,7 @@ void LOG(String message, Integer level=3, String logType="debug") {
 	} else {
 		if(level > dbgLevel) return
 	}
-
+    def List<String> lLOGTYPES =	['error', 'debug', 'info', 'trace', 'warn']
 	if(!lLOGTYPES.contains(logType)) {
 		logerror("LOG() - Received logType (${logType}) which is not in the list of allowed types ${lLOGTYPES}, message: ${message}, level: ${level}")
 		logType="debug"

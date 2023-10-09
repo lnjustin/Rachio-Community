@@ -157,6 +157,7 @@ def generateEvent(Map results) {
     LOG("---------------START OF WIFI HUB API RESULTS DATA----------------", 3, "debug")
     if(results) {
         LOG("Results: ${results}", 3, "debug")
+
         state?.deviceId = device?.deviceNetworkId.toString()
 
         stateDataEvent(results?.baseStationData.baseStation.reportedState)
@@ -178,13 +179,13 @@ def stateDataEvent(stateData) {
     state?.stateData = stateData
 
     def reportedState = stateData?.reportedState
-    if (reportedState.connected != null) sendEvent(name:'connected', value: reportedState?.connected)
-    state?.isOnline = reportedState.connected == "true" ? true : false
+    if (stateData?.connected != null) sendEvent(name:'connected', value: stateData?.connected)
+    state?.isOnline = stateData?.connected == "true" ? true : false
     if(!state?.isOnline) markOffLine()
     setWatchDogStatus()
 
-    if (reportedStaet.bleHubFirmwareVersion) sendEvent(name:'bleHubFirmwareVersion', value: reportedStaet.bleHubFirmwareVersion)
-    if (reportedStaet.wifiBridgeFirmwareVersion) sendEvent(name:'wifiBridgeFirmwareVersion', value: reportedStaet.wifiBridgeFirmwareVersion)
+    if (stateData?.bleHubFirmwareVersion) sendEvent(name:'bleHubFirmwareVersion', value: stateData?.bleHubFirmwareVersion)
+    if (stateData?.wifiBridgeFirmwareVersion) sendEvent(name:'wifiBridgeFirmwareVersion', value: stateData?.wifiBridgeFirmwareVersion)
 }
 
 def valvesDataEvent(valves) {
@@ -358,6 +359,19 @@ def epochToDt(val) {
     return formatDt(new Date(val))
 }
 
+def getUnixDtFromUTCDt(utcDt) {
+     def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    Date date = inFormat.parse(utcDt)
+    return date.getTime()
+}
+
+def getDateObjectFromUTCDt(utcDt) {
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    return inFormat.parse(utcDt)
+}
+
 def formatDt(dt, mdy = true) {
 	LOG("formatDt($dt, $mdy)...", 5, "trace")
 	def formatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
@@ -366,30 +380,39 @@ def formatDt(dt, mdy = true) {
 	return tf.format(dt)
 }
 
-def getUnixDtFromUTCDt(utcDt) {
-    return Date.parse("yyyy-MM-dd'T'HH:mm:ss'Z'", utcDt).getTime()
-}
-
 def formatUtcDt(utcDt, mdy = true) {
-    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")
     inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
     
-	LOG("formatDt($dt, $mdy)...", 5, "trace")
+	LOG("formatDt($utcDt, $mdy)...", 5, "trace")
 	def formatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
 	def outFormat = new SimpleDateFormat(formatVal)
     if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
     
-    if (parent?.debugLogging) {  LOG("Formatting utcDt of ${utcDt}", 3, "debug") }
+  //  if (utcDt == null) return null
     
-    def ret = null
-    if (utcDt != null) {
-        ret = outFormat.format(inFormat.parse(utcDt))
+    def parsedInFormat = null
+    try {
+        parsedInFormat = inFormat.parse(utcDt)
+    } 
+    catch (ex1) {
+        try {
+            inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+            inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+            parsedInFormat = inFormat.parse(utcDt)
+        }
+        catch (ex2) {
+            inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+            inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+            parsedInFormat = inFormat.parse(utcDt)
+        }
     }
-	return ret
+
+	return outFormat.format(parsedInFormat)
 }
 
 def formatUtcDtNoTime(utcDt) {
-    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")
     inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
     
 	LOG("formatDt($dt, $mdy)...", 5, "trace")
@@ -431,10 +454,8 @@ void generateActivityFeedsEvent(notificationMessage) {
 	sendEvent(name: "notificationMessage", value: "${device.name} ${notificationMessage}", descriptionText: "${device.name} ${notificationMessage}", isStateChange: true)
 }
 
-@Field static final List<String> lLOGTYPES =	['error', 'debug', 'info', 'trace', 'warn']
-
 void LOG(String message, Integer level=3, String logType="debug") {
-    String dbg=parent.settings.debugLevel == null ? "2" : settings.debugLevel
+    String dbg=parent?.getDebugLevel()
 	Integer dbgLevel = dbg.toInteger()
 	if (logType == "error") {
 		String a=getTimestamp()
@@ -443,7 +464,7 @@ void LOG(String message, Integer level=3, String logType="debug") {
 	} else {
 		if(level > dbgLevel) return
 	}
-
+    def List<String> lLOGTYPES =	['error', 'debug', 'info', 'trace', 'warn']
 	if(!lLOGTYPES.contains(logType)) {
 		logerror("LOG() - Received logType (${logType}) which is not in the list of allowed types ${lLOGTYPES}, message: ${message}, level: ${level}")
 		logType="debug"
@@ -451,6 +472,6 @@ void LOG(String message, Integer level=3, String logType="debug") {
     if (logType == "debug") log.debug(message)
     else if (logType == "error") log.error(message)
     else if (logType == "info") log.info(message)
-    else if (logType == "trade") log.trace(message)
+    else if (logType == "trace") log.trace(message)
     else if (logType == "warn") log.warn(message)
 }

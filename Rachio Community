@@ -81,8 +81,8 @@ preferences {
 mappings {
     path("/rachioIrrigationReceiver") { action: [ POST: "rachioIrrigationReceiveHandler" ] }
     path("/rachioHoseTimerReceiver") { action: [ POST: "rachioHoseTimerReceiveHandler" ] }
-    path("/rachioDashboard/controller/:controllerID") { action: [ GET: "buildControllerDashboard"] }
-    path("/rachioDashboard/baseStation/:baseStationID") { action: [ GET: "buildBaseStationDashboard"] }
+    path("/rachioDashboard/irrigation/:controllerID") { action: [ GET: "buildDashboard"] }
+    path("/rachioDashboard/hoseTimer/:hoseTimerValveID") { action: [ GET: "buildDashboard"] }
     path("/rachioDashboard") { action: [ GET: "buildDashboard"] }
 }
 
@@ -202,12 +202,14 @@ def devicePage() {
     LOG("rachioControllerList(): ${controllers}", 3, "debug")
 
     // Get Smart Hose Timer Base Stations (wifi hubs)
-    def baseStations = getBaseStations()
-    def baseStationList = getBaseStationInputEnum(baseStations)
+    def baseStations = getBaseStations(atomicState.userId)
     LOG("rachioBaseStationList(): ${baseStations}", 3, "debug")
+    def baseStationList = getBaseStationInputEnum(baseStations)
+    def valveList = []
+    
 
     //step2: render the page for user to select which controller
-    return dynamicPage(name: "devicePage", install: true, uninstall: true) {
+    dynamicPage(name: "devicePage", install: true, uninstall: true) {
         
         section {
              header()   
@@ -229,12 +231,12 @@ def devicePage() {
          section(getInterface("header","Hose Timer Configuration")) {
             
             // TO DO: Fix images from model info state
-            input "baseStations", "enum", title: "Select your hose timer wifi hubs", description: "Tap to Select", required: true, multiple: true, options: baseStationList, submitOnChange: true
-        
+            input "baseStations", "enum", title: "Select your hose timer wifi hubs (by serial number)", description: "Tap to Select", required: true, multiple: true, options: baseStationList, submitOnChange: true
             if(settings?.baseStations) {
                 baseStationList?.sort { it?.value }?.each { station ->
                     if(station?.key in settings?.baseStations) {
                         def valveInputEnum = hoseTimerValveSelections(station?.key)
+                        valveList.add(valveInputEnum)
                         input "${station?.key}_valves", "enum", title: "Select Valves for hose timer wifi hub ${station?.value}", description: "Tap to Select", required: true, multiple: true, options: valveInputEnum, submitOnChange: true
                     }
                 }
@@ -246,20 +248,22 @@ def devicePage() {
             
             section(getInterface("header","Dashboard")) {
                 href "dashboardSettingsPage", title: "Dashboard Setup", description: ""
+
+                def cloudUri = getFullApiServerUrl() + "/rachioDashboard?access_token=${state.accessToken}"
+                paragraph("<a href='${cloudUri}'>Link for Dashboard for all Devices</a>")
                 
-                settings?.controllers?.each { contID ->
-                    if(contID) { 
+                controllerList.each { cont ->
+                    if(cont) { 
                       //  def localUri = getFullLocalApiServerUrl() + "/rachioDashboard/controller/${contID}?access_token=${state.accessToken}"
-                        def cloudUri = getFullApiServerUrl() + "/rachioDashboard/controller/${contID}?access_token=${state.accessToken}"
-                        paragraph("<a href='${cloudUri}'>Link for Dashboard of Controller ${contID}</a>")
+                        cloudUri = getFullApiServerUrl() + "/rachioDashboard/irrigation/${cont.key}?access_token=${state.accessToken}"
+                        paragraph("<a href='${cloudUri}'>Link for Dashboard of Controller ${cont.value}</a>")
                     }
                 }
 
-                settings?.baseStations?.each { baseStationID ->
-                    if(baseStationID) { 
-                      //  def localUri = getFullLocalApiServerUrl() + "/rachioDashboard/controller/${contID}?access_token=${state.accessToken}"
-                        def cloudUri = getFullApiServerUrl() + "/rachioDashboard/baseStation/${baseStationID}?access_token=${state.accessToken}"
-                        paragraph("<a href='${cloudUri}'>Link for Dashboard of Hose Timer Wifi Hub ${baseStationID}</a>")
+                valveList.each { valveEnum ->
+                    valveEnum.each { valveKey, valveName ->
+                        cloudUri = getFullApiServerUrl() + "/rachioDashboard/hoseTimer/${valveKey}?access_token=${state.accessToken}"
+                        paragraph("<a href='${cloudUri}'>Link for Dashboard of Hose Timer ${valveName}</a>")
                     }
                 }
             }
@@ -270,7 +274,7 @@ def devicePage() {
                 if(settings?.controllers) {
                     input(name: "defaultZoneTime", title: "Default Zone Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
                     input(name: "pauseInStandby", title: "Disable Actions while in Standby?", type: "bool", defaultValue: true, multiple: false, submitOnChange: true,
-                        description: "Allow your device to be disabled in Hubitat when you place your controller in Standby Mode...")
+                    description: "Allow your device to be disabled in Hubitat when you place your controller in Standby Mode...")
                 }
                 if(settings?.baseStations) {
                   //  input(name: "defaultHoseTimerRunTime", title: "Default Hose Timer Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
@@ -279,7 +283,7 @@ def devicePage() {
                 if (getHaveDeviceLabelPrefixSetting() == true) input(name: "deviceLabelPrefix", title: "Device Label Prefix", type: "text", defaultValue: "Rachio - ", required: false, submitOnChange: true)
 			    input(name: "debugLevel", title:"Debug Log Level", type: 'enum', required:false, multiple:false, defaultValue:"2", description: "2",
 					options:["5", "4", "3", "2", "1", "0"], width: 6)
-                paragraph(" Higher levels send more information to IDE Live Logging.", width: 6)
+                paragraph getInterface("note", "Higher levels send more information to IDE Live Logging. Level 2 or less is recommended for normal operations")
 			    if(settings.debugLevel == null){ app.updateSetting('debugLevel', "2") }
 		    }
             
@@ -303,24 +307,80 @@ globalScaleDefault = 100
 extraVerticalSpaceDefault = 0
 extraHorizontalSpaceDefault = 0
 
+def getRachioIconLocation() {
+    return settings?.rachioIconLocation ?: "Side"
+}
 
 def dashboardSettingsPage(){
     if(!state.accessToken){	
         //enable OAuth in the app settings or this call will fail
+        LOG("No access token found. Attempting to create one.", 1, "warning")
         createAccessToken()	
     }
 
-    return dynamicPage(name: "dashboardSettings", title: "Dashboard Setup", nextPage: "devicePage"){
+    dynamicPage(name: "dashboardSettingsPage", title: "Dashboard Setup", nextPage: "devicePage"){
+        LOG("Creating Dashboard Settings Page", 3, "debug")
         section(getSectionTitle("Dashboard Day Settings")){
-                input "numPastDaysDashboard", "number", title: "Number of Days in Past to Display on Dashboard", required: false, defaultValue: 2, submitOnChange: false
-                input "numFutureDaysDashboard", "number", title: "Number of Days in Future to Display on Dashboard", required: false, defaultValue: 2, submitOnChange: false
+            input "numPastDaysDashboard", "number", title: "Number of Days in Past to Display on Dashboard", required: false, defaultValue: 2, submitOnChange: false
+            input "numFutureDaysDashboard", "number", title: "Number of Days in Future to Display on Dashboard", required: false, defaultValue: 2, submitOnChange: false
+            paragraph getInterface("line", "")
         }
         section(getSectionTitle("Configure Information on Dashboard")) {
+            if(settings?.controllers && settings?.controllers.size() > 1) {
+                def selectedControllerInputEnum = [:]
+                controllerList?.each { cont->
+                    if(cont?.key in settings?.controllers) {
+                        selectedControllerInputEnum[cont?.key] = cont?.value
+                   }
+                }
+                input "controllerForWeather", "enum", title: "Select Controller For Dashboard Weather", description: "Tap to Select", required: true, multiple: false, options: selectedControllerInputEnum, submitOnChange: false
+            }
             input "showPrecipPercent", "bool", title: "Show Precipitation %?", defaultValue: true, submitOnChange: false
             input "showPrecipAmount", "bool", title: "Show Precipitation Amount?", defaultValue: true, submitOnChange: false
             input "showTemp", "bool", title: "Show High/Low Temperature?", defaultValue: true, submitOnChange: false
+            paragraph getInterface("line", "")
+        }
+        section(getSectionTitle("Configure Handling of Multiple Schedules/Programs")) {
+            paragraph getInterface("note", "Selecting to show only a single watering/skip icons means that separate watering/skip icons will not be shown for indvidual schedules/programs, but rather a single watering/skip icon will represent those schedules/programs collectively. If any schedule/program waters, a single watering icon will be shown. If all schedules/programs skip, a single skip icon will be shown.") 
+            input "singleRachioIcon", "bool", title: "Show Single Watering/Skip Icon?", defaultValue: true, submitOnChange: true
+             if (singleRachioIcon == false) {
+                input "colorScheme", "enum", title: "Select Color Scheme", options: ["Rachio Colors", "Custom Colors"], defaultValue: "Rachio Colors", submitOnChange: true, width: 4
+                if (settings.colorScheme == "Custom Colors") paragraph getInterface("note", "Specify Custom Colors as Hex Values: #FFFFFF")
+                state?.scheduleNameMap = [:]
+                state?.flexScheduleNameMap = [:]
+                LOG("Building Schedule/Program Specific Color Inputs.", 3, )
+                def schedules = getIrrigationSchedules()
+                LOG("Found schedules: ${schedules}", 3, "debug")
+                if (schedules && schedules.scheduleRules) {
+                    paragraph getInterface("boldText", "Irrigation System Schedules")
+                    schedules.scheduleRules.each { schedule ->
+                        if (!settings.colorScheme || settings.colorScheme == "Rachio Colors") input "colorForFIXEDSchedule${schedule.id}", "enum", title: "Color for ${schedule.name}", options: getRachioColorEnum(), submitOnChange: false, width: 4
+                        else if (settings.colorScheme == "Custom Colors") input "colorForFIXEDSchedule${schedule.id}", "string", title: "Color for ${schedule.name}", submitOnChange: false, width: 4
+                        state?.scheduleNameMap[schedule.name] = schedule.id
+                    }
+                }
+                if (schedules && schedules.flexScheduleRules) {
+                    schedules.flexScheduleRules.each { schedule ->
+                        if (!settings.colorScheme || settings.colorScheme == "Rachio Colors") input "colorForFLEXSchedule${schedule.id}", "enum", title: "Color for ${schedule.name}", options: getRachioColorEnum(), submitOnChange: false, width: 4
+                        else if (settings.colorScheme == "Custom Colors") input "colorForFLEXSchedule${schedule.id}", "string", title: "Color for ${schedule.name}", submitOnChange: false, width: 4
+                        state?.flexScheduleNameMap[schedule.name] = schedule.id
+                    }
+                }
+                def programs = getHoseTimerPrograms()
+                LOG("Found programs: ${programs}", 3, )
+                if (programs) {
+                    paragraph getInterface("boldText", "Hose Timer Programs")
+                    programs.each { program ->
+                    LOG("Program Key: ${program.key}. Program Name = ${program.value.name}", 3, "debug")
+                        if (!settings.colorScheme || settings.colorScheme == "Rachio Colors") input "colorForProgram${program?.key}", "enum", title: "Color for ${program?.value.name}", options: getRachioColorEnum(), submitOnChange: false, width: 4
+                        else if (settings.colorScheme == "Custom Colors") input "colorForProgram${program?.key}", "string", title: "Color for ${program?.value.name}", submitOnChange: false, width: 4
+                    }
+                }
+            }
+            paragraph getInterface("line", "")
         }
         section(getSectionTitle("Configure Display Formatting")) {
+            if (settings?.singleRachioIcon == true) input "rachioIconLocation", "enum", title: "Select Watering/Skip Icon Location", defaultValue: "Top", options:["Top", "Side"], multiple: false, width: 12, submitOnChange: false
             input(name: "iconSchemeSelection", type: "enum", title: "Select Icon Scheme:", required: true, multiple: false, options: ["Filled","Outline"], submitOnChange: false, defaultValue: 'Filled', width: 5)
             input(name: "colorSchemeSelection", type: "enum", title: "Select Color Scheme:", required: true, multiple: false, options: ["White with Color","Black with Color", "White without Color", "Black without Color", "Custom"], submitOnChange: false, defaultValue: 'Black with Color', width: 5)
             if(colorSchemeSelection == "Custom") {
@@ -331,16 +391,14 @@ def dashboardSettingsPage(){
                 input "precipColorCustom", "string", title: "Normal Precipitation Color (format: #FFFFFF)", submitOnChange: false
                 
                 input "rainDropWateringColorCustom", "string", title: "Color of Rain Drop to indicate Watering (format: #FFFFFF)", submitOnChange: false
-                input "rainDropAccentColorCustom", "string", title: "Color of Accent Mark on Rain Drop (format: #FFFFFF)", submitOnChange: false
-                input "rainDropOutlineColorCustom", "string", title: "Color of Rain Drop Outline (format: #FFFFFF)", submitOnChange: false
                 input "rainDropSkipColorCustom", "string", title: "Color of Rain Drop to indicate Watering Skip (format: #FFFFFF)", submitOnChange: false
                 input "skipStrikethroughColorCustom", "string", title: "Color of Strikethrough on Rain Drop to indicate Watering Skip (format: #FFFFFF)", submitOnChange: false               
                 input "windSkipColorCustom", "string", title: "Color of Wind to indicate Wind Skip (format: #FFFFFF)", submitOnChange: false
                 input "rainSensorSkipColorCustom", "string", title: "Color of Rain Sensor to indicate Rain Sensor Skip (format: #FFFFFF)", submitOnChange: false
-                input "freezeSkip0ColorCustom", "string", title: "Back Color of Icicle to indicate Freeze Skip (format: #FFFFFF)", submitOnChange: false
-                input "freezeSkip1ColorCustom", "string", title: "Front Color of Icicle to indicate Freeze Skip (format: #FFFFFF)", submitOnChange: false
-                input "saturatedSoilColorCustom", "string", title: "Color of Soil to indicate Soil Saturation Skip (format: #FFFFFF)", submitOnChange: false
-                input "rainDropsPredictedColorCustom", "string", title: "Color of Small Rain Drops to indicate Predicted Rain Skip (format: #FFFFFF)", submitOnChange: false
+                input "freezeSkipColorCustom", "string", title: "Color of snowflake to indicate Freeze Skip (format: #FFFFFF)", submitOnChange: false
+                input "saturatedSoilColorCustom", "string", title: "Color of rain drops to indicate Soil Saturation Skip (format: #FFFFFF)", submitOnChange: false
+                input "rainDropsPredictedColorCustom", "string", title: "Color of rain to indicate Predicted Rain Skip (format: #FFFFFF)", submitOnChange: false
+                input "cloudPredictedColorCustom", "string", title: "Color of clouds to indicate Predicted Rain Skip (format: #FFFFFF)", submitOnChange: false
                 input "strokeColorCustom", "string", title: "Icon Outline Color (format: #FFFFFF)", submitOnChange: false
                
                 input "dayTextColorCustom", "string", title: "Day Text Color (format: #FFFFFF)", submitOnChange: false
@@ -353,14 +411,8 @@ def dashboardSettingsPage(){
           //  input "globalScale", "number", title: "Global Scale (in percent)",defaultValue: 100, submitOnChange: false
           //  input "extraVerticalSpace", "number", title: "Extra Vertical Spacing (in pts)", defaultValue: 0, submitOnChange: false
           //  input "extraHorizontalSpace", "number", title: "Extra Horizontal Spacing (in pts)", defaultValue: 0, submitOnChange: false
-
+            paragraph getInterface("line", "")
         }
-
-
-        section(getSectionTitle("Attribution")) {
-            paragraph("Rain drop icon, icicle icon, and rain sensor icon made by Freepik from www.flaticon.com")  
-        }
-
     }
 }
 
@@ -383,7 +435,7 @@ void settingRemove(name) {
 
 void appCleanup() {
     LOG("appCleanup()", 5, "trace")
-    def stateItems = ["selectedDevices", "selectedZones", "inStandbyMode", "isWateringMap", "inStandbyModeMap"]
+    def stateItems = ["deviceId", "selectedDevice", "selectedZones", "inStandbyMode", "isWateringMap", "inStandbyModeMap"]
     def setItems = ["sprinklers", "selectedZones"]
     stateItems?.each { if(state?.containsKey(it as String)) {state.remove(it)} }
     setItems?.each { if(settings?.containsKey(it as String)) {settingRemove(it)} }
@@ -427,7 +479,7 @@ def hoseTimerValveSelections(baseStationId) {
 
     valves?.sort {it?.name }.each { valve ->
         LOG("valveId: $valve.id", 4, "debug")
-        def dni = [zone?.id].join('.')
+        def dni = [valve?.id].join('.')
         res[dni] = "${valve?.name}"
     }
     return res
@@ -458,6 +510,53 @@ def getUserName() {
     def userInfo = getUserInfo(atomicState?.userId)
     LOG("userInfo: ${userInfo}", 3, "debug")
     return userInfo?.username
+}
+
+def getUserInfo() {
+     LOG("ggetUserInfo...", 5, "trace")
+    if (!atomicState?.userId) {
+        LOG("No user Id found exiting", 1, "warn")
+        return
+    }
+    def userInfo = getUserInfo(atomicState?.userId)
+    LOG("User Info: ${userInfo}", 3, "debug")  
+    return userInfo 
+}
+
+def getIrrigationSchedules(userInfo=null) {
+    LOG("getIrrigationSchedules...", 5, "trace")
+    def workingUserInfo = (userInfo != null) ? userInfo : getUserInfo()
+    def schedules = [:]
+    schedules.scheduleRules = []
+    workingUserInfo?.devices?.scheduleRules.each { ruleSet ->
+        ruleSet.each { rule ->
+            schedules.scheduleRules.add(rule)
+        }
+    }
+    schedules.flexScheduleRules = []
+    workingUserInfo?.devices?.flexScheduleRules.each { ruleSet ->
+        ruleSet.each { rule ->
+            schedules.flexScheduleRules.add(rule)
+        }
+    }
+   // LOG("Got Schedules: ${schedules}", 3, "debug")
+    return schedules
+}
+
+def getHoseTimerPrograms() {
+    LOG("getIrrigationSchedules...", 5, "trace")
+    def programs = [:]
+    def selectedDevices = atomicState?.selectedDevices
+    selectedDevices?.baseStations.each { baseStation ->
+        baseStation?.value?.valves?.each { valve ->
+            def valvePrograms = getValvePrograms(valve?.key)
+            valvePrograms.each { program ->
+                LOG("Valve Program Data: ${program}", 3, "debug")
+                programs[program.id] = [name: program.name, color: program.color]
+            }
+        }
+    }
+    return programs
 }
 
 def getControllers() {
@@ -507,24 +606,33 @@ def getUserId() {
 
 def getBaseStations(userId) {
     LOG("getBaseStations ${userId}", 5, "trace")
-    return _httpGet("valve/listBaseStations/${userId}");
+    def baseStationData = _httpGet("valve/listBaseStations/${userId}", "closed")
+    if (baseStationData) {
+        return baseStationData?.baseStations
+    }
+    else return null
 }
 
 def getHoseTimerValves(baseStationId) {
-    LOG("getHoseTimerValves ${baseStationId)}", 5, "trace")
-    return _httpGet("valve/listValves/${baseStationId}");
+    LOG("getHoseTimerValves ${baseStationId}", 5, "trace")
+    def valveData = _httpGet("valve/listValves/${baseStationId}", "closed")
+    LOG("Retrieved valve data for ${baseStationId}: ${valveData}", 3, "debug")
+    if (valveData) {
+        return valveData.valves
+    }
+    else return null
 }
 
 def getBaseStationInputEnum(baseStations) {
     def baseStationInputEnum = [:]
     if(!baseStations) { return baseStationInputEnum }
-    baseStations.sort { it?.serialNumber }.each { baseStation ->
+    baseStations.each { baseStation ->
        LOG("systemId: ${baseStation.serialNumber}", 3, "debug")
        def dni = baseStation?.id
        baseStationInputEnum[dni] = baseStation?.serialNumber
        LOG("Found baseStation with dni: $dni and serialNumber: ${baseStationInputEnum[dni]}", 3, "debug")
     }
-    return controllerInputEnum
+    return baseStationInputEnum
 }
 
 void updateHwInfoMap(controllers, baseStations) {
@@ -559,7 +667,7 @@ def getControllerGeneration(controllerId) {
 }
 
 def getControllerJsonTag(controllerId) {
-    if(devId && atomicState?.modelInfo.controllers[controllerId] && atomicState?.modelInfo.controllers[controllerId]?.jsonTag) {
+    if(controllerId && atomicState?.modelInfo.controllers[controllerId] && atomicState?.modelInfo.controllers[controllerId]?.jsonTag) {
         return atomicState?.modelInfo.controllers[controllerId]?.jsonTag
     } 
     return null
@@ -602,11 +710,13 @@ def _httpGet(subUri, endpoint="open") {
     LOG("_httpGet($subUri)", 3, "debug")
     try {
         def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
+        LOG("URL: ${baseURI}/${subUri}", 3, "debug")
         def params = [
             uri: "${baseURI}/${subUri}",
             headers: ["Authorization": "Bearer ${atomicState.authToken}"]
         ]
         httpGet(params) { resp ->
+            LOG("HTTP GET Response: ${resp} with status ${resp.status}", 3, "debug")
             if(resp.status == 200) {
                 return resp?.data
             } else {
@@ -722,7 +832,7 @@ def initWebhook(controlId) {
     LOG("initWebhook...", 5, "trace")
     def result = false
     def webhookIds = getWebhookIdsForDev(controlId)
-    def cmdType = webhookIds == null ? "put" : "put"
+    def cmdType = webhookIds == null ? "post" : "put" // changed first option to "post" from "put" because seems to require post if creating a new webhookS
     def apiWebhookUrl = "${rootApiUrl()}/notification/webhook"
     def endpointUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/rachioReceiver?access_token=${atomicState?.accessToken}"
     def bodyData
@@ -858,29 +968,52 @@ void updateDeviceStates() {
                 }
             }
             devMap.controllers[controller?.id]["zones"] = zoneMap
+            def detailsData = getDeviceDetails(controller?.id)
+            devMap.controllers[controller?.id]["locationId"] = getLocationId(controller?.id, detailsData)
         }
     }
 
-    def baseStations = getBaseStations()
+    def baseStations = getBaseStations(atomicState.userId)
+    LOG ("Base Stations: ${baseStations}", 3, "debug")
+    LOG("Settings Base Stations: ${settings.baseStations}", 3, "debug")
     if(baseStations && settings?.baseStations) {
         def results = null
         results = baseStations?.findAll { it?.id in settings?.baseStations }
+        LOG("Found Results from base station search: ${results}")
         results?.each { baseStation ->
-            result.baseStations[baseStation?.id] = getBaseStationHardwareInfo(baseStation?.id)
+          //  results?.baseStations[baseStation?.id] = getBaseStationHardwareInfo(baseStation?.id)
             devMap.baseStations[baseStation?.id] = [:]
             devMap.baseStations[baseStation?.id]["serialNumber"] = baseStation?.serialNumber
             def valveMap = [:]
             def valves = getHoseTimerValves(baseStation?.id)
             valves.each { valve ->
                if(valve?.id in settings?."${baseStation?.id}_valves") {
-                    valveMap[valve?.id] = [:]
                     valveMap[valve?.id] = valve?.name
                 }
             }
             devMap.baseStations[baseStation?.id]["valves"] = valveMap
         }
+        LOG("Hose Timer Dev Map: ${devMap.baseStations}", 3, "debug")
     }   
     atomicState?.selectedDevices = devMap
+    LOG("Set selectedDevices state to devMap. selectedDevices=${atomicState?.selectedDevices}. devMap = ${devMap}")
+}
+
+def getBaseStationFromValve(valveId) {
+    LOG("getBaseStationFromValve(${valveId})...", 5, "trace")
+    def res = null
+    def selectedDevices = atomicState?.selectedDevices
+    if (selectedDevices && selectedDevices.baseStations) {
+        selectedDevices.baseStations.each { baseStationId, baseStationMap ->
+            LOG("Base Station ID is: ${baseStationId}, with baseStationMap = ${baseStationMap}", 3, "debug")
+            baseStationMap.valves.each { valveKey, valveMap ->
+                LOG("Valve Key is: ${valveKey}, with valveMap = ${valveMap}", 3, "debug")
+                if (valveKey == valveId) res = baseStationId
+            }
+        }
+    }
+    LOG("getBaseStationFromValve returning ${res}...", 5, "trace")
+    return res
 }
 
 def getCurSchedule(controllerId) {
@@ -895,7 +1028,7 @@ def getDeviceData(devId, type="controller") {
         result = _httpGet("device_with_current_schedule/${devId}")
     }
     else if (type == "baseStation") {
-        result = _httpGet("valve/getBaseStation/${devId}")
+        result = _httpGet("valve/getBaseStation/${devId}", "closed")
     }
     LOG("getDeviceData: ${result}", 3, "debug")
     return result
@@ -985,6 +1118,7 @@ def getWeather(locId, start_date, end_date) {
 }
 
 def getLocationId(devId, detailsData) {
+    LOG("getLocationId(${devId}, ${detailsData}) ...", 5, "trace")
     def controller = getControllerJsonTag(devId)
     if (controller) {
         def controllerDetails = detailsData.get(controller)
@@ -995,21 +1129,21 @@ def getLocationId(devId, detailsData) {
 
 def getValveListData(baseStationId) {
     LOG("getValveListData($baseStationId)...", 5, "trace")
-    def result = _httpGet("valve/listValves/${baseStationId}")
+    def result = _httpGet("valve/listValves/${baseStationId}", "closed'")
     LOG("getValveListData: ${result}", 3, "debug")
     return result    
 }
 
 def getValveData(valveId) {
     LOG("getValveData($valveId)...", 5, "trace")
-    def allPrograms = _httpGet("valve/getValve/${valveId}")
+    def result = _httpGet("valve/getValve/${valveId}", "closed")
     LOG("getValveData: ${result}", 3, "debug")
     return result    
 }
 
 def getValvePrograms(valveId) {
     LOG("getValvePrograms($valveId)...", 5, "trace")
-    def result = _httpGet("program/listPrograms/${valveId}")
+    def result = _httpGet("program/listPrograms/${valveId}", "closed")?.programs
     LOG("getValvePrograms: ${result}", 3, "debug")
     return result  
 }
@@ -1023,7 +1157,7 @@ def getBaseStationDayViews(baseStationId, Date start, Date end) {
         def endMap = getDateMap(end)
         def jsonData = new JsonBuilder("start":startMap, "end":endMap, "resourceId":id)
         LOG("getValveDayViews jsonData: ${jsonData}", 3, "debug")
-        res = sendJsonGetResponse("summary/getValveDayViews", jsonData?.toString(), "open", "post")
+        res = sendJsonGetResponse("summary/getValveDayViews", jsonData?.toString(), "closed", "post")
     } else { LOG("getValveDayViews Missing baseStationId, start date, or end date... ${baseStationId} | ${start} | ${end}", 1, "error") }
     return res
 }
@@ -1064,8 +1198,8 @@ def updateStandbyItem(String id, Boolean val) {
 }
 
 def setDashboard(deviceId, type) {
-    if (!state.refreshNum) state.refreshNum = 0
-    state.refreshNum++
+    if (!atomicState.refreshNum) atomicState.refreshNum = 0
+    atomicState.refreshNum++
     def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${type}/${deviceId}?access_token=${state.accessToken}&refreshNum=${refreshNum}"  // refreshNum forces the browser to retrieve the image instead of caching it
         
     String dashboard = '<style type=\'text/css\'>'
@@ -1094,7 +1228,7 @@ def addRemoveDevices(uninst=false) {
                 def d = getChildDevice(contDev?.key)
                 if(!d) {
                     d = addChildDevice("lnjustin", getChildContName(), contDev?.key, null, [label: getDeviceLabelStr(contDev?.value?.name), completedSetup: true])
-                    setDashboard(contDev?.key, "controller")
+                    setDashboard(contDev?.key, "irrigation")
                     LOG("Controller Device Created: (${d?.displayName}) with id: [${contDev?.key}]", 4, "info")
                 } else {
                     LOG("found ${d?.displayName} with dni: ${dni?.key} already exists", 3, "debug")
@@ -1117,8 +1251,8 @@ def addRemoveDevices(uninst=false) {
                 //Check if the discovered hubs are already initiated with corresponding device types.
                 def d = getChildDevice(baseStation?.key)
                 if(!d) {
-                    d = addChildDevice("lnjustin", getChildBaseStationName(), baseStation?.key, null, [label: getDeviceLabelStr(baseStation?.value?.name), completedSetup: true])
-                    setDashboard(baseStation?.key, "baseStation")
+                    d = addChildDevice("lnjustin", getChildBaseStationName(), baseStation?.key, null, [label: getDeviceLabelStr(baseStation?.value), completedSetup: true])
+                    setDashboard(baseStation?.key, "hoseTimer")
                     LOG("Base Station Device Created: (${d?.displayName}) with id: [${baseStation?.key}]", 4, "info")
                 } else {
                     LOG("found ${d?.displayName} with dni: ${dni?.key} already exists", 3, "debug")
@@ -1129,7 +1263,7 @@ def addRemoveDevices(uninst=false) {
                     def d2 = getChildDevice(valve?.key)
                     if(!d2) {
                         d2 = addChildDevice("lnjustin", getChildValveName(), valve?.key, null, [label: getDeviceLabelStr(valve?.value), completedSetup: true])
-                        LOG("Valve Device Created: (${d2?.displayName}) with id: [${valve?.key}]", 4, "info")
+                        LOG("Hose Timer Device Created: (${d2?.displayName}) with id: [${valve?.key}]", 4, "info")
                     } else {
                         LOG("found ${d2?.displayName} with dni: ${valve?.key} already exists", 3, "debug")
                     }
@@ -1201,6 +1335,7 @@ def rachioHoseTimerReceiveHandler() {
 
 //Section4: polling device info methods
 void poll(child=null, type=null) {
+    LOG("Polling...", 3, "debug")
     def lastPollSec = getTimeSinceInSeconds(atomicState?.lastPollDt)
     LOG("${app.label} -- Polling API for Latest Data -- Last Update was ($lastPollSec seconds ago)${type ? " | Reason: [$type]" : ""}", 5, "trace")
     if(lastPollSec < 2) {
@@ -1210,7 +1345,7 @@ void poll(child=null, type=null) {
     }
 
     def selectedDevices = atomicState?.selectedDevices
-
+    LOG("Selected Devices = ${selectedDevices}. atomicState = ${atomicState?.selectedDevices}", 3, "debug")
     // poll a specific device and all children of that specific device
     if (child && type) {
         pollChild(child, type)
@@ -1228,7 +1363,7 @@ void poll(child=null, type=null) {
         else if (type == "hoseTimerDevice") {
             def baseStation = selectedDevices?.baseStations[dni]
             if (baseStation) {
-                baseStation?..valves?.each { valve->
+                baseStation?.valves?.each { valve->
                     def zDev = getChildDevice(valve?.key)
                     if(zDev) { pollChild(zDev, "hoseTimerDevice") }
                 }
@@ -1253,29 +1388,29 @@ void poll(child=null, type=null) {
             }
         }
     }
-    LOG("Updating (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices...", 4, "info")
+    LOG("Updated (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices...", 4, "info")
 
     def baseStationCnt = 0
     def valveCnt = 0
-    selectedDevices?.baseStations.each { baseStation >
+    selectedDevices?.baseStations.each { baseStation ->
         def bDev = getChildDevice(baseStation?.key)
         if(bDev) {
-            ctrlCnt = baseStationCnt+1
-            pollChild(cDev, "hoseTimerDevice")
-            bDev?.value?.valves?.each { valve->
+            baseStationCnt = baseStationCnt+1
+            pollChild(bDev, "hoseTimerDevice")
+            baseStation?.value?.valves?.each { valve->
                 valveCnt = valveCnt+1
-                def vDev = getChildDevice(zone?.key)
-                if(vDev) { pollChild(zvev, "hoseTimerDevice") }
+                def vDev = getChildDevice(valve?.key)
+                if(vDev) { pollChild(vDev, "hoseTimerDevice") }
             }
         }
     }
-    LOG("Updating (${baseStationCnt}) Base Stations and (${valveCnt}) $baseStationCount one devices...", 4, "info")
+    LOG("Updated (${baseStationCnt}) Base Stations and (${valveCnt}) hose timer valve devices...", 4, "info")
 
     atomicState?.lastPollDt = now()
 }
 
 def pollChild(childDev, type) {
-    LOG("updating child device ${childDev}", 3, "debug")
+    LOG("updating child device ${childDev} of type ${type}", 3, "debug")
     try {
         if(childDev && type) {
             String dni = childDev?.device?.deviceNetworkId
@@ -1312,8 +1447,8 @@ def pollChild(childDev, type) {
                         contDev?.value?.zones?.each { zone ->
                             if (dni == zone?.key) {
 
-                                def devData = getDeviceData(zone?.key)
-                                def devZoneDetails = getZoneDetails(zone?.key)
+                                def devData = getDeviceData(contDev?.key)
+                                def devZoneDetails = getZoneDetails(contDev?.key)
 
                                 def zoneData = findZoneData(zone?.key, devData)
                                 def zoneState = findZoneState(zone?.key, devZoneDetails)
@@ -1351,7 +1486,7 @@ def pollChild(childDev, type) {
                     } else {
                         baseStation?.value?.valves?.each { valve ->
                             if (dni == valve?.key) {
-
+                                LOG("Generating data for update to valve", 3, "debug")
                                 def baseStationData = getDeviceData(baseStation?.key, "baseStation")
                                 def valveData = getValveData(valve?.key)
                                 def programData = getValvePrograms(valve?.key)
@@ -1361,7 +1496,7 @@ def pollChild(childDev, type) {
                              //   def startDate = offsetDateByNumDays(today, -10)
                                 def startDate = today
                                 def endDate = offsetDateByNumDays(today, 10)
-                                def dayViewData = getBaseStationeDayViews(baseStation?.key, startDate, endDate)
+                                def dayViewData = getBaseStationDayViews(baseStation?.key, startDate, endDate)
 
                                 def newLabel = getDeviceLabelStr(valve?.value).toString()
                                 if(devLabel != newLabel) {
@@ -1378,6 +1513,7 @@ def pollChild(childDev, type) {
             if (childDev && data != []) {
                 childDev?.generateEvent(data)
             }
+            else { LOG("pollChild cannot update child because there was a problem generating data for the update...", 1, "warn") }
         } else { LOG("pollChild cannot update child because it is missing the required parameters...", 1, "warn") }
         
     } catch (e) {
@@ -1430,7 +1566,7 @@ def setValue(child, deviceId, newValue) {
     return result
 }
 
-def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
+def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", nonStandyByDevice = true) {
     LOG("Sending: ${jsonBody}", 5, "trace")
     def returnStatus = false
     
@@ -1443,14 +1579,15 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open") {
     ]
 
     try{
-        if(!standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
+        if(!nonStandyByDevice && !standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
             LOG("Skipping this command while controller is in 'Standby Mode'...", 3, "debug")
             return true
         }
 
         httpPut(cmdParams) { resp ->
             returnStatus = resp
-            if(resp.status == 201 || resp.status == 204) {
+          //  LOG ("Send JSON Return Status: ${resp.status}")
+            if(resp.status == 200 || resp.status == 201 || resp.status == 204) {
                 returnStatus = true
                 //runIn(4, "poll", [overwrite: true])
             } else {
@@ -1591,11 +1728,17 @@ def formatDateToUtc(date) {
 }
 
 def getDateObjectFromUTCDt(utcDt) {
-    return Date.parse("yyyy-MM-dd'T'HH:mm:ss'Z'", utcDt)
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    return inFormat.parse(utcDt)
 }
 
 def getDateMap(date) {
     return [year: date[Calendar.YEAR], month: date[Calendar.MONTH]+1, day: date[Calendar.DATE]]
+}
+
+def getDateIndex(date) {
+    String index = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
 }
 
 def getMonthStart() {
@@ -1733,7 +1876,7 @@ def startZone(child, deviceId, zoneNum, mins) {
         def duration = mins.toInteger() * 60
         def jsonData = new JsonBuilder("id":zoneId, "duration":duration)
         LOG("startZone jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("zone/start", jsonData?.toString(), deviceId)
+        res = sendJson("zone/start", jsonData?.toString(), deviceId, false, "closed", true)
     } else { LOG("startZone Missing ZoneId or duration... ${zoneId} | ${mins}", 1, "error") }
     return res
 }
@@ -1753,7 +1896,7 @@ def runAllZones(child, deviceId, mins) {
         }
         def jsonData = new JsonBuilder("zones":zoneData)
         //child?.log("runAllZones  jsonData: ${jsonData}")
-        res = sendJson("zone/start_multiple", jsonData?.toString(), deviceId)
+        res = sendJson("zone/start_multiple", jsonData?.toString(), deviceId, false, "closed", true)
     } else { LOG("runAllZones Missing ZoneIds or Duration... ${selectedDevices[deviceId]?.zones} | ${mins}", 1, "error") }
     return res
 }
@@ -1780,13 +1923,13 @@ def pauseScheduleRun(child) {
 
 def pauseZoneRun(child, devId, duration) {
     def jsonData = new JsonBuilder("id":devId, "duration":duration)
-    def result = sendJson("device/pause_zone_run", jsonData?.toString(), devId)
+    def result = sendJson("device/pause_zone_run", jsonData?.toString(), devId, false, "closed", true)
     return result
 }
 
 def resumeZoneRun(child, devId) {
     def jsonData = new JsonBuilder("id":devId)
-    def result = sendJson("device/resume_zone_run", jsonData?.toString(), devId)
+    def result = sendJson("device/resume_zone_run", jsonData?.toString(), devId, false, "closed", true)
     return result
 }
 
@@ -1802,6 +1945,38 @@ def getScheduleRuleInfo(schedId) {
     return res
 }
 
+def getScheduleIdByName(name, scheduleType) {
+    LOG("getScheduleIdByName(${name}, ${scheduleType}...", 5, "trace")
+    LOG("Using scheduleMap = ${state?.scheduleNameMap}", 3, "debug")
+    if (scheduleType == "fixed" || scheduleType == "Fixed" || scheduleType == "FIXED") return state?.scheduleNameMap[name]
+    else if (scheduleType == "flex" || scheduleType == "Flex" || scheduleType == "FLEX") return state?.flexScheduleNameMap[name]
+    else return null
+}
+
+def getScheduleIdFromSummary(summary, schedules) {
+    LOG("getScheduleIdFromSummary(${summary})", 5, "trace")
+    def matches = []
+    def sanitizedSummary = summary.toLowerCase()
+    if (schedules && schedules.scheduleRules) {
+        schedules.scheduleRules.each { schedule ->
+            def sanitizedName = schedule.name.toLowerCase()
+            if (sanitizedSummary.contains(sanitizedName)) matches.add([name:schedule.name, id: schedule.id, type: "FIXED"])
+        }
+    }
+    if (schedules && schedules.flexScheduleRules) {
+        schedules.flexScheduleRules.each { schedule ->
+            def sanitizedName = schedule.name.toLowerCase()
+            if (sanitizedSummary.contains(sanitizedName)) matches.add([name:schedule.name, id: schedule.id, type: "FLEX"])
+        }
+    }
+    if (matches.size() > 1) LOG("Multiple Schedules have the same name. Non-Unique schedule names jeopardizes the ability of Rachio Community to differentiate schedules on the dashboard.", 1, "warn")
+    else if (matches.size() == 0) {
+        LOG("No schedule names found in event summary ${summary}", 3, "debug")
+        return null
+    }
+    return matches[0]
+}
+
 def startValve(child, mins) {
     // child is valve
     def res = false
@@ -1811,7 +1986,7 @@ def startValve(child, mins) {
         def secs = mins.toInteger() * 60
         def jsonData = new JsonBuilder("valveId":valveId, "durationSeconds":secs)
         LOG("startValve jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("valve/startWatering", jsonData?.toString(), valveId )
+        res = sendJson("valve/startWatering", jsonData?.toString(), valveId, false, "closed", true )
     } else { LOG("startValve Missing valveId or duration... ${valveId} | ${secs}", 1, "error") }
     return res
 }
@@ -1822,7 +1997,7 @@ def runAllValves(child, mins) {
     def anyFalse = false
     def selectedDevices = atomicState?.selectedDevices?.baseStations ?: [:]
     def baseStationId = child?.device?.deviceNetworkId
-    if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves &&) {
+    if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves) {
         selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
             def valveChild = getChildById(valve?.key)
             def valveRes = valveChild.startWatering(mins)
@@ -1842,7 +2017,7 @@ def stopValve(child) {
     if (valveId) {
         def jsonData = new JsonBuilder("valveId":valveId)
         LOG("stopValve jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("valve/stopWatering", jsonData?.toString(), valveId )
+        res = sendJson("valve/stopWatering", jsonData?.toString(), valveId, false, "closed", true )
     } else { LOG("stopValve Missing valveId... ${valveId}", 1, "error") }
     return res
 }
@@ -1881,7 +2056,6 @@ def updateBaseStationWateringState(baseStationId) {
     if (bDev) {
         bDev.updateWateringStateFromValves()
     }
-    else { LOG("Unable to retrieve device for base station ID ${baseStationId}. Watering State not updated.}", 1, "warn") }
 }
 
 def setValveDefaultRunTime(child, mins) {
@@ -1893,7 +2067,7 @@ def setValveDefaultRunTime(child, mins) {
         def secs = mins.toInteger() * 60
         def jsonData = new JsonBuilder("valveId":valveId, "defaultRuntimeSeconds":secs)
         LOG("setValveDefaultRunTime jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("valve/setDefaultRuntime", jsonData?.toString(), valveId )
+        res = sendJson("valve/setDefaultRuntime", jsonData?.toString(), valveId, false, "closed", true )
     } else { LOG("setValveDefaultRunTime Missing valveId or duration... ${valveId} | ${secs}", 1, "error") }
     return res
 }
@@ -1904,7 +2078,7 @@ def createHoseTimerProgramSkip(programId, timestamp) {
     if (programId && timestamp) {
         def jsonData = new JsonBuilder("programId":programId, "timestamp":timestamp)
         LOG("createHoseTimerProgramSkip jsonData: ${jsonData}", 3, "debug")
-        res = sendJsonGetResponse("program/createSkipOverrides", jsonData?.toString(), "open", "post")
+        res = sendJsonGetResponse("program/createSkipOverrides", jsonData?.toString(), "closed", "post")
     } else { LOG("createHoseTimerProgramSkip Missing programId or timestamp... ${programId} | ${timestamp}", 1, "error") }
     return res
 }
@@ -1915,7 +2089,7 @@ def deleteHoseTimerProgramSkip(programId, timestamp) {
     if (programId && timestamp) {
         def jsonData = new JsonBuilder("programId":programId, "timestamp":timestamp)
         LOG("deleteHoseTimerProgramSkip jsonData: ${jsonData}", 3, "debug")
-        res = sendJsonGetResponse("program/deleteSkipOverrides", jsonData?.toString(), "open", "post")
+        res = sendJsonGetResponse("program/deleteSkipOverrides", jsonData?.toString(), "closed", "post")
     } else { LOG("deleteHoseTimerProgramSkip Missing programId or timestamp... ${programId} | ${timestamp}", 1, "error") }
     return res
 }
@@ -1945,7 +2119,187 @@ def offsetDateByNumDays(Date date, Integer numDays) {
     return d+numDays
 }
 
-def buildControllerDashboard() {
+def getRachioIconOffset(numIcons, iconIndex, iconWidth) {
+    LOG("getRachioIconOffset(${numIcons}, ${iconIndex}, ${iconWidth})... ", 5, "trace")
+    def hOffset = 0
+    Double middle = Math.ceil(numIcons / 2)
+    LOG("Middle = ${middle}")
+    if (numIcons % 2 == 0) {
+        Double halfWidth = iconWidth/2
+        if (iconIndex <= middle) {
+            def distanceFromMiddle = (middle - iconIndex)
+            hOffset = (-1 * halfWidth) + (-1 * distanceFromMiddle * iconWidth) 
+        }
+        else {
+            def distanceFromMiddle = (iconIndex - middle) - 1
+            hOffset = (1 * halfWidth) + (1 * distanceFromMiddle * iconWidth) 
+        }
+    }
+    else {
+        if (iconIndex < middle) {
+            def distanceFromMiddle = (middle - iconIndex)
+            hOffset = -1 * distanceFromMiddle * iconWidth
+        }
+        else if (iconIndex == middle) hOffset = 0
+        else if (iconIndex > middle) {
+            def distanceFromMiddle = (iconIndex - middle)
+            hOffset = 1 * distanceFromMiddle * iconWidth
+        }
+    }
+    return hOffset
+}
+
+def getDashboardParameters(inputDate, today, yesterday, sevenDaysLater) {
+    def date = inputDate.clearTime()
+
+    def dayLabel = ""
+    def wateringIconOffset = 0
+    if (date == today) { 
+        dayLabel = "Today" 
+        wateringIconOffset = 15
+    }
+    else if (date.after(today) && date.before(sevenDaysLater)) { 
+        dayLabel = date.format('EEE') 
+        wateringIconOffset = 8
+    }
+    else { 
+        dayLabel = date.format('EEE') 
+        wateringIconOffset = 8            
+    }
+    return [dayLabel: dayLabel, iconOffset: wateringIconOffset]
+}
+
+def getScheduleContentMap(startDate, endDate, devId, schedules) {
+        
+        
+}
+
+def buildDashboard() {
+    Date startDate = getDashboardStartDate()
+    Date endDate = getDashboardEndDate()
+
+    def today = new Date()
+    today = today.clearTime()
+    def yesterday = today.copyWith(hourOfDay: 23, minute: 59, second: 59)
+    yesterday -= 1
+    def sevenDaysLater = today.copyWith(hourOfDay: 23, minute: 59, second: 59)
+    sevenDaysLater += 6
+
+    def contentMap = [:]
+
+    // set up parameters for dashboard days
+    for (date in startDate..endDate) {
+        def dateIndex = getDateIndex(date)
+        contentMap[dateIndex] = [:]
+        contentMap[dateIndex].parameters = getDashboardParameters(date, today, yesterday, sevenDaysLater)
+        contentMap[dateIndex].rachioIcons = []
+    }
+
+    // set weather parameters for dashboard, from either controllers if configured or from external source if no controllers configured
+    if(params.controllerID || settings?.controllers) {
+        // user has irrigation controller, so can use rachio for weather
+        def weatherControllerId = null
+        if (params.controllerID) weatherControllerId = params.controllerID  // if controller-speciifc dashboard, use that controller for weather
+        else if (settings?.controllerForWeather) weatherControllerId = settings?.controllerForWeather  // otherwise, if the dashboard is global across controllers, and there are multiple controllers selected, use whichever controller the user has specified in settings
+        else { weatherControllerId = settings?.controllers?.first() } // default to first controller (may be only controller)
+        LOG("Using Controller ${weatherControllerId} for dashboard weather", 3, "debug")
+        
+        def selectedDevices = atomicState?.selectedDevices
+        LOG("Selected Devices: ${selectedDevices}", 3, "debug")
+        def selectedControllers = selectedDevices.controllers
+        def locationId = selectedControllers[weatherControllerId]["locationId"]   
+        def weatherData = getWeather(locationId, startDate, endDate)?.weatherReadings
+
+        for (date in startDate..endDate) {
+            def dateIndex = getDateIndex(date)
+            def dateMap = getDateMap(date)
+            def weather = weatherData?.find { it?.date == dateMap }
+            contentMap[dateIndex].precipPercent = (weather.precipProbability > 0) ? ((int) (weather.precipProbability * 100)).toString() + "%" : ""
+            contentMap[dateIndex].precipAmount = (weather.calculatedPrecip > 0) ? weather.calculatedPrecip + "\"" : ""
+            contentMap[dateIndex].highTemp = weather.temperatureMax
+            contentMap[dateIndex].lowTemp = weather.temperatureMin
+            contentMap[dateIndex].weatherIcon = getWeatherIcon(weather.weatherType)
+        }
+    }
+    else {
+        // TO DO: user does not have an irrigation controller. Must use external source for weather
+    }
+
+    if (params.controllerID) {
+        // show specific irrigation controller on dashboard
+        def devId = params.controllerID
+
+        def userInfo = getUserInfo()
+        def schedules = getIrrigationSchedules(userInfo)
+
+        def rainSensorState = getDeviceState(devId)?.state?.rainSensorTripped
+        def pastEventsData = getDevicePastEvents(devId, startDate, endDate)
+        def futureEventsData = getDeviceFutureEvents(devId, endDate)?.entries
+
+        for (date in startDate..endDate) {
+            def dateIndex = getDateIndex(date)
+            def dateMap = getDateMap(date)
+            
+            def pastEvents = pastEventsData?.findAll { getDateMap(new Date(it?.eventDate)) == dateMap }
+            LOG("Past Events for ${date} are: ${pastEvents}", 4, "debug")
+            def futureEvents = futureEventsData?.findAll { getDateMap(getDateObjectFromUTCDt(it?.timestamp)) == dateMap }
+            LOG("Future Events for ${date} are: ${futureEvents}", 4, "debug")
+            contentMap[dateIndex].rachioIcons = getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules)
+        }
+    }
+    else if (params.hoseTimerValveID) {
+        // show specific hose timer
+        def hoseTimerValveID = params.hoseTimerValveID
+        def baseStationId = getBaseStationFromValve(hoseTimerValveID)
+
+        def baseStationDayViews = getBaseStationDayViews(baseStationId, startDate, endDate)?.valveDayViews
+        LOG("Base Station Day View for valve ${hoseTimerValveID} = ${baseStationDayView}", 4, "debug")
+
+        for (date in startDate..endDate) {
+            def dateIndex = getDateIndex(date)
+            def dateMap = getDateMap(date)
+            contentMap[dateIndex].rachioIcons = getHoseTimerIcons(baseStationDayViews, dateMap, hoseTimerValveID)
+        }
+    }
+    else {
+        // show all devices on dashboard
+        def selectedDevices = atomicState?.selectedDevices
+
+        if(settings?.controllers) {
+            def userInfo = getUserInfo()
+            def schedules = getIrrigationSchedules(userInfo)
+
+            selectedDevices.controllers?.each { controller ->
+                def devId = controller?.key
+                def rainSensorState = getDeviceState(devId)?.state?.rainSensorTripped
+                def pastEventsData = getDevicePastEvents(devId, startDate, endDate)
+                def futureEventsData = getDeviceFutureEvents(devId, endDate)?.entries
+
+                for (date in startDate..endDate) {
+                    def dateIndex = getDateIndex(date)
+                    def dateMap = getDateMap(date)
+                    
+                    def pastEvents = pastEventsData?.findAll { getDateMap(new Date(it?.eventDate)) == dateMap }
+                    def futureEvents = futureEventsData?.findAll { getDateMap(getDateObjectFromUTCDt(it?.timestamp)) == dateMap }
+                    contentMap[dateIndex].rachioIcons.addAll(getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules))
+                }                
+
+            }
+        }
+        if (settings?.baseStations) {
+            selectedDevices.baseStations?.each { baseStation ->
+                def baseStationDayViews = getBaseStationDayViews(baseStation?.key, startDate, endDate)?.valveDayViews
+
+                for (date in startDate..endDate) {
+                    def dateIndex = getDateIndex(date)
+                    def dateMap = getDateMap(date)
+                    contentMap[dateIndex].rachioIcons.addAll(getHoseTimerIcons(baseStationDayViews, dateMap))
+                }        
+            }
+        }
+    }
+
+    LOG("ContentMap = ${contentMap}", 3, "debug")
     
     def numPastDaysDashboardSetting = (numPastDaysDashboard == null) ? numPastDaysDashboardDefault : numPastDaysDashboard
     def numFutureDaysDashboardSetting = (numFutureDaysDashboard == null) ? numFutureDaysDashboardDefault : numFutureDaysDashboard
@@ -1959,118 +2313,86 @@ def buildControllerDashboard() {
 //    def extraHorizontalSpaceSetting = (extraHorizontalSpace == null) ? extraHorizontalSpaceDefault : extraHorizontalSpace
     def extraVerticalSpaceSetting = 0
     def extraHorizontalSpaceSetting = 0
-   
-    def devId = params.controllerID
-    def startDate = getDashboardStartDate()
-    def endDate = getDashboardEndDate()
-    
-    def detailsData = getDeviceDetails(devId)
-    def locationId = getLocationId(devId, detailsData)
-    
-    def rainSensorState = getDeviceState(devId)?.state?.rainSensorTripped
-    
-    def jsonSlurper = new JsonSlurper()
-    def weatherData = getWeather(locationId, startDate, endDate)?.weatherReadings
-    def pastEventsData = getDevicePastEvents(devId, startDate, endDate)
-    def futureEventsData = getDeviceFutureEvents(devId, endDate)?.entries
-    
+
     colorScheme = getColorScheme(colorSchemeSelectionSetting)
-    
     Integer columnWidth = 64 + extraHorizontalSpaceSetting
     Integer numDays = 1 + numPastDaysDashboardSetting + numFutureDaysDashboardSetting
     Integer svgWidth = columnWidth * numDays
     LOG("Column Width = ${columnWidth}. numDays = ${numDays}. svgWidth = ${svgWidth}", 3, "debug")
     svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="100%" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 140"  xml:space="preserve">'
     
-    svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropAccent{fill:' + colorScheme.rainDropAccentColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:' + colorScheme.skipStrikethroughColor + '} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip0{fill:' + colorScheme.freezeSkip0Color + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:10px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style> <defs> <linearGradient id="bicolored"> <stop offset="50%" stop-color="' + colorScheme.highTempTextColor + '"/> <stop offset="50%" stop-color="' + colorScheme.lowTempTextColor + '"/> </linearGradient> </defs>'
+    svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:' + colorScheme.skipStrikethroughColor + '} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} . cloudPredicted:{fill:' + colorScheme.cloudPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip{fill:' + colorScheme.freezeSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:10px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style>'
+
+    for (date in startDate..endDate) {
+        def dateIndex = getDateIndex(date)
+        contentMap[dateIndex].rachioIcons.each { 
+            if (it.style) { svg += it.style }
+        }
+    }
+
+    svg += '<defs> <linearGradient id="bicolored"> <stop offset="50%" stop-color="' + colorScheme.highTempTextColor + '"/> <stop offset="50%" stop-color="' + colorScheme.lowTempTextColor + '"/> </linearGradient> </defs>'
     
 //    svg += '<g transform="scale(' + Double.toString((globalScaleSetting-40)/100) + ')">'
      svg += '<g>'
     
-    def today = new Date()
-    today.set(hourOfDay: 0, minute: 0, second: 0)
-    def yesterday = today.copyWith(hourOfDay: 23, minute: 59, second: 59)
-    yesterday -= 1
-    def todayDateMap = getDateMap(today)
-    def sevenDaysLater = today.copyWith(hourOfDay: 23, minute: 59, second: 59)
-    sevenDaysLater += 6
-    
     def iconPack = getIconPreference()
     def voffset = iconPack == "Outline" ? '-2' : '0'
-    
+    def rachioIconLocation = getRachioIconLocation()
     def i = 0
     for (date in startDate..endDate) {
-        
+        def dateIndex = getDateIndex(date)
         def dateMap = getDateMap(date)
-       
-        def dayLabel = ""
-
-        def weather = weatherData?.find { it?.date == dateMap }
-        LOG("Weather is: ${weather}", 3, "debug")
-        def precipPercent = (weather.precipProbability > 0) ? ((int) (weather.precipProbability * 100)).toString() + "%" : ""
-        def precipAmount = (weather.calculatedPrecip > 0) ? weather.calculatedPrecip + "\"" : ""
-        def highTemp = weather.temperatureMax
-        def lowTemp = weather.temperatureMin
-        def weatherIconText = weather.weatherType
-        def weatherIcon = null
-        
-        LOG("Weather icon text for ${dayLabel} is ${weatherIconText}", 3, "debug")
-        
-        weatherIcon = getWeatherIcon(weatherIconText)
-
-        def pastEvents = pastEventsData?.findAll { getDateMap(new Date(it?.eventDate)) == dateMap }
-        LOG("Past Events are: ${pastEvents}", 3, "debug")
-        def futureEvents = futureEventsData?.findAll { getDateMap(getDateObjectFromUTCDt(it?.timestamp)) == dateMap }
-        LOG("Future Events are: ${futureEvents}", 3, "debug")
-        
-        def irrigationIcon = getIrrigationIcon(pastEvents, futureEvents, rainSensorState)
-        
-        def wateringIconOffset = 0
-        if (dateMap == todayDateMap) { 
-            dayLabel = "Today" 
-            wateringIconOffset = 15
-        }
-        else if (date.after(today) && date.before(sevenDaysLater)) { 
-            dayLabel = date.format('EEE') 
-            wateringIconOffset = 8
-        }
-        else { 
-         //   dayLabel = date.format('M/d') 
-         //   if (dateMap.month > 9) wateringIconOffset = 11
-         //   else wateringIconOffset = 8
-            dayLabel = date.format('EEE') 
-            wateringIconOffset = 8            
-        }
-        if (irrigationIcon == rainSkip || irrigationIcon == rainSkip2) {
-            wateringIconOffset = wateringIconOffset + 2
-                // extra space for rain skip icon
-        }
         
         // Build SVG Body      
-        Integer halfColumnWidth = columnWidth / 2
+        Integer halfColumnWidth = Math.ceil(columnWidth / 2)
         columnCenter = Integer.toString(halfColumnWidth*(i+1))
         
         svg += '<g transform="translate(' + Integer.toString(columnWidth*i) + ', 10)">'
-        svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="1.5" text-anchor="middle" class="dayText largeFontClass fontWeightClass">' + dayLabel + '</text>'
-        
-         svg += '<g transform="translate(' + Double.toString(halfColumnWidth + wateringIconOffset) + ',-15) scale(.8)">'
-        svg += irrigationIcon
-          
-        svg += '</g>'
+
+        if (rachioIconLocation == "Top" && contentMap[dateIndex].rachioIcons != null) {
+            def numIcons = contentMap[dateIndex].rachioIcons.size()
+            def iconWidth = 10
+            def j = 1
+            contentMap[dateIndex].rachioIcons.each { 
+                def hOffset = getRachioIconOffset(numIcons, j, iconWidth)
+                Double middle = halfColumnWidth - 12
+                Double translateH = middle + hOffset
+                LOG("Setting hOffset = ${hOffset} for iconIndex = ${j} out of ${numIcons} icons. Shifts ${hOffset} away from middle = ${middle}")
+                svg += '<g transform="translate(' + Double.toString(translateH) + ',-30) scale(.8)">'
+                svg += it.svg
+                svg += '</g>'
+                j++
+            }
+        }
+
+        svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="1.5" text-anchor="middle" class="dayText largeFontClass fontWeightClass">' + contentMap[dateIndex].parameters?.dayLabel + '</text>'
+       
+        if (rachioIconLocation == "Side") {
+            svg += '<g transform="translate(' + Double.toString(halfColumnWidth + contentMap[dateIndex].parameters.iconOffset) + ',-15) scale(.8)">'
+            contentMap[dateIndex].rachioIcons.each { 
+                svg += it.svg
+            }
+            svg += '</g>'
+        }
         
         svg += '<g transform="translate(' + Double.toString((extraHorizontalSpaceSetting/2) + 2) + ', ' + voffset + ')">'
-        svg += weatherIcon
+        svg += contentMap[dateIndex].weatherIcon
         svg += '</g>'
         
         if (showTempSetting) {  // only show % for dates that are on or after today
             tempBaseY = 68
-            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString(tempBaseY + extraVerticalSpaceSetting) + '" text-anchor="middle" class="tempText largeFontClass fontWeightClass">' + highTemp + ' | ' + lowTemp + '</text>'
+            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString(tempBaseY + extraVerticalSpaceSetting) + '" text-anchor="middle" class="tempText largeFontClass fontWeightClass">' + contentMap[dateIndex].highTemp + ' | ' +  contentMap[dateIndex].lowTemp + '</text>'
 
         }
+
+        today = new Date().clearTime()
+        yesterday = today.copyWith(hourOfDay: 23, minute: 59, second: 59)
+        yesterday -= 1
+
         if (showPrecipPercentSetting && date.after(yesterday)) {
             popBaseY = showTempSetting ? 81 : 68
             precipPopExtraVerticalSpacing = showTempSetting ? extraVerticalSpaceSetting*2 : extraVerticalSpaceSetting
-            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((popBaseY+precipPopExtraVerticalSpacing)) + '" text-anchor="middle" class="precipText smallFontClass ">' + precipPercent + '</text>'
+            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((popBaseY+precipPopExtraVerticalSpacing)) + '" text-anchor="middle" class="precipText smallFontClass ">' + contentMap[dateIndex].precipPercent + '</text>'
 
         }
         
@@ -2085,7 +2407,7 @@ def buildControllerDashboard() {
                 precipAmountBaseY = 81
                 tempExtraVerticalSpacing = extraVerticalSpaceSetting*2
             }
-            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((precipAmountBaseY + tempExtraVerticalSpacing)) + '" text-anchor="middle" class="precipText smallFontClass">' + precipAmount + '</text>'
+            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((precipAmountBaseY + tempExtraVerticalSpacing)) + '" text-anchor="middle" class="precipText smallFontClass">' + contentMap[dateIndex].precipAmount + '</text>'
 
         }
             
@@ -2102,6 +2424,7 @@ def getIconPreference() {
 }
 
 def getWeatherIcon(weatherIconText) {
+    LOG("getWeatherIcon: ${weatherIconText}", 5, "trace")
     def weatherIcon = null
     def iconPack = getIconPreference()
     if (iconPack == "Filled") {
@@ -2148,113 +2471,281 @@ def getWeatherIcon(weatherIconText) {
         else if (weatherIconText == 'PARTLY_CLOUDY') { weatherIcon = partlycloudy2 }
         else if (weatherIconText == 'PARTLY_SUNNY') { weatherIcon = partlysunny2 }            
     }
+    LOG("got Weather Icon: ${weatherIcon}", 5, "trace")
     return weatherIcon
 }
 
-def getIrrigationIcon(pastEvents, futureEvents, rainSensorState) {
-    def irrigationIcon = null
-    
-    def iconPack = getIconPreference()
+def getScheduleSpecificIcon(icon, scheduleId, scheduleSpecificColor, cssClass) {
+    LOG("getScheduleSpecificIcon: ${icon}, ${scheduleId}, ${scheduleSpecificColor}, ${cssClass}", 5, "trace")
+    def newIcon = [:]
+    if (!scheduleId || !scheduleSpecificColor || !cssClass) return icon
+    LOG("Inserting schedule specific color into ${icon}...", 3, "debug")
+    newIcon.svg = icon?.svg.replaceAll("class=\"${cssClass}\"", "class=\"${cssClass}${scheduleId}\"")
+    def hexColor = null
+    if (scheduleSpecificColor.contains("#")) hexColor = scheduleSpecificColor
+    else if (getRachioHexColor(scheduleSpecificColor) != null) hexColor = getRachioHexColor(scheduleSpecificColor)
+    else hexColor = scheduleSpecificColor
+    newIcon.style = '<style type="text/css"> .' + cssClass + scheduleId + '{fill:' + hexColor + ';}</style>'
+    return newIcon
+}
+
+def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
+    def irrigationIcons = []
     def eventsList = []
-        
-        if (!pastEvents.isEmpty()) {
-            for (event in pastEvents) {
-                def foundEvent = [:]
-                switch(event.subType) {
-                    // show watering icon if ANY watering is done on this date; else show skip icon
-                    case "SCHEDULE_STARTED":
-                        foundEvent = [eventType : "WATER", eventSubType : null, eventDescription: event.summary]
-                        irrigationIcon = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
-                        break
-                    case "WEATHER_INTELLIGENCE_SKIP":
-                        foundEvent = [eventType : "SKIP", eventSubType : "RAIN_PREDICTED", eventDescription: event.summary]
-                        if (eventsList.isEmpty()) { irrigationIcon = iconPack == "Filled" ? rainSkip : rainSkip2 }
-                        break
-                    case "WEATHER_INTELLIGENCE_CLIMATE_SKIP":
-                        foundEvent = [eventType : "SKIP", eventSubType : "SOIL_SATURATED", eventDescription: event.summary]
-                        if (eventsList.isEmpty()) { irrigationIcon = iconPack == "Filled" ? saturationSkip : saturationSkip2 }
-                        break
-                    case "MANUAL_SKIP":
-                        foundEvent = [eventType : "SKIP", eventSubType : "MANUAL", eventDescription: event.summary]
-                        if (eventsList.isEmpty()) { irrigationIcon = iconPack == "Filled" ? genericSkip : genericSkip2 }
-                        break
-                    case "ZONE_SKIPPED":
-                        foundEvent = [eventType : "SKIP", eventSubType : "MANUAL", eventDescription: event.summary]
-                        if (eventsList.isEmpty()) { irrigationIcon = iconPack == "Filled" ? genericSkip : genericSkip2 }
-                        break
+    def iconPack = getIconPreference()
+
+    if (!pastEvents.isEmpty()) {
+        for (event in pastEvents) {
+            def foundEvent = [:]
+            def icon = [:]
+
+            def scheduleSpecificColor = null
+            def schedId = null
+            if (event.subType == "SCHEDULE_STARTED" || event.subType == "WEATHER_INTELLIGENCE_SKIP" || event.subType == "WEATHER_INTELLIGENCE_CLIMATE_SKIP" || event.subType == "MANUAL_SKIP" || event.subType == "ZONE_SKIPPED") {
+                if (settings.singleRachioIcon == false && event.summary) {
+                    def schedule = getScheduleIdFromSummary(event.summary, schedules)
+                    schedId = schedule?.id
+                    scheduleSpecificColor = settings["colorFor${schedule?.type}Schedule${schedId}"]
+                    LOG("Found Specific Color = ${scheduleSpecificColor} for schedule ${schedule?.name} with id = ${schedId}", 3, "debug")
                 }
-                if(!foundEvent?.isEmpty()) { eventsList.add(foundEvent) }
+            }
+            switch(event.subType) {
+                case "SCHEDULE_STARTED":
+                    foundEvent = [eventType : "WATER", eventSubType : null, eventDescription: event.summary]
+                    icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
+                    if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropWatering") }
+                    break
+                case "WEATHER_INTELLIGENCE_SKIP":
+                    foundEvent = [eventType : "SKIP", eventSubType : "RAIN_PREDICTED", eventDescription: event.summary]
+                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                        icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                    }
+                    break
+                case "WEATHER_INTELLIGENCE_CLIMATE_SKIP":
+                    foundEvent = [eventType : "SKIP", eventSubType : "SOIL_SATURATED", eventDescription: event.summary]
+                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                        icon.svg = iconPack == "Filled" ? saturationSkip : saturationSkip2 
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                    }
+                    break
+                case "MANUAL_SKIP":
+                    foundEvent = [eventType : "SKIP", eventSubType : "MANUAL", eventDescription: event.summary]
+                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                        icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropSkip") }
+                    }
+                    break
+                case "ZONE_SKIPPED":
+                    foundEvent = [eventType : "SKIP", eventSubType : "MANUAL", eventDescription: event.summary]
+                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                        icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2 
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropSkip") }
+                    }
+                    break
+            }
+            if(!foundEvent?.isEmpty()) { eventsList.add(foundEvent) }
+            if (!icon?.isEmpty()) {
+                LOG("Found Icon ${icon} for Event ${event.subType}. Icon svg = ${icon.svg}. Icon style = ${icon.style}", 3, "debug")
+                if (irrigationIcons.size() == 0 || !settings?.singleRachioIcon) {
+                    LOG("Adding Icon ${icon} to list", 3, "debug")
+                    irrigationIcons.add(icon)
+                }
+            }
+            else LOG("No Icon found for Event ${event.subType}", 3, "debug")
+        }
+    }
+    else if (!futureEvents?.isEmpty()) {
+        for (event in futureEvents) {
+            def icon = [:]
+            def foundEvent = [:]
+
+            def scheduleSpecificColor = null
+            def schedId = null
+            if (event.type == "FUTURE_FEED_SCHEDULE_EVENT" || event.type == "RAIN_FUTURE_FEED_SKIP_EVENT" || event.type == "WIND_FUTURE_FEED_SKIP_EVENT" || event.type == "FREEZE_FUTURE_FEED_SKIP_EVENT" || event.type == "CLIMATE_FUTURE_FEED_SKIP_EVENT" || event.type == "MANUAL_FUTURE_FEED_SKIP_EVENT") {
+                if (settings.singleRachioIcon == false && (event.scheduleType == "FLEX" || event.scheduleType == "FIXED")) {
+                    schedId = getScheduleIdByName(event.scheduleName, event.scheduleType)
+                    scheduleSpecificColor = settings["colorFor${event.scheduleType}Schedule${schedId}"]
+                    LOG("Found Specific Color = ${scheduleSpecificColor} for schedule ${event.scheduleName} with schedId = ${schedId}", 3, "debug")
+                }
+            }
+            LOG("Found Event ${event.type}", 3, "debug")
+            switch(event.type) {
+                case "FUTURE_FEED_SCHEDULE_EVENT":
+                    foundEvent = [eventType : "WATER", eventSubType : null, eventDescription: event.summary]
+                    if (rainSensorState == false) { 
+                        icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2 
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropWatering") }
+                    }
+                    else if (rainSensorState == true) { icon.svg = iconPack == "Filled" ? rainSensorSkip : rainSensorSkip2 }
+                    break
+                case "RAIN_FUTURE_FEED_SKIP_EVENT":
+                    foundEvent = [eventType : "SKIP", eventSubType : "RAIN_PREDICTED", eventDescription: event.summary]
+                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                        icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                    }
+                    break
+                case "WIND_FUTURE_FEED_SKIP_EVENT":
+                    foundEvent = [eventType : "SKIP", eventSubType : "WIND_PREDICTED", eventDescription: event.summary]
+                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                        icon.svg = iconPack == "Filled" ? windSkip : windSkip2 
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                    }
+                    break
+                case "FREEZE_FUTURE_FEED_SKIP_EVENT":
+                    foundEvent = [eventType : "SKIP", eventSubType : "FREEZE_PREDICTED", eventDescription: event.summary]
+                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                        icon.svg = iconPack == "Filled" ? freezeSkip : freezeSkip2 
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                    }
+                    break
+                case "CLIMATE_FUTURE_FEED_SKIP_EVENT":
+                    foundEvent = [eventType : "SKIP", eventSubType : "SOIL_SATURATED", eventDescription: event.summary]
+                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                        icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2 
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                    }
+                    break
+                case "MANUAL_FUTURE_FEED_SKIP_EVENT":
+                    foundEvent = [eventType : "SKIP", eventSubType : "MANUAL", eventDescription: event.summary]
+                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                        icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2 
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropSkip") }
+                    }
+                    break
+            }
+            if(!foundEvent.isEmpty()) { eventsList.add(foundEvent) }
+            if (!icon?.isEmpty()) {
+                LOG("Found Icon ${icon} for Event ${event.type}", 3, "debug")
+                if (irrigationIcons.size() == 0 || !settings?.singleRachioIcon) {
+                    LOG("Adding Icon ${icon} to list", 3, "debug")
+                    irrigationIcons.add(icon)
+                }
+            }
+            else LOG("No Icon found for Event ${event.type}", 3, "debug")
+        }
+    }   
+
+    return irrigationIcons
+}
+
+def getHoseTimerIcons(baseStationDayViews, dateMap, valveIdFilter = null) {
+    def hoseTimerIcons = []
+    def iconPack = getIconPreference()
+
+    LOG("Parsing baseStationDayViews = ${baseStationDayViews}", 3, "debug")
+
+    if (!baseStationDayViews.isEmpty()) {
+        baseStationDayViews.each { day ->
+            if (day.date == dateMap) {
+                day.valveProgramRunSummaries?.each { programAction ->
+                    programAction?.valveRunSummaries?.each { valveRun ->
+                        if (valveIdFilter == null || valveRun.valveId == valveIdFilter) {
+                            def icon = [:]
+                            
+                            def programSpecificColor = null
+                            def programId = null
+                            if (settings.singleRachioIcon == false) {
+                                programId = programAction.programId
+                                programSpecificColor = settings["colorForProgram${programId}"]
+                                LOG("Found Specific Color = ${programSpecificColor} for program id = ${programId}", 3, "debug")
+                            }
+                            if (valveRun.skip) {
+                                if (valveRun.skip?.containsKey("manualOverrideTrigger")) { // manual skip
+                                    icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
+                                    if (programSpecificColor) { icon = getScheduleSpecificIcon(icon, programId, programSpecificColor, "rainDropSkip") }
+                                }
+                                else if (valveRun.skip?.rainOverrideTrigger) {
+                                    if (valveRun.skip?.rainOverrideTrigger.containsKey("predictedPrecipMm")) {
+                                        icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
+                                        if (programSpecificColor) { icon = getScheduleSpecificIcon(icon, programId, programSpecificColor, "skipStrikethrough") }
+                                    }
+                                    else if (valveRun.skip?.rainOverrideTrigger.containsKey("observedPrecipMm")) {
+                                        icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2 
+                                        if (programSpecificColor) { icon = getScheduleSpecificIcon(icon, programId, programSpecificColor, "skipStrikethrough") }
+                                    }
+                                }
+                            }
+                            else { // absence of skip element indicates run that has happened or is still planned
+                                icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2 
+                                if (programSpecificColor) { icon = getScheduleSpecificIcon(icon, programId, programSpecificColor, "rainDropWatering") }
+                            }
+
+                            if (!icon?.isEmpty()) {
+                                if (hoseTimerIcons.size() == 0 || !settings?.singleRachioIcon) {
+                                    hoseTimerIcons.add(icon)
+                                }
+                            }
+                        }
+                    }
+                }
+                day.valveQuickRunSummaries?.each { quickAction ->
+                    quickAction?.valveRunSummaries?.each { valveRun ->
+                        if (valveIdFilter == null || valveRun.valveId == valveIdFilter) {
+                            def icon = [:]
+
+                            if (valveRun.skip) {
+                                if (valveRun.skip?.containsKey("manualOverrideTrigger")) icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
+                                else if (valveRun.skip?.rainOverrideTrigger) {
+                                    if (valveRun.skip?.rainOverrideTrigger.containsKey("predictedPrecipMm")) icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
+                                    else if (valveRun.skip?.rainOverrideTrigger.containsKey("observedPrecipMm")) icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2
+                                }
+                            }
+                            else icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
+                            // absence of skip element indicates run that has happened or is still planned
+
+                            if (!icon?.isEmpty() && (hoseTimerIcons.size() == 0 || !settings?.singleRachioIcon)) hoseTimerIcons.add(icon)
+                        }
+                    }
+                }
+                day.valveManualRunSummaries?.each { manualAction ->
+                    manualAction?.valveRunSummaries?.each { valveRun ->
+                        if (valveIdFilter == null || valveRun.valveId == valveIdFilter) {
+                            def icon = [:]
+
+                            if (valveRun.skip) {
+                                if (valveRun.skip?.containsKey("manualOverrideTrigger")) icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
+                                else if (valveRun.skip?.rainOverrideTrigger) {
+                                    if (valveRun.skip?.rainOverrideTrigger.containsKey("predictedPrecipMm")) icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
+                                    else if (valveRun.skip?.rainOverrideTrigger.containsKey("observedPrecipMm")) icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2
+                                }
+                            }
+                            else icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
+                            // absence of skip element indicates run that has happened or is still planned
+
+                            if (!icon?.isEmpty() && (hoseTimerIcons.size() == 0 || !settings?.singleRachioIcon)) hoseTimerIcons.add(icon)
+                        }
+                    }
+                }
             }
         }
-        else if (!futureEvents?.isEmpty()) {
-            for (event in futureEvents) {
-                def foundEvent = [:]
-                switch(event.type) {
-                    // show watering icon if ANY watering is done on this date; else show skip icon
-                    case "FUTURE_FEED_SCHEDULE_EVENT":
-                        foundEvent = [eventType : "WATER", eventSubType : null, eventDescription: event.summary]
-                        if (rainSensorState == false) { irrigationIcon = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2 }
-                        else if (rainSensorState == true) { irrigationIcon = iconPack == "Filled" ? rainSensorSkip : rainSensorSkip2 }
-                        break
-                    case "RAIN_FUTURE_FEED_SKIP_EVENT":
-                        foundEvent = [eventType : "SKIP", eventSubType : "RAIN_PREDICTED", eventDescription: event.summary]
-                        if (eventsList.isEmpty()) { irrigationIcon = iconPack == "Filled" ? rainSkip : rainSkip2 }
-                        break
-                    case "WIND_FUTURE_FEED_SKIP_EVENT":
-                        foundEvent = [eventType : "SKIP", eventSubType : "WIND_PREDICTED", eventDescription: event.summary]
-                        if (eventsList.isEmpty()) { irrigationIcon = iconPack == "Filled" ? windSkip : windSkip2 }
-                        break
-                    case "FREEZE_FUTURE_FEED_SKIP_EVENT":
-                        foundEvent = [eventType : "SKIP", eventSubType : "FREEZE_PREDICTED", eventDescription: event.summary]
-                        if (eventsList.isEmpty()) { irrigationIcon = iconPack == "Filled" ? freezeSkip : freezeSkip2 }
-                        break
-                    case "CLIMATE_FUTURE_FEED_SKIP_EVENT":
-                        foundEvent = [eventType : "SKIP", eventSubType : "SOIL_SATURATED", eventDescription: event.summary]
-                        if (eventsList.isEmpty()) { irrigationIcon = iconPack == "Filled" ? saturationSkip : saturationSkip2 }
-                        break
-                    case "MANUAL_FUTURE_FEED_SKIP_EVENT":
-                        foundEvent = [eventType : "SKIP", eventSubType : "MANUAL", eventDescription: event.summary]
-                        if (eventsList.isEmpty()) { irrigationIcon = iconPack == "Filled" ? genericSkip : genericSkip2 }
-                        break
-                }
-                if(!foundEvent.isEmpty()) { eventsList.add(foundEvent) }
-            }
-        }   
-    return irrigationIcon
+    }
+    return hoseTimerIcons
 }
 
 def getColorScheme(schemeSelection) {
-    
-    // new color scheme:
-    // white: #c0bfbc
-    // yellow: #f6d32d
-    // blue: #99c1f1
-    
-    // old color scheme
     white = "#FFFFFF"
     black = "#000000"
     red = "#cc3333"
-  //  yellow = "#f4a71d"
     yellow = "#f6d32d"
-  //  darkBlue = "#2885c7"
-   // lightBlue = "#72b7d4"
     darkBlue = "#99c1f1"
     lightBlue = "#99c1f1"
     
     if (schemeSelection == "White with Color") {
-        return [cloudColor: white, lightColor: yellow, precipColor: darkBlue, frozenPrecipColor: lightBlue, rainDropWateringColor: darkBlue, rainDropAccentColor: white, rainDropSkipColor:red, skipStrikethroughColor: white, saturatedSoilColor: darkBlue, rainDropsPredictedColor: darkBlue, freezeSkip0Color: lightBlue, freezeSkip1Color: darkBlue, windSkipColor: lightBlue, rainSensorSkipColor: darkBlue, strokeColor: none, dayTextColor: white, precipTextColor: darkBlue, highTempTextColor: white, lowTempTextColor: white]  
+        return [cloudColor: white, lightColor: yellow, precipColor: darkBlue, frozenPrecipColor: lightBlue, rainDropWateringColor: darkBlue, rainDropSkipColor:red, skipStrikethroughColor: white, saturatedSoilColor: darkBlue, rainDropsPredictedColor: darkBlue,  cloudPredictedColor: white, freezeSkipColor: lightBlue, freezeSkip1Color: darkBlue, windSkipColor: lightBlue, rainSensorSkipColor: darkBlue, strokeColor: none, dayTextColor: white, precipTextColor: darkBlue, highTempTextColor: white, lowTempTextColor: white]  
     }
     else if (schemeSelection == "Black with Color") {
-        return [cloudColor: black, lightColor: yellow, precipColor: darkBlue, frozenPrecipColor: lightBlue, rainDropWateringColor: darkBlue, rainDropAccentColor: black, rainDropSkipColor:red, skipStrikethroughColor: black, saturatedSoilColor: darkBlue, rainDropsPredictedColor: darkBlue, freezeSkip0Color: lightBlue, freezeSkip1Color: darkBlue,  windSkipColor: lightBlue, rainSensorSkipColor: darkBlue, strokeColor: none, dayTextColor: black, precipTextColor: darkBlue, highTempTextColor: black, lowTempTextColor: black]  
+        return [cloudColor: black, lightColor: yellow, precipColor: darkBlue, frozenPrecipColor: lightBlue, rainDropWateringColor: darkBlue, rainDropSkipColor:red, skipStrikethroughColor: black, saturatedSoilColor: darkBlue, rainDropsPredictedColor: darkBlue,  cloudPredictedColor: black, freezeSkipColor: lightBlue, freezeSkip1Color: darkBlue,  windSkipColor: lightBlue, rainSensorSkipColor: darkBlue, strokeColor: none, dayTextColor: black, precipTextColor: darkBlue, highTempTextColor: black, lowTempTextColor: black]  
     }
     else if (schemeSelection == "White without Color") {
-        return [cloudColor: white, lightColor: white, precipColor: white,  frozenPrecipColor: white, rainDropWateringColor: white, rainDropAccentColor: black, rainDropSkipColor:black, skipStrikethroughColor: white, saturatedSoilColor: black, rainDropsPredictedColor: white, freezeSkip0Color: white, freezeSkip1Color: white,  windSkipColor: white, rainSensorSkipColor: white, strokeColor: white, dayTextColor: white, precipTextColor: white, highTempTextColor: white, lowTempTextColor: white]  
+        return [cloudColor: white, lightColor: white, precipColor: white,  frozenPrecipColor: white, rainDropWateringColor: white, rainDropSkipColor:black, skipStrikethroughColor: white, saturatedSoilColor: black, rainDropsPredictedColor: white,  cloudPredictedColor: white, freezeSkipColor: white, freezeSkip1Color: white,  windSkipColor: white, rainSensorSkipColor: white, strokeColor: white, dayTextColor: white, precipTextColor: white, highTempTextColor: white, lowTempTextColor: white]  
     }
     else if (schemeSelection == "Black without Color") {
-        return [cloudColor: black, lightColor: black, precipColor: black, frozenPrecipColor: black, rainDropWateringColor: black, rainDropAccentColor: white, rainDropSkipColor: white, skipStrikethroughColor: black, saturatedSoilColor: white, rainDropsPredictedColor: black, freezeSkip0Color: black, freezeSkip1Color: black, windSkipColor: black, rainSensorSkipColor: black, strokeColor: black, dayTextColor: black, precipTextColor: black, highTempTextColor: black, lowTempTextColor: black]  
+        return [cloudColor: black, lightColor: black, precipColor: black, frozenPrecipColor: black, rainDropWateringColor: black, rainDropSkipColor: white, skipStrikethroughColor: black, saturatedSoilColor: white, rainDropsPredictedColor: black,  cloudPredictedColor: black, freezeSkipColor: black, freezeSkip1Color: black, windSkipColor: black, rainSensorSkipColor: black, strokeColor: black, dayTextColor: black, precipTextColor: black, highTempTextColor: black, lowTempTextColor: black]  
     }
     else if (schemeSelection == "Custom") {
-        return [cloudColor: cloudColorCustom, lightColor: lightColorCustom, precipColor: precipColorCustom, rainDropWateringColor: rainDropWateringColorCustom, rainDropAccentColor: rainDropAccentColorCustom, rainDropSkipColor:rainDropSkipColorCustom, skipStrikethroughColor: skipStrikethroughColorCustom, saturatedSoilColor: saturatedSoilColorCustom, rainDropsPredictedColor: rainDropsPredictedColorCustom, freezeSkip0Color: freezeSkip0ColorCustom, freezeSkip1Color: freezeSkip1ColorCustom, windSkipColor: windSkipColorCustom, rainSensorSkipColor: rainSensorSkipColorCustom, strokeColor: strokeColorCustom, dayTextColor: dayTextColorCustom, precipTextColor: precipTextColorCustom, highTempTextColor: highTempTextColorCustom, lowTempTextColor: lowTempTextColorCustom]  
+        return [cloudColor: cloudColorCustom, lightColor: lightColorCustom, precipColor: precipColorCustom, rainDropWateringColor: rainDropWateringColorCustom, rainDropSkipColor:rainDropSkipColorCustom, skipStrikethroughColor: skipStrikethroughColorCustom, saturatedSoilColor: saturatedSoilColorCustom, rainDropsPredictedColor: rainDropsPredictedColorCustom, cloudPredictedColor: cloudPredictedColorCustom, freezeSkipColor: freezeSkipColorCustom, freezeSkip1Color: freezeSkip1ColorCustom, windSkipColor: windSkipColorCustom, rainSensorSkipColor: rainSensorSkipColorCustom, strokeColor: strokeColorCustom, dayTextColor: dayTextColorCustom, precipTextColor: precipTextColorCustom, highTempTextColor: highTempTextColorCustom, lowTempTextColor: lowTempTextColorCustom]  
     }
     LOG("Error getting color scheme", 3, "debug")
     return
@@ -2298,6 +2789,11 @@ def getInterface(type, txt="", link="") {
     }
 } 
 
+def getDebugLevel() {
+    String dbg=settings.debugLevel == null ? "2" : settings.debugLevel
+    return dbg
+}
+
 @Field static final List<String> lLOGTYPES =	['error', 'debug', 'info', 'trace', 'warn']
 
 void LOG(String message, Integer level=3, String logType="debug") {
@@ -2305,8 +2801,8 @@ void LOG(String message, Integer level=3, String logType="debug") {
 	Integer dbgLevel = dbg.toInteger()
 	if (logType == "error") {
 		String a=getTimestamp()
-		state.lastLOGerror="${message} @ "+a
-		state.LastLOGerrorDate=a
+		atomicState.lastLOGerror="${message} @ "+a
+		atomicState.LastLOGerrorDate=a
 	} else {
 		if(level > dbgLevel) return
 	}
@@ -2318,13 +2814,43 @@ void LOG(String message, Integer level=3, String logType="debug") {
     if (logType == "debug") log.debug(message)
     else if (logType == "error") log.error(message)
     else if (logType == "info") log.info(message)
-    else if (logType == "trade") log.trace(message)
+    else if (logType == "trace") log.trace(message)
     else if (logType == "warn") log.warn(message)
 }
 
 static String getTimestamp() {
 	return new Date().format("yyyy-MM-dd HH:mm:ss z")
 }
+
+def getRachioColorEnum() {
+    return ["LIGHT_BLUE": "Light Blue", "DARK_BLUE": "Dark Blue", "LIGHT_GREEN": "Light Green", "DARK_GREEN": "Dark Green", "RED": "Red", "PURPLE": "Purple"]
+}
+
+def getRachioHexColor(colorCode) {
+    def hex = null
+    switch(colorCode) {
+        case "LIGHT_BLUE":
+            hex = "#00A7E1"
+            break
+        case "DARK_BLUE":
+            hex = "#1E74BB"
+            break;
+        case "LIGHT_GREEN":
+            hex = "#4BC1BB"
+            break;
+        case "PURPLE":
+            hex = "#8466AC"
+            break;
+        case "RED":
+            hex = "#FF4338"
+            break;
+        case "DARK_GREEN":
+            hex = "#3F7D0E"
+            break;
+    }
+    return hex
+}
+
 
 // Filled icons
 chanceflurries = '<g transform="scale(2) translate(0,0)" id="chanceflurries"><path style="stroke-width:0.999998" class="light" d="m 17.779297,1.5312153 c -0.24,0 -0.439375,0.08977 -0.609375,0.259766 -0.17,0.17 -0.25,0.369609 -0.25,0.599609 v 2.041016 c 0,0.23 0.09977,0.430078 0.259766,0.580078 0.16,0.15 0.369609,0.230469 0.599609,0.230469 0.23,0 0.429609,-0.07047 0.599609,-0.230469 0.17,-0.16 0.25,-0.350078 0.25,-0.580078 v -2.050781 c 0,-0.23 -0.08,-0.42961 -0.25,-0.59961 -0.17,-0.17 -0.359609,-0.25 -0.599609,-0.25 z m -6.90039,2.84961 c -0.23,0 -0.438672,0.08 -0.638672,0.25 -0.15,0.18 -0.230469,0.381328 -0.230469,0.611328 0,0.24 0.08023,0.449375 0.240235,0.609375 l 1.458984,1.429688 c 0.15,0.16 0.349844,0.240234 0.589844,0.240234 0.24,0 0.439609,-0.08023 0.599609,-0.240234 0.16,-0.160001 0.240234,-0.35961 0.240234,-0.59961 0,-0.24 -0.08023,-0.439844 -0.240234,-0.589844 L 11.46875,4.6210593 c -0.17,-0.16 -0.369843,-0.240234 -0.589843,-0.240234 z m 13.800781,0.0098 c -0.22,0 -0.419844,0.08023 -0.589844,0.240234 l -1.419922,1.470703 c -0.15,0.14 -0.230469,0.339844 -0.230469,0.589844 0,0.24 0.08047,0.439609 0.230469,0.59961 0.15,0.16 0.328594,0.240234 0.558594,0.240234 0.22,0 0.421562,-0.08023 0.601562,-0.240234 l 1.458985,-1.429688 c 0.16,-0.16 0.240234,-0.369141 0.240234,-0.619141 0,-0.23 -0.08,-0.431562 -0.25,-0.601562 -0.16,-0.17 -0.359609,-0.25 -0.599609,-0.25 z m -6.910157,2.550781 c -0.93,0 -1.789609,0.229219 -2.599609,0.699219 -0.81,0.47 -1.440156,1.110156 -1.910156,1.910156 -0.47,0.7999997 -0.701172,1.6696097 -0.701172,2.5996097 0,0.94 0.241406,1.811093 0.691406,2.621091 0.47,0.800001 1.098438,1.43039 1.898438,1.900391 0.8,0.47 1.671328,0.69922 2.611328,0.69922 0.94,0 1.809375,-0.22922 2.609375,-0.69922 0.8,-0.47 1.43039,-1.100391 1.90039,-1.900391 0.47,-0.8 0.699219,-1.669375 0.699219,-2.609375 0,-0.699998 -0.140156,-1.381482 -0.410156,-2.021482 -0.27,-0.6399997 -0.639375,-1.1901557 -1.109375,-1.6601557 -0.46,-0.47 -1.020156,-0.839141 -1.660156,-1.119141 -0.65,-0.28 -1.319532,-0.419922 -2.019532,-0.419922 z M 8.000035,11.291016 c -0.22,0 -0.431563,0.08023 -0.601563,0.240233 -0.17,0.17 -0.25,0.379142 -0.25,0.619142 0,0.24 0.09172,0.441329 0.261719,0.611328 0.17,0.17 0.369609,0.25 0.599609,0.25 h 2.039063 c 0.23,0 0.430078,-0.08 0.580078,-0.25 0.15,-0.169999 0.220703,-0.371328 0.220703,-0.611328 0,-0.24 -0.08047,-0.439375 -0.230469,-0.609375 -0.16,-0.17 -0.350078,-0.25 -0.580078,-0.25 z m 17.509765,0 c -0.22,0 -0.410313,0.08023 -0.570313,0.240233 -0.16,0.18 -0.240234,0.379142 -0.240234,0.619142 0,0.24 0.08047,0.431562 0.230469,0.601562 0.15,0.17 0.350078,0.25 0.580078,0.25 h 2.019531 c 0.23,0 0.429609,-0.08 0.599609,-0.25 0.17,-0.17 0.259766,-0.371563 0.259766,-0.601562 0,-0.23 -0.08977,-0.42961 -0.259766,-0.59961 -0.17,-0.17 -0.369609,-0.259765 -0.599609,-0.259765 z m -13.210971,5.519526 c -0.24,0 -0.439844,0.07047 -0.589844,0.230467 l -1.46875,1.429689 c -0.15,0.18 -0.230469,0.381327 -0.230469,0.611328 0,0.229999 0.08023,0.429844 0.240235,0.589844 0.409999,0.32 0.818515,0.32 1.228515,0 l 1.419922,-1.419952 c 0.16,-0.18 0.240234,-0.400627 0.240234,-0.640625 0,-0.229998 -0.08023,-0.42031 -0.240234,-0.570314 -0.16,-0.149998 -0.359609,-0.230467 -0.599609,-0.230467 z m 10.929687,0.0098 c -0.22,3e-6 -0.408594,0.07047 -0.558594,0.230469 -0.15,0.140002 -0.230469,0.330547 -0.230469,0.560547 0,0.260001 0.08047,0.470394 0.230469,0.650394 l 1.419922,1.41992 c 0.4,0.31 0.799219,0.31 1.199219,0 0.16,-0.16 0.240234,-0.359844 0.240234,-0.589844 0,-0.23 -0.08023,-0.441328 -0.240234,-0.611328 l -1.458985,-1.429718 c -0.16,-0.15 -0.361562,-0.230469 -0.601562,-0.23047 z" id="path2" /><path id="path849" d="M 11.160157,8 C 9.750156,8 8.509688,8.440547 7.429688,9.310547 c -1.08,0.87 -1.780078,1.989609 -2.080078,3.349609 -1.12,0.26 -2.028282,0.830469 -2.738282,1.730469 -0.71,0.9 -1.070312,1.920313 -1.070312,3.070313 0,0.9 0.220156,1.730234 0.660156,2.490234 C 2.641172,20.711172 3.24,21.31 4,21.75 c 0.76,0.44 1.580703,0.660156 2.470703,0.660156 h 10.830078 c 0.890002,0 1.720469,-0.220156 2.480469,-0.660156 0.76,-0.44 1.368594,-1.038828 1.808594,-1.798828 0.44,-0.76 0.669922,-1.590234 0.669922,-2.490234 0,-0.595125 -0.129762,-1.19868 -0.357422,-1.802735 -0.289942,-0.712862 -0.55802,-1.154541 -1.279297,-1.796875 -0.936402,-0.857226 -2.037123,-1.300781 -3.322266,-1.300781 h -0.320312 c -0.180857,-0.788537 -0.529944,-1.518006 -1.039062,-2.191406 -0.02329,-0.03076 -0.04472,-0.06579 -0.06836,-0.0957 -0.0015,-0.0019 -0.0024,-0.004 -0.0039,-0.0059 C 15.754214,10.121576 15.619138,9.984247 15.488281,9.84375 14.818229,9.160538 14.039562,8.724549 13.203125,8.353516 12.590468,8.119718 11.910966,8 11.160157,8 Z" class="cloud" /><path class="frozenPrecip" d="m 11.919922,19.021485 c -0.23,0 -0.420078,0.07828 -0.580078,0.238281 -0.16,0.16 -0.240235,0.371562 -0.240235,0.601562 0,0.23 0.08024,0.420078 0.240235,0.580078 0.16,0.16 0.360078,0.238282 0.580078,0.238282 0.24,0 0.439609,-0.07828 0.599609,-0.238282 0.17,-0.16 0.25,-0.351796 0.25,-0.591797 0,-0.23 -0.08,-0.429843 -0.25,-0.589843 -0.17,-0.16 -0.369609,-0.238282 -0.599609,-0.238281 z M 8.75,20.720703 c -0.2300001,0 -0.4298436,0.08023 -0.5898439,0.240235 -0.16,0.16 -0.2402343,0.360078 -0.2402343,0.580078 0,0.24 0.080234,0.439375 0.2402343,0.609375 0.1600003,0.17 0.3498438,0.25 0.5898439,0.25 0.23,0 0.4298435,-0.08 0.5898438,-0.25 0.16,-0.17 0.2402342,-0.369375 0.2402342,-0.609375 0,-0.23 -0.080234,-0.420078 -0.2402342,-0.580078 C 9.1798435,20.800938 8.99,20.720703 8.75,20.720703 Z m 6.400391,0 c -0.24,0 -0.429844,0.08023 -0.589844,0.240235 -0.16,0.16 -0.240234,0.360078 -0.240235,0.580078 0,0.24 0.08024,0.439375 0.240235,0.609375 0.16,0.17 0.359844,0.25 0.589844,0.25 0.23,0 0.429843,-0.08 0.589843,-0.25 0.16,-0.17 0.240235,-0.369375 0.240235,-0.609375 0,-0.23 -0.08024,-0.420078 -0.240235,-0.580078 -0.16,-0.16 -0.349843,-0.240235 -0.589843,-0.240235 z m -3.230469,1.890625 c -0.23,0 -0.420078,0.08 -0.580078,0.25 -0.16,0.17 -0.240235,0.36961 -0.240235,0.59961 0,0.22 0.08024,0.419609 0.240235,0.599609 0.16,0.16 0.360078,0.240234 0.580078,0.240234 0.24,0 0.439609,-0.08023 0.599609,-0.240234 0.16,-0.16 0.25,-0.359609 0.25,-0.599609 0,-0.23 -0.08,-0.42961 -0.25,-0.59961 -0.17,-0.17 -0.369609,-0.25 -0.599609,-0.25 z m -3.1894532,1.738281 c -0.2300001,0 -0.4298438,0.08047 -0.5898438,0.230469 -0.1400001,0.15 -0.2207032,0.349844 -0.2207032,0.589844 0,0.21 0.080234,0.400313 0.2402343,0.570313 0.18,0.16 0.3700782,0.240234 0.5800783,0.240234 0.24,0 0.4298436,-0.08047 0.5898436,-0.230469 0.16,-0.16 0.2304689,-0.350078 0.2304689,-0.580078 0,-0.24 -0.080234,-0.429844 -0.2402344,-0.589844 -0.1600001,-0.16 -0.349844,-0.230469 -0.5898437,-0.230469 z m 6.4101562,0 c -0.24,0 -0.441561,0.08023 -0.601563,0.240235 -0.139998,0.15 -0.218747,0.350078 -0.21875,0.580078 0,0.21 0.08047,0.400313 0.230469,0.570313 0.18,0.16 0.37961,0.240234 0.59961,0.240234 0.24,0 0.429843,-0.08047 0.589843,-0.230469 0.16,-0.16 0.230469,-0.350078 0.230469,-0.580078 0,-0.24 -0.08023,-0.429844 -0.240234,-0.589844 -0.16,-0.16 -0.349844,-0.230469 -0.589844,-0.230469 z m -3.220703,1.921876 c -0.22,0 -0.410078,0.08 -0.580078,0.25 -0.16,0.17 -0.240235,0.369609 -0.240235,0.599609 0,0.22 0.08024,0.410312 0.240235,0.570312 0.17,0.17 0.360078,0.25 0.580078,0.25 0.24,0 0.439609,-0.08047 0.599609,-0.230468 0.17,-0.16 0.25,-0.349844 0.25,-0.589844 0,-0.24 -0.08,-0.439611 -0.25,-0.599609 -0.17,-0.170001 -0.369609,-0.25 -0.599609,-0.25 z" id="path893" /></g>'
@@ -2363,15 +2889,15 @@ partlycloudy = '<g transform="scale(2) translate(0,0)" id="mostlysunny"><path st
 
 partlysunny = '<g transform="scale(2) translate(0,3)" id="mostlycloudy"><path id="path2" d="m 17.769532,1.5390582 c -0.24,0 -0.439375,0.089766 -0.609375,0.2597656 -0.17,0.17 -0.25,0.3696094 -0.25,0.5996094 v 2.0410154 c 0,0.23 0.09977,0.4300782 0.259766,0.5800784 0.16,0.1499998 0.369609,0.2304686 0.599609,0.2304686 0.23,0 0.429609,-0.070469 0.599609,-0.2304686 0.17,-0.16 0.25,-0.3500784 0.25,-0.5800784 v -2.050781 c 0,-0.23 -0.08,-0.4296094 -0.25,-0.5996094 -0.17,-0.17 -0.359609,-0.25 -0.599609,-0.25 z m -6.90039,2.8496093 c -0.23,0 -0.438672,0.08 -0.638672,0.2499999 -0.15,0.1800002 -0.230469,0.3813282 -0.230469,0.6113282 0,0.2399999 0.08023,0.449375 0.240235,0.6093749 l 1.458984,1.4296882 c 0.15,0.16 0.349844,0.240234 0.589844,0.240234 0.24,0 0.439609,-0.08023 0.599609,-0.240234 0.16,-0.1600008 0.240234,-0.3596101 0.240234,-0.5996101 0,-0.24 -0.08023,-0.4398436 -0.240234,-0.5898436 L 11.458985,4.628902 c -0.17,-0.1600002 -0.369843,-0.2402345 -0.589843,-0.2402345 z m 13.800781,0.00977 c -0.22,0 -0.419844,0.080234 -0.589844,0.2402345 l -1.419922,1.4707031 c -0.15,0.14 -0.230469,0.3398436 -0.230469,0.5898436 0,0.2399999 0.08047,0.4396095 0.230469,0.59961 0.15,0.16 0.328594,0.240234 0.558594,0.240234 0.22,0 0.421562,-0.08023 0.601562,-0.240234 l 1.458985,-1.4296881 c 0.16,-0.16 0.240234,-0.3691405 0.240234,-0.6191405 0,-0.23 -0.08,-0.4315625 -0.25,-0.6015624 -0.16,-0.1700002 -0.359609,-0.2500002 -0.599609,-0.2500002 z m -6.910157,2.5507812 c -0.93,0 -1.789609,0.229219 -2.599609,0.699219 -0.81,0.47 -1.440156,1.110156 -1.910156,1.910156 -0.47,0.8000003 -0.701172,1.6696103 -0.701172,2.5996103 0,0.94 0.241406,1.811093 0.691406,2.621092 0.47,0.8 1.098438,1.43039 1.898438,1.900391 0.8,0.469999 1.671328,0.69922 2.611328,0.69922 0.94,0 1.809375,-0.229221 2.609375,-0.69922 0.8,-0.47 1.43039,-1.100391 1.90039,-1.900391 0.47,-0.8 0.699219,-1.669375 0.699219,-2.609375 0,-0.699999 -0.140156,-1.381483 -0.410156,-2.021483 -0.27,-0.6400003 -0.639375,-1.1901563 -1.109375,-1.6601563 -0.46,-0.47 -1.020156,-0.839141 -1.660156,-1.119141 -0.65,-0.2800002 -1.319532,-0.419922 -2.019532,-0.419922 z M 7.9902695,11.298829 c -0.22,0 -0.4315625,0.08023 -0.6015625,0.240233 -0.17,0.17 -0.25,0.379142 -0.25,0.619142 0,0.24 0.091719,0.441328 0.2617188,0.611328 0.17,0.17 0.3696093,0.25 0.5996094,0.25 h 2.0390628 c 0.23,0 0.430078,-0.08 0.580078,-0.25 0.15,-0.17 0.220703,-0.371328 0.220703,-0.611328 0,-0.24 -0.08047,-0.439375 -0.230469,-0.609375 -0.16,-0.17 -0.350078,-0.25 -0.580078,-0.25 z m 17.5097655,0 c -0.22,0 -0.410313,0.08023 -0.570313,0.240233 -0.16,0.18 -0.240234,0.379142 -0.240234,0.619142 0,0.24 0.08047,0.431562 0.230469,0.601562 0.15,0.17 0.350078,0.25 0.580078,0.25 h 2.019531 c 0.23,0 0.429609,-0.08 0.599609,-0.25 0.17,-0.17 0.259766,-0.371563 0.259766,-0.601562 0,-0.23 -0.08977,-0.42961 -0.259766,-0.59961 -0.17,-0.17 -0.369609,-0.259765 -0.599609,-0.259765 z m -13.210971,5.519527 c -0.24,0 -0.439844,0.07047 -0.589844,0.230467 l -1.46875,1.429689 c -0.15,0.18 -0.230469,0.381327 -0.230469,0.611328 0,0.229999 0.08023,0.429843 0.240235,0.589844 0.409999,0.32 0.818515,0.32 1.228515,0 l 1.419922,-1.419922 c 0.16,-0.18 0.240234,-0.400627 0.240234,-0.640625 0,-0.229999 -0.08023,-0.420311 -0.240234,-0.570314 -0.16,-0.149998 -0.359609,-0.230467 -0.599609,-0.230467 z m 10.929687,0.0098 c -0.22,3e-6 -0.408594,0.07047 -0.558594,0.230469 -0.15,0.140002 -0.230469,0.330547 -0.230469,0.560547 0,0.260001 0.08047,0.470393 0.230469,0.650393 l 1.419922,1.41992 c 0.4,0.31 0.799219,0.31 1.199219,0 0.16,-0.16 0.240234,-0.359844 0.240234,-0.589844 0,-0.23 -0.08023,-0.441328 -0.240234,-0.611328 l -1.458985,-1.429688 c -0.16,-0.15 -0.361562,-0.230469 -0.601562,-0.230469 z" class="light" style="stroke-width:0.999998" /><path class="cloud" d="m 11.179688,8.0292969 c -1.410001,0 -2.6504693,0.4405468 -3.7304692,1.3105469 -1.0800001,0.8700002 -1.7800782,1.9896092 -2.0800782,3.3496092 -1.12,0.26 -2.0282812,0.830469 -2.7382812,1.730469 -0.71,0.9 -1.0703125,1.920313 -1.0703125,3.070313 0,0.9 0.2201562,1.730234 0.6601562,2.490234 0.44,0.76 1.0388282,1.358828 1.7988281,1.798828 0.76,0.44 1.5807032,0.660156 2.4707032,0.660156 H 17.320312 c 0.890002,0 1.720469,-0.220156 2.480469,-0.660156 0.76,-0.44 1.368594,-1.038828 1.808594,-1.798828 0.44,-0.76 0.669922,-1.590234 0.669922,-2.490234 0,-0.595125 -0.129762,-1.19868 -0.357422,-1.802735 -0.289942,-0.712862 -0.55802,-1.154541 -1.279297,-1.796875 -0.936402,-0.857226 -2.037123,-1.300781 -3.322266,-1.300781 H 17 c -0.180857,-0.788537 -0.529944,-1.518006 -1.039062,-2.191406 -0.02329,-0.03076 -0.04472,-0.06579 -0.06836,-0.0957 -0.0015,-0.0019 -0.0024,-0.004 -0.0039,-0.0059 C 15.773745,10.150873 15.638669,10.013544 15.507812,9.8730469 14.83776,9.1898352 14.059093,8.7538463 13.222656,8.3828126 12.609999,8.1490155 11.930497,8.0292969 11.179688,8.0292969 Z" id="path849" /></g>'
 
-sprinklerWatering = '<g transform="translate(0,0)"><path   d="m 9.785,16.555 c 0,0.92 0.23,1.78 0.7,2.57 0.47,0.79 1.1,1.43 1.9,1.9 0.8,0.47 1.66,0.71 2.59,0.71 0.93,0 1.8,-0.24 2.61,-0.71 0.81,-0.47 1.45,-1.11 1.92,-1.9 0.47,-0.8 0.71,-1.65 0.71,-2.57 0,-0.6 -0.17,-1.31 -0.52,-2.14 -0.35,-0.83 -0.77,-1.6 -1.26,-2.3 -0.44,-0.57 -0.96,-1.2 -1.56,-1.88 -0.6,-0.68 -1.65,-1.73 -1.89,-1.97 l -1.28,1.29 c -0.62,0.6 -1.22,1.29 -1.79,2.08 -0.57,0.79 -1.07,1.64 -1.49,2.55 -0.44,0.91 -0.64,1.7 -0.64,2.37 z"   id="path2"   class="rainDropWatering" /></g>'
+@Field static sprinklerWatering = '<g transform="translate(0,0)"><path   d="m 9.785,16.555 c 0,0.92 0.23,1.78 0.7,2.57 0.47,0.79 1.1,1.43 1.9,1.9 0.8,0.47 1.66,0.71 2.59,0.71 0.93,0 1.8,-0.24 2.61,-0.71 0.81,-0.47 1.45,-1.11 1.92,-1.9 0.47,-0.8 0.71,-1.65 0.71,-2.57 0,-0.6 -0.17,-1.31 -0.52,-2.14 -0.35,-0.83 -0.77,-1.6 -1.26,-2.3 -0.44,-0.57 -0.96,-1.2 -1.56,-1.88 -0.6,-0.68 -1.65,-1.73 -1.89,-1.97 l -1.28,1.29 c -0.62,0.6 -1.22,1.29 -1.79,2.08 -0.57,0.79 -1.07,1.64 -1.49,2.55 -0.44,0.91 -0.64,1.7 -0.64,2.37 z"   id="path2"   class="rainDropWatering" /></g>'
 
 saturationSkip = '<g transform="translate(0,0)"><path   id="path2"   d="M 12.724609 7.4394531 L 12.380859 7.8242188 C 12.1204 8.1258033 11.887267 8.4540556 11.681641 8.8378906 C 11.634545 8.9226625 11.611082 8.9934112 11.574219 9.0722656 L 13.427734 10.925781 C 13.529105 10.869077 13.624622 10.803113 13.710938 10.716797 C 13.957688 10.456338 14.095703 10.139657 14.095703 9.7695312 C 14.095703 9.1800712 13.643071 8.3990405 12.724609 7.4394531 z M 18.400391 10.099609 L 17.892578 10.689453 C 17.508744 11.114413 17.166855 11.594207 16.851562 12.15625 C 16.536269 12.718294 16.371094 13.17089 16.371094 13.541016 C 16.371094 13.664728 16.383601 13.783612 16.402344 13.900391 L 18.068359 15.566406 C 18.176056 15.58282 18.284983 15.595703 18.400391 15.595703 C 18.962434 15.595703 19.455973 15.389731 19.853516 14.992188 C 20.25106 14.580936 20.455078 14.10306 20.455078 13.541016 C 20.455078 13.184598 20.278256 12.732002 19.935547 12.15625 C 19.592837 11.580499 19.248886 11.100595 18.933594 10.730469 C 18.851344 10.634509 18.742516 10.496495 18.619141 10.345703 C 18.495765 10.194911 18.414099 10.113318 18.400391 10.099609 z M 12.875 13.964844 L 12.533203 14.294922 C 11.998576 14.802132 11.394367 15.499616 10.722656 16.376953 C 10.366238 16.843038 10.092381 17.336504 9.8730469 17.857422 C 9.6537129 18.378341 9.5449219 18.830973 9.5449219 19.228516 C 9.5449219 20.174395 9.8596122 20.955314 10.503906 21.599609 C 11.1482 22.243903 11.94283 22.560547 12.875 22.560547 C 13.80717 22.560547 14.588127 22.230231 15.232422 21.585938 C 15.876716 20.941644 16.179688 20.146978 16.179688 19.228516 C 16.179688 18.830973 16.068943 18.378377 15.849609 17.84375 C 15.630275 17.322831 15.356345 16.829293 15.027344 16.390625 C 14.396758 15.554414 13.808174 14.856966 13.232422 14.294922 C 13.177592 14.253802 13.053209 14.143053 12.875 13.964844 z "   class="saturatedSoil" /><path   d="m 6.5126951,5.6977076 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457545 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977076 Z"   id="path869"   class="skipStrikethrough" /></g>'
 
-rainSkip = '<g transform="translate(0,0)"><path   id="path844"   d="M 19.164062 14.560547 C 19.004062 14.560547 18.855078 14.610937 18.705078 14.710938 C 18.565078 14.810937 18.464297 14.960391 18.404297 15.150391 L 18.238281 15.736328 L 19.582031 17.080078 L 19.994141 15.630859 C 19.994141 15.610859 20.005625 15.569769 20.015625 15.509766 C 20.025625 15.449766 20.035156 15.399141 20.035156 15.369141 C 20.035156 15.209141 19.984766 15.050391 19.884766 14.900391 C 19.784766 14.750391 19.635781 14.649844 19.425781 14.589844 C 19.335781 14.569844 19.244062 14.560547 19.164062 14.560547 z M 12.435547 14.570312 C 12.285547 14.570312 12.124609 14.620702 11.974609 14.720703 C 11.824609 14.820703 11.714297 14.970156 11.654297 15.160156 L 10.025391 20.929688 C 9.9953906 21.019687 9.984375 21.090858 9.984375 21.130859 C 9.984375 21.300858 10.034531 21.460858 10.144531 21.630859 C 10.254531 21.790859 10.414766 21.900937 10.634766 21.960938 C 10.644766 21.960938 10.674375 21.970234 10.734375 21.990234 C 10.774375 22.000234 10.805705 22.009766 10.845703 22.009766 C 11.265703 22.009766 11.544063 21.799141 11.664062 21.369141 L 13.294922 15.640625 C 13.364922 15.390625 13.334844 15.170703 13.214844 14.970703 C 13.094844 14.770703 12.915781 14.639609 12.675781 14.599609 C 12.585781 14.579609 12.505547 14.570312 12.435547 14.570312 z M 15.113281 15.005859 C 15.087705 15.058499 15.057851 15.108509 15.044922 15.169922 L 12.605469 23.939453 C 12.535469 24.199453 12.554062 24.409844 12.664062 24.589844 C 12.814063 24.799844 12.985547 24.930469 13.185547 24.980469 C 13.255547 25.010469 13.345547 25.029297 13.435547 25.029297 C 13.625547 25.029297 13.785313 24.969606 13.945312 24.849609 C 14.105313 24.729608 14.194375 24.589923 14.234375 24.419922 L 16.464844 16.359375 L 15.113281 15.005859 z M 17.710938 17.605469 L 16.775391 20.919922 C 16.745391 21.039923 16.734375 21.110391 16.734375 21.150391 C 16.734375 21.310391 16.785005 21.469141 16.875 21.619141 C 16.985 21.779141 17.135937 21.879454 17.335938 21.939453 L 17.574219 21.990234 C 17.764219 21.990234 17.935938 21.930314 18.085938 21.820312 C 18.235937 21.710311 18.325234 21.549376 18.365234 21.359375 L 19.052734 18.945312 L 17.710938 17.605469 z "   class="rainDropsPredicted" /><path   id="path2"   d="M 14.304688 4.9707031 C 12.894687 4.9707031 11.644687 5.40125 10.554688 6.28125 C 10.219393 6.5519464 9.9327202 6.8518529 9.6699219 7.1679688 L 10.871094 8.3691406 C 11.035344 8.1516787 11.220942 7.9434094 11.435547 7.75 C 12.235547 7.02 13.195156 6.6601562 14.285156 6.6601562 C 15.375156 6.6601562 16.314766 7.02 17.134766 7.75 C 17.944766 8.47 18.415391 9.380937 18.525391 10.460938 L 18.605469 11.041016 C 18.605469 11.151016 18.665156 11.210938 18.785156 11.210938 L 20.394531 11.210938 C 21.284531 11.210938 22.055078 11.529922 22.705078 12.169922 C 23.355078 12.809922 23.685547 13.559688 23.685547 14.429688 C 23.685547 15.299687 23.385156 16.049453 22.785156 16.689453 C 22.185156 17.329453 21.455469 17.670938 20.605469 17.710938 C 20.475469 17.710938 20.404297 17.770624 20.404297 17.890625 L 20.404297 17.902344 L 21.728516 19.226562 C 22.174662 19.107834 22.602464 18.928356 23.005859 18.679688 C 23.735859 18.229688 24.314375 17.630859 24.734375 16.880859 C 25.154375 16.130859 25.365234 15.319453 25.365234 14.439453 C 25.365234 13.549453 25.135313 12.720703 24.695312 11.970703 C 24.255312 11.220703 23.644766 10.619453 22.884766 10.189453 C 22.124766 9.7594526 21.294297 9.5410156 20.404297 9.5410156 L 20.085938 9.5410156 C 19.765937 8.2010156 19.064375 7.1 17.984375 6.25 C 16.904375 5.4 15.684687 4.9707031 14.304688 4.9707031 z M 8.7578125 8.6523438 C 8.6279809 8.9665128 8.5239683 9.2955544 8.4453125 9.640625 C 7.3453125 9.900625 6.4348437 10.471094 5.7148438 11.371094 C 4.9948438 12.271094 4.6347656 13.289453 4.6347656 14.439453 C 4.6347656 15.769452 5.0758594 16.911094 6.0058594 17.871094 C 6.9358594 18.831094 8.0642969 19.340391 9.4042969 19.400391 C 9.5142969 19.400391 9.5742188 19.340469 9.5742188 19.230469 L 9.5742188 17.900391 C 9.5742188 17.780391 9.5142969 17.720703 9.4042969 17.720703 C 8.5542969 17.680703 7.8246094 17.341172 7.2246094 16.701172 C 6.6246094 16.061172 6.3242188 15.309452 6.3242188 14.439453 C 6.3242188 13.609453 6.6057812 12.89125 7.1757812 12.28125 C 7.7457813 11.67125 8.4453906 11.310937 9.2753906 11.210938 L 9.8046875 11.179688 C 9.9346875 11.179688 10.005859 11.110234 10.005859 10.990234 L 10.074219 10.460938 C 10.087664 10.315728 10.124267 10.181695 10.150391 10.042969 L 8.7578125 8.6523438 z "   class="windSkip" /><path   d="m 6.512695,5.6977076 a 0.84712499,0.84712499 0 0 0 -0.568359,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.143554,5.9457545 A 0.84712499,0.84712499 0 0 0 6.512695,5.6977076 Z"   id="path869"   class="skipStrikethrough" /></g>'
+rainSkip = '<g transform="translate(0,0)"><path   id="path844"   d="M 19.164062 14.560547 C 19.004062 14.560547 18.855078 14.610937 18.705078 14.710938 C 18.565078 14.810937 18.464297 14.960391 18.404297 15.150391 L 18.238281 15.736328 L 19.582031 17.080078 L 19.994141 15.630859 C 19.994141 15.610859 20.005625 15.569769 20.015625 15.509766 C 20.025625 15.449766 20.035156 15.399141 20.035156 15.369141 C 20.035156 15.209141 19.984766 15.050391 19.884766 14.900391 C 19.784766 14.750391 19.635781 14.649844 19.425781 14.589844 C 19.335781 14.569844 19.244062 14.560547 19.164062 14.560547 z M 12.435547 14.570312 C 12.285547 14.570312 12.124609 14.620702 11.974609 14.720703 C 11.824609 14.820703 11.714297 14.970156 11.654297 15.160156 L 10.025391 20.929688 C 9.9953906 21.019687 9.984375 21.090858 9.984375 21.130859 C 9.984375 21.300858 10.034531 21.460858 10.144531 21.630859 C 10.254531 21.790859 10.414766 21.900937 10.634766 21.960938 C 10.644766 21.960938 10.674375 21.970234 10.734375 21.990234 C 10.774375 22.000234 10.805705 22.009766 10.845703 22.009766 C 11.265703 22.009766 11.544063 21.799141 11.664062 21.369141 L 13.294922 15.640625 C 13.364922 15.390625 13.334844 15.170703 13.214844 14.970703 C 13.094844 14.770703 12.915781 14.639609 12.675781 14.599609 C 12.585781 14.579609 12.505547 14.570312 12.435547 14.570312 z M 15.113281 15.005859 C 15.087705 15.058499 15.057851 15.108509 15.044922 15.169922 L 12.605469 23.939453 C 12.535469 24.199453 12.554062 24.409844 12.664062 24.589844 C 12.814063 24.799844 12.985547 24.930469 13.185547 24.980469 C 13.255547 25.010469 13.345547 25.029297 13.435547 25.029297 C 13.625547 25.029297 13.785313 24.969606 13.945312 24.849609 C 14.105313 24.729608 14.194375 24.589923 14.234375 24.419922 L 16.464844 16.359375 L 15.113281 15.005859 z M 17.710938 17.605469 L 16.775391 20.919922 C 16.745391 21.039923 16.734375 21.110391 16.734375 21.150391 C 16.734375 21.310391 16.785005 21.469141 16.875 21.619141 C 16.985 21.779141 17.135937 21.879454 17.335938 21.939453 L 17.574219 21.990234 C 17.764219 21.990234 17.935938 21.930314 18.085938 21.820312 C 18.235937 21.710311 18.325234 21.549376 18.365234 21.359375 L 19.052734 18.945312 L 17.710938 17.605469 z "   class="rainDropsPredicted" /><path   id="path2"   d="M 14.304688 4.9707031 C 12.894687 4.9707031 11.644687 5.40125 10.554688 6.28125 C 10.219393 6.5519464 9.9327202 6.8518529 9.6699219 7.1679688 L 10.871094 8.3691406 C 11.035344 8.1516787 11.220942 7.9434094 11.435547 7.75 C 12.235547 7.02 13.195156 6.6601562 14.285156 6.6601562 C 15.375156 6.6601562 16.314766 7.02 17.134766 7.75 C 17.944766 8.47 18.415391 9.380937 18.525391 10.460938 L 18.605469 11.041016 C 18.605469 11.151016 18.665156 11.210938 18.785156 11.210938 L 20.394531 11.210938 C 21.284531 11.210938 22.055078 11.529922 22.705078 12.169922 C 23.355078 12.809922 23.685547 13.559688 23.685547 14.429688 C 23.685547 15.299687 23.385156 16.049453 22.785156 16.689453 C 22.185156 17.329453 21.455469 17.670938 20.605469 17.710938 C 20.475469 17.710938 20.404297 17.770624 20.404297 17.890625 L 20.404297 17.902344 L 21.728516 19.226562 C 22.174662 19.107834 22.602464 18.928356 23.005859 18.679688 C 23.735859 18.229688 24.314375 17.630859 24.734375 16.880859 C 25.154375 16.130859 25.365234 15.319453 25.365234 14.439453 C 25.365234 13.549453 25.135313 12.720703 24.695312 11.970703 C 24.255312 11.220703 23.644766 10.619453 22.884766 10.189453 C 22.124766 9.7594526 21.294297 9.5410156 20.404297 9.5410156 L 20.085938 9.5410156 C 19.765937 8.2010156 19.064375 7.1 17.984375 6.25 C 16.904375 5.4 15.684687 4.9707031 14.304688 4.9707031 z M 8.7578125 8.6523438 C 8.6279809 8.9665128 8.5239683 9.2955544 8.4453125 9.640625 C 7.3453125 9.900625 6.4348437 10.471094 5.7148438 11.371094 C 4.9948438 12.271094 4.6347656 13.289453 4.6347656 14.439453 C 4.6347656 15.769452 5.0758594 16.911094 6.0058594 17.871094 C 6.9358594 18.831094 8.0642969 19.340391 9.4042969 19.400391 C 9.5142969 19.400391 9.5742188 19.340469 9.5742188 19.230469 L 9.5742188 17.900391 C 9.5742188 17.780391 9.5142969 17.720703 9.4042969 17.720703 C 8.5542969 17.680703 7.8246094 17.341172 7.2246094 16.701172 C 6.6246094 16.061172 6.3242188 15.309452 6.3242188 14.439453 C 6.3242188 13.609453 6.6057812 12.89125 7.1757812 12.28125 C 7.7457813 11.67125 8.4453906 11.310937 9.2753906 11.210938 L 9.8046875 11.179688 C 9.9346875 11.179688 10.005859 11.110234 10.005859 10.990234 L 10.074219 10.460938 C 10.087664 10.315728 10.124267 10.181695 10.150391 10.042969 L 8.7578125 8.6523438 z "   class="cloudPredicted" /><path   d="m 6.512695,5.6977076 a 0.84712499,0.84712499 0 0 0 -0.568359,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.143554,5.9457545 A 0.84712499,0.84712499 0 0 0 6.512695,5.6977076 Z"   id="path869"   class="skipStrikethrough" /></g>'
 
 windSkip = '<g transform="translate(0,0)"><path   id="path2"   d="M 18.689453 8.625 C 17.949453 8.625 17.290469 8.9050781 16.730469 9.4550781 C 16.540469 9.6250781 16.449219 9.8359379 16.449219 10.085938 C 16.449219 10.315934 16.540703 10.525315 16.720703 10.695312 C 16.900703 10.865311 17.109375 10.955078 17.359375 10.955078 C 17.599375 10.955078 17.800937 10.875312 17.960938 10.695312 C 18.150938 10.505316 18.399453 10.404297 18.689453 10.404297 C 18.989453 10.404297 19.229688 10.505314 19.429688 10.695312 C 19.629687 10.885311 19.730469 11.124063 19.730469 11.414062 C 19.730469 11.704063 19.629687 11.954297 19.429688 12.154297 C 19.229688 12.354297 18.989219 12.455078 18.699219 12.455078 L 14.957031 12.455078 L 16.746094 14.244141 L 18.689453 14.244141 C 19.459453 14.244141 20.129453 13.964297 20.689453 13.404297 C 21.249453 12.844297 21.529297 12.184297 21.529297 11.404297 C 21.529297 10.624299 21.259219 9.9755469 20.699219 9.4355469 C 20.139219 8.8955469 19.469453 8.625 18.689453 8.625 z M 4.0097656 12.455078 C 3.7497656 12.455078 3.5408594 12.544375 3.3808594 12.734375 C 3.1908594 12.904375 3.0996094 13.115469 3.0996094 13.355469 C 3.0996094 13.605469 3.1891406 13.814375 3.3691406 13.984375 C 3.5491406 14.154375 3.7597656 14.244141 4.0097656 14.244141 L 14.349609 14.244141 L 12.560547 12.455078 L 4.0097656 12.455078 z M 4.0097656 15.765625 C 3.7597656 15.765625 3.5508594 15.845391 3.3808594 16.025391 C 3.1908594 16.205391 3.0996094 16.404766 3.0996094 16.634766 C 3.0996094 16.884766 3.1891406 17.095156 3.3691406 17.285156 C 3.5491406 17.455156 3.7597656 17.544922 4.0097656 17.544922 L 17.652344 17.544922 L 15.873047 15.765625 L 4.0097656 15.765625 z M 18.267578 15.765625 L 20.046875 17.544922 L 24.050781 17.544922 C 24.340781 17.544922 24.579297 17.645937 24.779297 17.835938 C 24.979297 18.025937 25.080078 18.264688 25.080078 18.554688 C 25.080078 18.844687 24.979297 19.085156 24.779297 19.285156 C 24.579297 19.485156 24.340781 19.585938 24.050781 19.585938 C 23.770781 19.585937 23.539609 19.485391 23.349609 19.275391 C 23.169609 19.115391 22.960703 19.035156 22.720703 19.035156 C 22.470703 19.035156 22.259844 19.115391 22.089844 19.275391 C 22.033446 19.328471 21.999361 19.394898 21.960938 19.458984 L 23.859375 21.357422 C 23.923798 21.361407 23.984585 21.375 24.050781 21.375 C 24.830781 21.375 25.500547 21.094922 26.060547 20.544922 C 26.620547 19.994922 26.900391 19.324687 26.900391 18.554688 C 26.900391 17.784688 26.620547 17.125937 26.060547 16.585938 C 25.500547 16.035938 24.830781 15.765625 24.050781 15.765625 L 18.267578 15.765625 z "   class="windSkip" /><path   d="m 6.5126951,5.6977076 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457545 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977076 Z"   id="path869"   class="skipStrikethrough" /></g>'
 
-freezeSkip = '<g transform="translate(0,0)"><path  id="path2"   d="M 15.019531 5.5859375 C 14.76998 5.5859375 14.569217 5.6737289 14.394531 5.8359375 C 14.219842 5.9981461 14.132812 6.2101915 14.132812 6.4472656 C 14.132812 6.6718621 14.219844 6.8709945 14.394531 7.0332031 C 14.569217 7.1954116 14.782457 7.2832031 15.019531 7.2832031 C 15.256606 7.2832031 15.45498 7.1954117 15.617188 7.0332031 C 15.7794 6.8709945 15.867188 6.6718621 15.867188 6.4472656 C 15.867188 6.2101915 15.779397 5.9981461 15.617188 5.8359375 C 15.45498 5.6737288 15.256606 5.5859375 15.019531 5.5859375 z M 15.042969 8.03125 C 14.793417 8.03125 14.594609 8.1182826 14.419922 8.2929688 C 14.245233 8.467655 14.158203 8.6808947 14.158203 8.9179688 L 14.158203 11.65625 L 18.34375 15.841797 L 21.144531 15.841797 C 21.369128 15.841797 21.570214 15.754006 21.732422 15.591797 C 21.894634 15.429589 21.980469 15.230456 21.980469 15.005859 C 21.980469 14.756308 21.894632 14.557498 21.732422 14.382812 C 21.570214 14.208122 21.369128 14.121094 21.144531 14.121094 L 17.115234 14.121094 L 19.958984 11.275391 C 20.108711 11.12566 20.183594 10.926527 20.183594 10.689453 C 20.183594 10.452379 20.108715 10.252811 19.958984 10.078125 C 19.784298 9.9034388 19.572252 9.8164062 19.347656 9.8164062 C 19.123059 9.8164062 18.924686 9.9034392 18.75 10.078125 L 15.892578 12.947266 L 15.892578 8.9179688 C 15.892578 8.6684171 15.804786 8.467655 15.642578 8.2929688 C 15.480369 8.1182825 15.280042 8.03125 15.042969 8.03125 z M 21.058594 8.0820312 C 20.821521 8.0820313 20.620434 8.1690637 20.470703 8.34375 C 20.296014 8.5059586 20.208984 8.7168097 20.208984 8.9414062 C 20.208984 9.1660028 20.296017 9.378048 20.470703 9.5527344 C 20.620434 9.7274197 20.821521 9.8164062 21.058594 9.8164062 C 21.295669 9.8164062 21.495236 9.7274206 21.669922 9.5527344 C 21.844611 9.3780481 21.931641 9.1660028 21.931641 8.9414062 C 21.931641 8.7168097 21.844607 8.5184362 21.669922 8.34375 C 21.495236 8.1690637 21.295669 8.0820312 21.058594 8.0820312 z M 8.4042969 8.2988281 C 8.38568 8.3166822 8.3610531 8.3235631 8.34375 8.34375 C 8.1690637 8.5059586 8.0820312 8.7168097 8.0820312 8.9414062 C 8.0820309 9.1660028 8.1690637 9.378048 8.34375 9.5527344 C 8.4934808 9.7274197 8.6926135 9.8164062 8.9296875 9.8164062 C 9.1667617 9.8164063 9.3663288 9.7274207 9.5410156 9.5527344 C 9.562202 9.531548 9.5692738 9.504665 9.5878906 9.4824219 L 8.4042969 8.2988281 z M 10.158203 10.052734 C 10.140929 10.06792 10.120317 10.073043 10.103516 10.089844 C 9.928825 10.26453 9.8398438 10.464097 9.8398438 10.701172 C 9.8398438 10.938246 9.9288285 11.137377 10.103516 11.287109 L 12.947266 14.132812 L 8.9179688 14.132812 C 8.6808946 14.132813 8.480568 14.219844 8.3183594 14.394531 C 8.1561517 14.569217 8.0683594 14.782457 8.0683594 15.019531 C 8.0683594 15.244128 8.1441085 15.442825 8.34375 15.580078 C 8.5059585 15.74229 8.7043323 15.830078 8.9414062 15.830078 L 12.984375 15.830078 L 10.115234 18.6875 C 9.9405437 18.849708 9.8535156 19.036362 9.8535156 19.273438 C 9.8535156 19.510511 9.9405471 19.71008 10.115234 19.884766 C 10.28992 20.059456 10.489489 20.146484 10.726562 20.146484 C 10.963637 20.146484 11.163204 20.059453 11.337891 19.884766 L 14.169922 17.052734 L 14.169922 21.070312 C 14.169922 21.307387 14.256955 21.519432 14.431641 21.681641 C 14.606328 21.843853 14.819566 21.931641 15.056641 21.931641 C 15.293714 21.931641 15.492089 21.843849 15.654297 21.681641 C 15.816509 21.519432 15.904297 21.307388 15.904297 21.070312 L 15.904297 17.027344 L 18.761719 19.896484 C 18.923928 20.071173 19.136731 20.160156 19.361328 20.160156 C 19.585924 20.160156 19.79797 20.071171 19.972656 19.896484 C 19.977861 19.890411 19.979351 19.883087 19.984375 19.876953 L 10.158203 10.052734 z M 6.4472656 14.132812 C 6.2101915 14.132813 6.0098648 14.219844 5.8476562 14.394531 C 5.6854476 14.569217 5.5976562 14.782457 5.5976562 15.019531 C 5.5976562 15.244128 5.6722112 15.442502 5.859375 15.617188 C 6.0215836 15.779399 6.2343878 15.867188 6.4589844 15.867188 C 6.6835809 15.867187 6.8963852 15.779397 7.0585938 15.617188 C 7.2208016 15.45498 7.3066406 15.256606 7.3066406 15.019531 C 7.3066406 14.76998 7.2208023 14.569217 7.0585938 14.394531 C 6.8963852 14.219842 6.6843397 14.132812 6.4472656 14.132812 z M 23.566406 14.132812 C 23.329332 14.132812 23.117287 14.219844 22.955078 14.394531 C 22.792866 14.569217 22.705078 14.782457 22.705078 15.019531 C 22.705078 15.244128 22.79287 15.443261 22.955078 15.605469 C 23.117287 15.76768 23.329332 15.855469 23.566406 15.855469 C 23.791002 15.855469 23.990135 15.767678 24.152344 15.605469 C 24.314556 15.443261 24.402344 15.244128 24.402344 15.019531 C 24.402344 14.76998 24.314552 14.569217 24.152344 14.394531 C 23.990135 14.219842 23.791002 14.132812 23.566406 14.132812 z M 8.9296875 20.197266 C 8.6926134 20.197266 8.4934811 20.284297 8.34375 20.458984 C 8.1690637 20.621192 8.0820312 20.833998 8.0820312 21.058594 C 8.0820309 21.295669 8.1690635 21.494042 8.34375 21.65625 C 8.4934811 21.830939 8.6926134 21.917969 8.9296875 21.917969 C 9.1667616 21.917969 9.3663293 21.830937 9.5410156 21.65625 C 9.7157018 21.494042 9.8027344 21.283191 9.8027344 21.058594 C 9.8027344 20.833998 9.7157018 20.63367 9.5410156 20.458984 C 9.3663293 20.284295 9.1667616 20.197266 8.9296875 20.197266 z M 20.525391 20.417969 C 20.508704 20.434287 20.486319 20.440766 20.470703 20.458984 C 20.296014 20.621192 20.208984 20.833998 20.208984 21.058594 C 20.208984 21.295669 20.296017 21.494042 20.470703 21.65625 C 20.620434 21.830939 20.821521 21.917969 21.058594 21.917969 C 21.295669 21.917969 21.495236 21.830937 21.669922 21.65625 C 21.687308 21.640106 21.693328 21.618659 21.708984 21.601562 L 20.525391 20.417969 z M 15.019531 22.716797 C 14.76998 22.716797 14.569217 22.804589 14.394531 22.966797 C 14.219842 23.129007 14.132812 23.328138 14.132812 23.552734 C 14.132812 23.802286 14.219844 24.001853 14.394531 24.164062 C 14.569217 24.326274 14.782457 24.414062 15.019531 24.414062 C 15.256606 24.414063 15.45498 24.32627 15.617188 24.164062 C 15.7794 24.001854 15.867188 23.789808 15.867188 23.552734 C 15.867188 23.328138 15.779397 23.129007 15.617188 22.966797 C 15.45498 22.804586 15.256606 22.716797 15.019531 22.716797 z "   class="freezeSkip0" /><path   d="m 6.5126951,5.6977075 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457544 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977075 Z"   id="path869"   class="skipStrikethrough" /></g>'
+freezeSkip = '<g transform="translate(0,0)"><path  id="path2"   d="M 15.019531 5.5859375 C 14.76998 5.5859375 14.569217 5.6737289 14.394531 5.8359375 C 14.219842 5.9981461 14.132812 6.2101915 14.132812 6.4472656 C 14.132812 6.6718621 14.219844 6.8709945 14.394531 7.0332031 C 14.569217 7.1954116 14.782457 7.2832031 15.019531 7.2832031 C 15.256606 7.2832031 15.45498 7.1954117 15.617188 7.0332031 C 15.7794 6.8709945 15.867188 6.6718621 15.867188 6.4472656 C 15.867188 6.2101915 15.779397 5.9981461 15.617188 5.8359375 C 15.45498 5.6737288 15.256606 5.5859375 15.019531 5.5859375 z M 15.042969 8.03125 C 14.793417 8.03125 14.594609 8.1182826 14.419922 8.2929688 C 14.245233 8.467655 14.158203 8.6808947 14.158203 8.9179688 L 14.158203 11.65625 L 18.34375 15.841797 L 21.144531 15.841797 C 21.369128 15.841797 21.570214 15.754006 21.732422 15.591797 C 21.894634 15.429589 21.980469 15.230456 21.980469 15.005859 C 21.980469 14.756308 21.894632 14.557498 21.732422 14.382812 C 21.570214 14.208122 21.369128 14.121094 21.144531 14.121094 L 17.115234 14.121094 L 19.958984 11.275391 C 20.108711 11.12566 20.183594 10.926527 20.183594 10.689453 C 20.183594 10.452379 20.108715 10.252811 19.958984 10.078125 C 19.784298 9.9034388 19.572252 9.8164062 19.347656 9.8164062 C 19.123059 9.8164062 18.924686 9.9034392 18.75 10.078125 L 15.892578 12.947266 L 15.892578 8.9179688 C 15.892578 8.6684171 15.804786 8.467655 15.642578 8.2929688 C 15.480369 8.1182825 15.280042 8.03125 15.042969 8.03125 z M 21.058594 8.0820312 C 20.821521 8.0820313 20.620434 8.1690637 20.470703 8.34375 C 20.296014 8.5059586 20.208984 8.7168097 20.208984 8.9414062 C 20.208984 9.1660028 20.296017 9.378048 20.470703 9.5527344 C 20.620434 9.7274197 20.821521 9.8164062 21.058594 9.8164062 C 21.295669 9.8164062 21.495236 9.7274206 21.669922 9.5527344 C 21.844611 9.3780481 21.931641 9.1660028 21.931641 8.9414062 C 21.931641 8.7168097 21.844607 8.5184362 21.669922 8.34375 C 21.495236 8.1690637 21.295669 8.0820312 21.058594 8.0820312 z M 8.4042969 8.2988281 C 8.38568 8.3166822 8.3610531 8.3235631 8.34375 8.34375 C 8.1690637 8.5059586 8.0820312 8.7168097 8.0820312 8.9414062 C 8.0820309 9.1660028 8.1690637 9.378048 8.34375 9.5527344 C 8.4934808 9.7274197 8.6926135 9.8164062 8.9296875 9.8164062 C 9.1667617 9.8164063 9.3663288 9.7274207 9.5410156 9.5527344 C 9.562202 9.531548 9.5692738 9.504665 9.5878906 9.4824219 L 8.4042969 8.2988281 z M 10.158203 10.052734 C 10.140929 10.06792 10.120317 10.073043 10.103516 10.089844 C 9.928825 10.26453 9.8398438 10.464097 9.8398438 10.701172 C 9.8398438 10.938246 9.9288285 11.137377 10.103516 11.287109 L 12.947266 14.132812 L 8.9179688 14.132812 C 8.6808946 14.132813 8.480568 14.219844 8.3183594 14.394531 C 8.1561517 14.569217 8.0683594 14.782457 8.0683594 15.019531 C 8.0683594 15.244128 8.1441085 15.442825 8.34375 15.580078 C 8.5059585 15.74229 8.7043323 15.830078 8.9414062 15.830078 L 12.984375 15.830078 L 10.115234 18.6875 C 9.9405437 18.849708 9.8535156 19.036362 9.8535156 19.273438 C 9.8535156 19.510511 9.9405471 19.71008 10.115234 19.884766 C 10.28992 20.059456 10.489489 20.146484 10.726562 20.146484 C 10.963637 20.146484 11.163204 20.059453 11.337891 19.884766 L 14.169922 17.052734 L 14.169922 21.070312 C 14.169922 21.307387 14.256955 21.519432 14.431641 21.681641 C 14.606328 21.843853 14.819566 21.931641 15.056641 21.931641 C 15.293714 21.931641 15.492089 21.843849 15.654297 21.681641 C 15.816509 21.519432 15.904297 21.307388 15.904297 21.070312 L 15.904297 17.027344 L 18.761719 19.896484 C 18.923928 20.071173 19.136731 20.160156 19.361328 20.160156 C 19.585924 20.160156 19.79797 20.071171 19.972656 19.896484 C 19.977861 19.890411 19.979351 19.883087 19.984375 19.876953 L 10.158203 10.052734 z M 6.4472656 14.132812 C 6.2101915 14.132813 6.0098648 14.219844 5.8476562 14.394531 C 5.6854476 14.569217 5.5976562 14.782457 5.5976562 15.019531 C 5.5976562 15.244128 5.6722112 15.442502 5.859375 15.617188 C 6.0215836 15.779399 6.2343878 15.867188 6.4589844 15.867188 C 6.6835809 15.867187 6.8963852 15.779397 7.0585938 15.617188 C 7.2208016 15.45498 7.3066406 15.256606 7.3066406 15.019531 C 7.3066406 14.76998 7.2208023 14.569217 7.0585938 14.394531 C 6.8963852 14.219842 6.6843397 14.132812 6.4472656 14.132812 z M 23.566406 14.132812 C 23.329332 14.132812 23.117287 14.219844 22.955078 14.394531 C 22.792866 14.569217 22.705078 14.782457 22.705078 15.019531 C 22.705078 15.244128 22.79287 15.443261 22.955078 15.605469 C 23.117287 15.76768 23.329332 15.855469 23.566406 15.855469 C 23.791002 15.855469 23.990135 15.767678 24.152344 15.605469 C 24.314556 15.443261 24.402344 15.244128 24.402344 15.019531 C 24.402344 14.76998 24.314552 14.569217 24.152344 14.394531 C 23.990135 14.219842 23.791002 14.132812 23.566406 14.132812 z M 8.9296875 20.197266 C 8.6926134 20.197266 8.4934811 20.284297 8.34375 20.458984 C 8.1690637 20.621192 8.0820312 20.833998 8.0820312 21.058594 C 8.0820309 21.295669 8.1690635 21.494042 8.34375 21.65625 C 8.4934811 21.830939 8.6926134 21.917969 8.9296875 21.917969 C 9.1667616 21.917969 9.3663293 21.830937 9.5410156 21.65625 C 9.7157018 21.494042 9.8027344 21.283191 9.8027344 21.058594 C 9.8027344 20.833998 9.7157018 20.63367 9.5410156 20.458984 C 9.3663293 20.284295 9.1667616 20.197266 8.9296875 20.197266 z M 20.525391 20.417969 C 20.508704 20.434287 20.486319 20.440766 20.470703 20.458984 C 20.296014 20.621192 20.208984 20.833998 20.208984 21.058594 C 20.208984 21.295669 20.296017 21.494042 20.470703 21.65625 C 20.620434 21.830939 20.821521 21.917969 21.058594 21.917969 C 21.295669 21.917969 21.495236 21.830937 21.669922 21.65625 C 21.687308 21.640106 21.693328 21.618659 21.708984 21.601562 L 20.525391 20.417969 z M 15.019531 22.716797 C 14.76998 22.716797 14.569217 22.804589 14.394531 22.966797 C 14.219842 23.129007 14.132812 23.328138 14.132812 23.552734 C 14.132812 23.802286 14.219844 24.001853 14.394531 24.164062 C 14.569217 24.326274 14.782457 24.414062 15.019531 24.414062 C 15.256606 24.414063 15.45498 24.32627 15.617188 24.164062 C 15.7794 24.001854 15.867188 23.789808 15.867188 23.552734 C 15.867188 23.328138 15.779397 23.129007 15.617188 22.966797 C 15.45498 22.804586 15.256606 22.716797 15.019531 22.716797 z "   class="freezeSkip" /><path   d="m 6.5126951,5.6977075 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457544 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977075 Z"   id="path869"   class="skipStrikethrough" /></g>'
 
 rainSensorSkip = '<g transform="translate(0,0)"><path   id="path2"   d="M 15 5.8496094 C 14.104678 5.8496094 13.912952 5.8611994 13.214844 5.9609375 C 11.946516 6.1421453 10.725634 6.5243764 9.5820312 7.0800781 L 11.283203 8.78125 C 12.062918 8.4811261 12.869781 8.2735315 13.703125 8.1699219 C 14.323876 8.0927729 15.290006 8.0694714 15.828125 8.1191406 C 17.269474 8.2522593 18.474363 8.5924445 19.691406 9.2089844 C 20.67514 9.7073399 21.471361 10.280372 22.279297 11.070312 C 22.469315 11.256108 22.60516 11.373334 22.65625 11.396484 C 22.761803 11.444474 22.936155 11.445087 23.042969 11.398438 C 23.154446 11.349697 24.055608 10.441836 24.085938 10.347656 C 24.098157 10.308406 24.105063 10.194361 24.101562 10.0625 C 24.096662 9.8836218 24.087821 9.8274816 24.056641 9.7675781 C 24.000024 9.6587637 23.418072 9.099267 22.984375 8.7363281 C 21.200546 7.2435141 19.064479 6.2865884 16.785156 5.9609375 C 16.087048 5.8612306 15.895328 5.8496094 15 5.8496094 z M 8.0625 7.9570312 C 7.7032104 8.1993889 7.351355 8.4553703 7.015625 8.7363281 C 6.5819283 9.099267 5.9999694 9.6587639 5.9433594 9.7675781 C 5.9121824 9.8274801 5.9029875 9.8836216 5.8984375 10.0625 C 5.8947975 10.194361 5.9014275 10.308406 5.9140625 10.347656 C 5.9425035 10.435976 6.8443948 11.34985 6.9511719 11.398438 C 7.0534716 11.444748 7.2400401 11.443584 7.34375 11.396484 C 7.394783 11.373324 7.5306853 11.256104 7.7207031 11.070312 C 8.3457208 10.459194 8.9666967 9.9798152 9.6699219 9.5625 L 8.0625 7.9570312 z M 15.279297 9.6191406 C 14.34242 9.5894845 13.400447 9.7173385 12.492188 9.9902344 L 14.431641 11.929688 C 14.619319 11.915045 14.79634 11.886719 15 11.886719 C 15.779637 11.886719 16.411825 11.988891 17.128906 12.232422 C 18.114934 12.56729 19.071509 13.173523 19.730469 13.880859 C 19.855737 14.015324 19.939921 14.090035 19.988281 14.109375 C 20.078431 14.145475 20.256194 14.146208 20.339844 14.111328 C 20.429624 14.073808 21.394032 13.105894 21.419922 13.027344 C 21.430722 12.993784 21.437094 12.872068 21.433594 12.748047 C 21.428694 12.569016 21.419902 12.515248 21.388672 12.455078 C 21.314452 12.312306 20.637725 11.684105 20.195312 11.347656 C 19.635649 10.922032 18.880399 10.497598 18.191406 10.222656 C 17.263131 9.8522298 16.2755 9.6506744 15.279297 9.6191406 z M 10.810547 10.705078 C 10.449852 10.904217 10.10299 11.120798 9.8046875 11.347656 C 9.3622803 11.684105 8.6855451 12.312305 8.6113281 12.455078 C 8.5800941 12.515248 8.5709462 12.569016 8.5664062 12.748047 C 8.5629962 12.871773 8.5690461 12.993944 8.5800781 13.027344 C 8.6040591 13.100014 9.5501104 14.054646 9.6464844 14.103516 C 9.7282854 14.144736 9.9145656 14.148195 10.011719 14.109375 C 10.060079 14.090035 10.144263 14.015324 10.269531 13.880859 C 10.843093 13.26519 11.644505 12.736921 12.492188 12.386719 L 10.810547 10.705078 z M 16.015625 13.513672 L 18.480469 15.978516 C 18.573889 15.876594 18.725061 15.724027 18.732422 15.701172 C 18.762692 15.607272 18.746061 15.232316 18.707031 15.134766 C 18.671911 15.046986 18.337212 14.715002 18.052734 14.484375 C 17.498253 14.03485 16.771247 13.68123 16.076172 13.523438 C 16.053349 13.518256 16.037427 13.518404 16.015625 13.513672 z M 13.697266 13.589844 C 13.073211 13.767358 12.441215 14.083704 11.947266 14.484375 C 11.695388 14.688695 11.341935 15.034404 11.296875 15.121094 C 11.264855 15.182724 11.257053 15.235707 11.251953 15.423828 C 11.246653 15.622167 11.251233 15.662726 11.283203 15.728516 C 11.331483 15.827786 12.221089 16.717349 12.322266 16.767578 C 12.419756 16.816138 12.608213 16.818144 12.710938 16.771484 C 12.754917 16.751504 12.834297 16.682415 12.904297 16.603516 C 12.969547 16.529956 13.097083 16.407168 13.189453 16.330078 C 13.971104 15.677754 15.021866 15.508337 15.949219 15.841797 L 13.697266 13.589844 z M 14.992188 17.664062 L 14.376953 18.285156 C 14.078378 18.574101 13.788169 18.906666 13.513672 19.287109 C 13.239176 19.667552 12.999136 20.077392 12.796875 20.515625 C 12.584983 20.953856 12.488281 21.333596 12.488281 21.65625 C 12.488281 22.099298 12.599833 22.514088 12.826172 22.894531 C 13.052512 23.274974 13.354976 23.582254 13.740234 23.808594 C 14.125494 24.034933 14.540419 24.150391 14.988281 24.150391 C 15.436145 24.150391 15.854067 24.034933 16.244141 23.808594 C 16.634215 23.582254 16.943584 23.274974 17.169922 22.894531 C 17.396263 22.509271 17.511719 22.099298 17.511719 21.65625 C 17.511719 21.367306 17.430269 21.024706 17.261719 20.625 C 17.093169 20.225295 16.890268 19.854679 16.654297 19.517578 C 16.442405 19.243081 16.191288 18.94075 15.902344 18.613281 C 15.6134 18.28581 15.107765 17.779641 14.992188 17.664062 z "   class="rainSensorSkip" /><path   d="m 6.5126951,5.6977078 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457547 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977078 Z" class="skipStrikethrough"  id="path869" /></g>'
     
@@ -2417,15 +2943,15 @@ partlycloudy2 = '<g transform="scale(2) translate(0,0)" id="partlycloudy"><path 
 
 partlysunny2 = '<g transform="scale(2) translate(0,3)" id="partlysunny"><path   id="path855"   d="m 17.759766,1.5 c -0.24,0 -0.429844,0.080469 -0.589844,0.2304687 -0.16,0.15 -0.230469,0.3498439 -0.230469,0.5898438 v 2.0488281 c 0,0.26 0.08047,0.4610937 0.230469,0.6210937 0.15,0.16 0.349844,0.2304688 0.589844,0.2304688 0.26,0 0.461093,-0.080469 0.621093,-0.2304688 0.16,-0.16 0.228516,-0.3610937 0.228516,-0.6210937 V 2.3203125 c 0,-0.2399999 -0.08023,-0.4298438 -0.240234,-0.5898438 C 18.209141,1.5704687 18.009766,1.5 17.759766,1.5 Z m -6.919922,2.8691406 c -0.24,0 -0.449141,0.08 -0.619141,0.25 -0.17,0.1600001 -0.2499999,0.3615625 -0.2499999,0.6015625 0,0.24 0.080235,0.4489062 0.2402349,0.6289062 l 0.658203,0.640625 c 0.25,0.19 0.460625,0.27 0.640625,0.25 0.21,0 0.390781,-0.089766 0.550781,-0.2597656 0.16,-0.17 0.240234,-0.3810937 0.240234,-0.6210937 0,-0.2400001 -0.09172,-0.4398437 -0.261719,-0.5898438 L 11.449219,4.609375 c -0.18,-0.1600001 -0.379375,-0.2402344 -0.609375,-0.2402344 z m 13.890625,0 c -0.24,0 -0.430078,0.080234 -0.580078,0.2402344 l -1.470703,1.4296875 c -0.150001,0.1899999 -0.21875,0.3910937 -0.21875,0.6210937 0,0.26 0.06875,0.4591406 0.21875,0.6191406 0.21,0.16 0.421093,0.2402344 0.621093,0.2402344 0.18,0 0.379844,-0.080234 0.589844,-0.2402344 l 1.429687,-1.4296875 c 0.160002,-0.18 0.240235,-0.390625 0.240235,-0.640625 0,-0.2399999 -0.08023,-0.4396093 -0.240235,-0.5996093 -0.16,-0.1600001 -0.359843,-0.2402344 -0.589843,-0.2402344 z m -6.970703,2.5800781 c -1.145923,0 -2.176855,0.3514587 -3.09961,1.046875 0.504737,0.2887054 0.998601,0.6326792 1.455078,1.0742189 0.499484,-0.2713159 1.044735,-0.4199219 1.644532,-0.4199219 0.99,0 1.829531,0.3392967 2.519531,1.0292969 0.69,0.6899994 1.041015,1.5197654 1.041015,2.5097654 0,0.288395 -0.03972,0.5769 -0.113281,0.863282 0.600233,0.52394 0.970428,0.98951 1.253907,1.484375 C 22.810508,13.832335 23,13.050775 23,12.189453 c 0,-0.71 -0.140156,-1.389062 -0.410156,-2.039062 -0.27,-0.6500003 -0.649141,-1.1999222 -1.119141,-1.6699222 -0.47,-0.47 -1.019922,-0.8510938 -1.669922,-1.1210938 -0.65,-0.2800001 -1.331015,-0.4101563 -2.041015,-0.4101563 z m 7.830078,4.3906253 c -0.24,0 -0.439375,0.08 -0.609375,0.25 -0.18,0.17 -0.259766,0.369609 -0.259766,0.599609 0,0.23 0.08977,0.420078 0.259766,0.580079 0.16,0.16 0.369375,0.240234 0.609375,0.240234 h 2.041015 c 0.23,0 0.420077,-0.08047 0.580079,-0.230469 0.159998,-0.15 0.228515,-0.349844 0.228515,-0.589844 0,-0.24 -0.07851,-0.439609 -0.228515,-0.599609 -0.150001,-0.16 -0.350079,-0.25 -0.580079,-0.25 z m -1.480469,6.320312 c -0.24,0 -0.439609,0.08023 -0.599609,0.240235 C 23.339766,18.060391 23.25,18.26 23.25,18.5 c 0,0.24 0.08,0.448907 0.25,0.628906 l 0.650391,0.63086 c 0.15,0.16 0.340078,0.240234 0.580078,0.240234 0.24,0 0.439609,-0.08 0.599609,-0.25 0.16,-0.17 0.240235,-0.371094 0.240234,-0.621094 0,-0.219999 -0.08023,-0.418126 -0.240234,-0.578124 l -0.65039,-0.650391 c -0.160002,-0.16 -0.350313,-0.240234 -0.570313,-0.240235 z"   class="light" /><path   id="path849"   d="m 11.179688,8.0292969 c -1.410001,0 -2.6504693,0.4405468 -3.7304692,1.3105469 -1.0800001,0.8700002 -1.7800782,1.9896092 -2.0800782,3.3496092 -1.12,0.26 -2.0282812,0.830469 -2.7382812,1.730469 -0.71,0.9 -1.0703125,1.920313 -1.0703125,3.070313 0,0.9 0.2201562,1.730234 0.6601562,2.490234 0.44,0.76 1.0388282,1.358828 1.7988281,1.798828 0.76,0.44 1.5807032,0.660156 2.4707032,0.660156 H 17.320312 c 0.890002,0 1.720469,-0.220156 2.480469,-0.660156 0.76,-0.44 1.368594,-1.038828 1.808594,-1.798828 0.44,-0.76 0.669922,-1.590234 0.669922,-2.490234 0,-0.595125 -0.129762,-1.19868 -0.357422,-1.802735 -0.289942,-0.712862 -0.55802,-1.154541 -1.279297,-1.796875 -0.936402,-0.857226 -2.037123,-1.300781 -3.322266,-1.300781 H 17 c -0.180857,-0.788537 -0.529944,-1.518006 -1.039062,-2.191406 -0.02329,-0.03076 -0.04472,-0.06579 -0.06836,-0.0957 -0.0015,-0.0019 -0.0024,-0.004 -0.0039,-0.0059 C 15.773745,10.150873 15.638669,10.013544 15.507812,9.8730469 14.83776,9.1898352 14.059093,8.7538463 13.222656,8.3828126 12.609999,8.1490155 11.930497,8.0292969 11.179688,8.0292969 Z m 0.0098,1.6796875 c 1.1,0 2.061094,0.3715626 2.871094,1.1015626 0.82,0.73 1.269141,1.628983 1.369141,2.708985 L 15.5,14.09961 c 0.02,0.11 0.09094,0.169921 0.210938,0.169922 h 1.609374 c 0.88,0 1.639297,0.320937 2.279297,0.960937 0.64,0.64 0.960938,1.389531 0.960938,2.269531 0,0.91 -0.321172,1.680313 -0.951172,2.320313 -0.63,0.64 -1.399297,0.958984 -2.279297,0.958984 H 6.4902344 c -0.88,0 -1.6295313,-0.31875 -2.2695313,-0.96875 -0.63,-0.65 -0.9511719,-1.420312 -0.9511719,-2.320312 0,-0.84 0.2798438,-1.559922 0.8398438,-2.169922 0.56,-0.61 1.2615625,-0.960547 2.1015625,-1.060547 l 0.5,-0.0293 c 0.12,0 0.1894531,-0.05969 0.1894531,-0.179687 l 0.070312,-0.541016 c 0.14,-1.08 0.6101563,-1.988985 1.4101563,-2.708984 0.8,-0.730001 1.7385936,-1.0917976 2.8085936,-1.0917976 z"   class="cloud" /></g>'
 
-sprinklerWatering2 = '<g transform="translate(0,0)"><path   d="m 9.785,16.555 c 0,0.92 0.23,1.78 0.7,2.57 0.47,0.79 1.1,1.43 1.9,1.9 0.8,0.47 1.66,0.71 2.59,0.71 0.93,0 1.8,-0.24 2.61,-0.71 0.81,-0.47 1.45,-1.11 1.92,-1.9 0.47,-0.8 0.71,-1.65 0.71,-2.57 0,-0.6 -0.17,-1.31 -0.52,-2.14 -0.35,-0.83 -0.77,-1.6 -1.26,-2.3 -0.44,-0.57 -0.96,-1.2 -1.56,-1.88 -0.6,-0.68 -1.65,-1.73 -1.89,-1.97 l -1.28,1.29 c -0.62,0.6 -1.22,1.29 -1.79,2.08 -0.57,0.79 -1.07,1.64 -1.49,2.55 -0.44,0.91 -0.64,1.7 -0.64,2.37 z"   id="path2"   class="rainDropWatering" /></g>'
+@Field static sprinklerWatering2 = '<g transform="translate(0,0)"><path   d="m 9.785,16.555 c 0,0.92 0.23,1.78 0.7,2.57 0.47,0.79 1.1,1.43 1.9,1.9 0.8,0.47 1.66,0.71 2.59,0.71 0.93,0 1.8,-0.24 2.61,-0.71 0.81,-0.47 1.45,-1.11 1.92,-1.9 0.47,-0.8 0.71,-1.65 0.71,-2.57 0,-0.6 -0.17,-1.31 -0.52,-2.14 -0.35,-0.83 -0.77,-1.6 -1.26,-2.3 -0.44,-0.57 -0.96,-1.2 -1.56,-1.88 -0.6,-0.68 -1.65,-1.73 -1.89,-1.97 l -1.28,1.29 c -0.62,0.6 -1.22,1.29 -1.79,2.08 -0.57,0.79 -1.07,1.64 -1.49,2.55 -0.44,0.91 -0.64,1.7 -0.64,2.37 z"   id="path2"   class="rainDropWatering" /></g>'
 
 saturationSkip2 = '<g transform="translate(0,0)"><path   id="path2"   d="M 12.724609 7.4394531 L 12.380859 7.8242188 C 12.1204 8.1258033 11.887267 8.4540556 11.681641 8.8378906 C 11.634545 8.9226625 11.611082 8.9934112 11.574219 9.0722656 L 13.427734 10.925781 C 13.529105 10.869077 13.624622 10.803113 13.710938 10.716797 C 13.957688 10.456338 14.095703 10.139657 14.095703 9.7695312 C 14.095703 9.1800712 13.643071 8.3990405 12.724609 7.4394531 z M 18.400391 10.099609 L 17.892578 10.689453 C 17.508744 11.114413 17.166855 11.594207 16.851562 12.15625 C 16.536269 12.718294 16.371094 13.17089 16.371094 13.541016 C 16.371094 13.664728 16.383601 13.783612 16.402344 13.900391 L 18.068359 15.566406 C 18.176056 15.58282 18.284983 15.595703 18.400391 15.595703 C 18.962434 15.595703 19.455973 15.389731 19.853516 14.992188 C 20.25106 14.580936 20.455078 14.10306 20.455078 13.541016 C 20.455078 13.184598 20.278256 12.732002 19.935547 12.15625 C 19.592837 11.580499 19.248886 11.100595 18.933594 10.730469 C 18.851344 10.634509 18.742516 10.496495 18.619141 10.345703 C 18.495765 10.194911 18.414099 10.113318 18.400391 10.099609 z M 12.875 13.964844 L 12.533203 14.294922 C 11.998576 14.802132 11.394367 15.499616 10.722656 16.376953 C 10.366238 16.843038 10.092381 17.336504 9.8730469 17.857422 C 9.6537129 18.378341 9.5449219 18.830973 9.5449219 19.228516 C 9.5449219 20.174395 9.8596122 20.955314 10.503906 21.599609 C 11.1482 22.243903 11.94283 22.560547 12.875 22.560547 C 13.80717 22.560547 14.588127 22.230231 15.232422 21.585938 C 15.876716 20.941644 16.179688 20.146978 16.179688 19.228516 C 16.179688 18.830973 16.068943 18.378377 15.849609 17.84375 C 15.630275 17.322831 15.356345 16.829293 15.027344 16.390625 C 14.396758 15.554414 13.808174 14.856966 13.232422 14.294922 C 13.177592 14.253802 13.053209 14.143053 12.875 13.964844 z "   class="saturatedSoil" /><path   d="m 6.5126951,5.6977076 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457545 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977076 Z"   id="path869"   class="skipStrikethrough" /></g>'
 
-rainSkip2 = '<g transform="translate(0,0)"><path   id="path844"   d="M 19.164062 14.560547 C 19.004062 14.560547 18.855078 14.610937 18.705078 14.710938 C 18.565078 14.810937 18.464297 14.960391 18.404297 15.150391 L 18.238281 15.736328 L 19.582031 17.080078 L 19.994141 15.630859 C 19.994141 15.610859 20.005625 15.569769 20.015625 15.509766 C 20.025625 15.449766 20.035156 15.399141 20.035156 15.369141 C 20.035156 15.209141 19.984766 15.050391 19.884766 14.900391 C 19.784766 14.750391 19.635781 14.649844 19.425781 14.589844 C 19.335781 14.569844 19.244062 14.560547 19.164062 14.560547 z M 12.435547 14.570312 C 12.285547 14.570312 12.124609 14.620702 11.974609 14.720703 C 11.824609 14.820703 11.714297 14.970156 11.654297 15.160156 L 10.025391 20.929688 C 9.9953906 21.019687 9.984375 21.090858 9.984375 21.130859 C 9.984375 21.300858 10.034531 21.460858 10.144531 21.630859 C 10.254531 21.790859 10.414766 21.900937 10.634766 21.960938 C 10.644766 21.960938 10.674375 21.970234 10.734375 21.990234 C 10.774375 22.000234 10.805705 22.009766 10.845703 22.009766 C 11.265703 22.009766 11.544063 21.799141 11.664062 21.369141 L 13.294922 15.640625 C 13.364922 15.390625 13.334844 15.170703 13.214844 14.970703 C 13.094844 14.770703 12.915781 14.639609 12.675781 14.599609 C 12.585781 14.579609 12.505547 14.570312 12.435547 14.570312 z M 15.113281 15.005859 C 15.087705 15.058499 15.057851 15.108509 15.044922 15.169922 L 12.605469 23.939453 C 12.535469 24.199453 12.554062 24.409844 12.664062 24.589844 C 12.814063 24.799844 12.985547 24.930469 13.185547 24.980469 C 13.255547 25.010469 13.345547 25.029297 13.435547 25.029297 C 13.625547 25.029297 13.785313 24.969606 13.945312 24.849609 C 14.105313 24.729608 14.194375 24.589923 14.234375 24.419922 L 16.464844 16.359375 L 15.113281 15.005859 z M 17.710938 17.605469 L 16.775391 20.919922 C 16.745391 21.039923 16.734375 21.110391 16.734375 21.150391 C 16.734375 21.310391 16.785005 21.469141 16.875 21.619141 C 16.985 21.779141 17.135937 21.879454 17.335938 21.939453 L 17.574219 21.990234 C 17.764219 21.990234 17.935938 21.930314 18.085938 21.820312 C 18.235937 21.710311 18.325234 21.549376 18.365234 21.359375 L 19.052734 18.945312 L 17.710938 17.605469 z "   class="rainDropsPredicted" /><path   id="path2"   d="M 14.304688 4.9707031 C 12.894687 4.9707031 11.644687 5.40125 10.554688 6.28125 C 10.219393 6.5519464 9.9327202 6.8518529 9.6699219 7.1679688 L 10.871094 8.3691406 C 11.035344 8.1516787 11.220942 7.9434094 11.435547 7.75 C 12.235547 7.02 13.195156 6.6601562 14.285156 6.6601562 C 15.375156 6.6601562 16.314766 7.02 17.134766 7.75 C 17.944766 8.47 18.415391 9.380937 18.525391 10.460938 L 18.605469 11.041016 C 18.605469 11.151016 18.665156 11.210938 18.785156 11.210938 L 20.394531 11.210938 C 21.284531 11.210938 22.055078 11.529922 22.705078 12.169922 C 23.355078 12.809922 23.685547 13.559688 23.685547 14.429688 C 23.685547 15.299687 23.385156 16.049453 22.785156 16.689453 C 22.185156 17.329453 21.455469 17.670938 20.605469 17.710938 C 20.475469 17.710938 20.404297 17.770624 20.404297 17.890625 L 20.404297 17.902344 L 21.728516 19.226562 C 22.174662 19.107834 22.602464 18.928356 23.005859 18.679688 C 23.735859 18.229688 24.314375 17.630859 24.734375 16.880859 C 25.154375 16.130859 25.365234 15.319453 25.365234 14.439453 C 25.365234 13.549453 25.135313 12.720703 24.695312 11.970703 C 24.255312 11.220703 23.644766 10.619453 22.884766 10.189453 C 22.124766 9.7594526 21.294297 9.5410156 20.404297 9.5410156 L 20.085938 9.5410156 C 19.765937 8.2010156 19.064375 7.1 17.984375 6.25 C 16.904375 5.4 15.684687 4.9707031 14.304688 4.9707031 z M 8.7578125 8.6523438 C 8.6279809 8.9665128 8.5239683 9.2955544 8.4453125 9.640625 C 7.3453125 9.900625 6.4348437 10.471094 5.7148438 11.371094 C 4.9948438 12.271094 4.6347656 13.289453 4.6347656 14.439453 C 4.6347656 15.769452 5.0758594 16.911094 6.0058594 17.871094 C 6.9358594 18.831094 8.0642969 19.340391 9.4042969 19.400391 C 9.5142969 19.400391 9.5742188 19.340469 9.5742188 19.230469 L 9.5742188 17.900391 C 9.5742188 17.780391 9.5142969 17.720703 9.4042969 17.720703 C 8.5542969 17.680703 7.8246094 17.341172 7.2246094 16.701172 C 6.6246094 16.061172 6.3242188 15.309452 6.3242188 14.439453 C 6.3242188 13.609453 6.6057812 12.89125 7.1757812 12.28125 C 7.7457813 11.67125 8.4453906 11.310937 9.2753906 11.210938 L 9.8046875 11.179688 C 9.9346875 11.179688 10.005859 11.110234 10.005859 10.990234 L 10.074219 10.460938 C 10.087664 10.315728 10.124267 10.181695 10.150391 10.042969 L 8.7578125 8.6523438 z "   class="windSkip" /><path   d="m 6.512695,5.6977076 a 0.84712499,0.84712499 0 0 0 -0.568359,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.143554,5.9457545 A 0.84712499,0.84712499 0 0 0 6.512695,5.6977076 Z"   id="path869"   class="skipStrikethrough" /></g>'
+rainSkip2 = '<g transform="translate(0,0)"><path   id="path844"   d="M 19.164062 14.560547 C 19.004062 14.560547 18.855078 14.610937 18.705078 14.710938 C 18.565078 14.810937 18.464297 14.960391 18.404297 15.150391 L 18.238281 15.736328 L 19.582031 17.080078 L 19.994141 15.630859 C 19.994141 15.610859 20.005625 15.569769 20.015625 15.509766 C 20.025625 15.449766 20.035156 15.399141 20.035156 15.369141 C 20.035156 15.209141 19.984766 15.050391 19.884766 14.900391 C 19.784766 14.750391 19.635781 14.649844 19.425781 14.589844 C 19.335781 14.569844 19.244062 14.560547 19.164062 14.560547 z M 12.435547 14.570312 C 12.285547 14.570312 12.124609 14.620702 11.974609 14.720703 C 11.824609 14.820703 11.714297 14.970156 11.654297 15.160156 L 10.025391 20.929688 C 9.9953906 21.019687 9.984375 21.090858 9.984375 21.130859 C 9.984375 21.300858 10.034531 21.460858 10.144531 21.630859 C 10.254531 21.790859 10.414766 21.900937 10.634766 21.960938 C 10.644766 21.960938 10.674375 21.970234 10.734375 21.990234 C 10.774375 22.000234 10.805705 22.009766 10.845703 22.009766 C 11.265703 22.009766 11.544063 21.799141 11.664062 21.369141 L 13.294922 15.640625 C 13.364922 15.390625 13.334844 15.170703 13.214844 14.970703 C 13.094844 14.770703 12.915781 14.639609 12.675781 14.599609 C 12.585781 14.579609 12.505547 14.570312 12.435547 14.570312 z M 15.113281 15.005859 C 15.087705 15.058499 15.057851 15.108509 15.044922 15.169922 L 12.605469 23.939453 C 12.535469 24.199453 12.554062 24.409844 12.664062 24.589844 C 12.814063 24.799844 12.985547 24.930469 13.185547 24.980469 C 13.255547 25.010469 13.345547 25.029297 13.435547 25.029297 C 13.625547 25.029297 13.785313 24.969606 13.945312 24.849609 C 14.105313 24.729608 14.194375 24.589923 14.234375 24.419922 L 16.464844 16.359375 L 15.113281 15.005859 z M 17.710938 17.605469 L 16.775391 20.919922 C 16.745391 21.039923 16.734375 21.110391 16.734375 21.150391 C 16.734375 21.310391 16.785005 21.469141 16.875 21.619141 C 16.985 21.779141 17.135937 21.879454 17.335938 21.939453 L 17.574219 21.990234 C 17.764219 21.990234 17.935938 21.930314 18.085938 21.820312 C 18.235937 21.710311 18.325234 21.549376 18.365234 21.359375 L 19.052734 18.945312 L 17.710938 17.605469 z "   class="rainDropsPredicted" /><path   id="path2"   d="M 14.304688 4.9707031 C 12.894687 4.9707031 11.644687 5.40125 10.554688 6.28125 C 10.219393 6.5519464 9.9327202 6.8518529 9.6699219 7.1679688 L 10.871094 8.3691406 C 11.035344 8.1516787 11.220942 7.9434094 11.435547 7.75 C 12.235547 7.02 13.195156 6.6601562 14.285156 6.6601562 C 15.375156 6.6601562 16.314766 7.02 17.134766 7.75 C 17.944766 8.47 18.415391 9.380937 18.525391 10.460938 L 18.605469 11.041016 C 18.605469 11.151016 18.665156 11.210938 18.785156 11.210938 L 20.394531 11.210938 C 21.284531 11.210938 22.055078 11.529922 22.705078 12.169922 C 23.355078 12.809922 23.685547 13.559688 23.685547 14.429688 C 23.685547 15.299687 23.385156 16.049453 22.785156 16.689453 C 22.185156 17.329453 21.455469 17.670938 20.605469 17.710938 C 20.475469 17.710938 20.404297 17.770624 20.404297 17.890625 L 20.404297 17.902344 L 21.728516 19.226562 C 22.174662 19.107834 22.602464 18.928356 23.005859 18.679688 C 23.735859 18.229688 24.314375 17.630859 24.734375 16.880859 C 25.154375 16.130859 25.365234 15.319453 25.365234 14.439453 C 25.365234 13.549453 25.135313 12.720703 24.695312 11.970703 C 24.255312 11.220703 23.644766 10.619453 22.884766 10.189453 C 22.124766 9.7594526 21.294297 9.5410156 20.404297 9.5410156 L 20.085938 9.5410156 C 19.765937 8.2010156 19.064375 7.1 17.984375 6.25 C 16.904375 5.4 15.684687 4.9707031 14.304688 4.9707031 z M 8.7578125 8.6523438 C 8.6279809 8.9665128 8.5239683 9.2955544 8.4453125 9.640625 C 7.3453125 9.900625 6.4348437 10.471094 5.7148438 11.371094 C 4.9948438 12.271094 4.6347656 13.289453 4.6347656 14.439453 C 4.6347656 15.769452 5.0758594 16.911094 6.0058594 17.871094 C 6.9358594 18.831094 8.0642969 19.340391 9.4042969 19.400391 C 9.5142969 19.400391 9.5742188 19.340469 9.5742188 19.230469 L 9.5742188 17.900391 C 9.5742188 17.780391 9.5142969 17.720703 9.4042969 17.720703 C 8.5542969 17.680703 7.8246094 17.341172 7.2246094 16.701172 C 6.6246094 16.061172 6.3242188 15.309452 6.3242188 14.439453 C 6.3242188 13.609453 6.6057812 12.89125 7.1757812 12.28125 C 7.7457813 11.67125 8.4453906 11.310937 9.2753906 11.210938 L 9.8046875 11.179688 C 9.9346875 11.179688 10.005859 11.110234 10.005859 10.990234 L 10.074219 10.460938 C 10.087664 10.315728 10.124267 10.181695 10.150391 10.042969 L 8.7578125 8.6523438 z "   class="cloudPredicted" /><path   d="m 6.512695,5.6977076 a 0.84712499,0.84712499 0 0 0 -0.568359,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.143554,5.9457545 A 0.84712499,0.84712499 0 0 0 6.512695,5.6977076 Z"   id="path869"   class="skipStrikethrough" /></g>'
 
 windSkip2 = '<g transform="translate(0,0)"><path   id="path2"   d="M 18.689453 8.625 C 17.949453 8.625 17.290469 8.9050781 16.730469 9.4550781 C 16.540469 9.6250781 16.449219 9.8359379 16.449219 10.085938 C 16.449219 10.315934 16.540703 10.525315 16.720703 10.695312 C 16.900703 10.865311 17.109375 10.955078 17.359375 10.955078 C 17.599375 10.955078 17.800937 10.875312 17.960938 10.695312 C 18.150938 10.505316 18.399453 10.404297 18.689453 10.404297 C 18.989453 10.404297 19.229688 10.505314 19.429688 10.695312 C 19.629687 10.885311 19.730469 11.124063 19.730469 11.414062 C 19.730469 11.704063 19.629687 11.954297 19.429688 12.154297 C 19.229688 12.354297 18.989219 12.455078 18.699219 12.455078 L 14.957031 12.455078 L 16.746094 14.244141 L 18.689453 14.244141 C 19.459453 14.244141 20.129453 13.964297 20.689453 13.404297 C 21.249453 12.844297 21.529297 12.184297 21.529297 11.404297 C 21.529297 10.624299 21.259219 9.9755469 20.699219 9.4355469 C 20.139219 8.8955469 19.469453 8.625 18.689453 8.625 z M 4.0097656 12.455078 C 3.7497656 12.455078 3.5408594 12.544375 3.3808594 12.734375 C 3.1908594 12.904375 3.0996094 13.115469 3.0996094 13.355469 C 3.0996094 13.605469 3.1891406 13.814375 3.3691406 13.984375 C 3.5491406 14.154375 3.7597656 14.244141 4.0097656 14.244141 L 14.349609 14.244141 L 12.560547 12.455078 L 4.0097656 12.455078 z M 4.0097656 15.765625 C 3.7597656 15.765625 3.5508594 15.845391 3.3808594 16.025391 C 3.1908594 16.205391 3.0996094 16.404766 3.0996094 16.634766 C 3.0996094 16.884766 3.1891406 17.095156 3.3691406 17.285156 C 3.5491406 17.455156 3.7597656 17.544922 4.0097656 17.544922 L 17.652344 17.544922 L 15.873047 15.765625 L 4.0097656 15.765625 z M 18.267578 15.765625 L 20.046875 17.544922 L 24.050781 17.544922 C 24.340781 17.544922 24.579297 17.645937 24.779297 17.835938 C 24.979297 18.025937 25.080078 18.264688 25.080078 18.554688 C 25.080078 18.844687 24.979297 19.085156 24.779297 19.285156 C 24.579297 19.485156 24.340781 19.585938 24.050781 19.585938 C 23.770781 19.585937 23.539609 19.485391 23.349609 19.275391 C 23.169609 19.115391 22.960703 19.035156 22.720703 19.035156 C 22.470703 19.035156 22.259844 19.115391 22.089844 19.275391 C 22.033446 19.328471 21.999361 19.394898 21.960938 19.458984 L 23.859375 21.357422 C 23.923798 21.361407 23.984585 21.375 24.050781 21.375 C 24.830781 21.375 25.500547 21.094922 26.060547 20.544922 C 26.620547 19.994922 26.900391 19.324687 26.900391 18.554688 C 26.900391 17.784688 26.620547 17.125937 26.060547 16.585938 C 25.500547 16.035938 24.830781 15.765625 24.050781 15.765625 L 18.267578 15.765625 z "   class="windSkip" /><path   d="m 6.5126951,5.6977076 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457545 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977076 Z"   id="path869"   class="skipStrikethrough" /></g>'
 
-freezeSkip2 = '<g transform="translate(0,0)"><path  id="path2"   d="M 15.019531 5.5859375 C 14.76998 5.5859375 14.569217 5.6737289 14.394531 5.8359375 C 14.219842 5.9981461 14.132812 6.2101915 14.132812 6.4472656 C 14.132812 6.6718621 14.219844 6.8709945 14.394531 7.0332031 C 14.569217 7.1954116 14.782457 7.2832031 15.019531 7.2832031 C 15.256606 7.2832031 15.45498 7.1954117 15.617188 7.0332031 C 15.7794 6.8709945 15.867188 6.6718621 15.867188 6.4472656 C 15.867188 6.2101915 15.779397 5.9981461 15.617188 5.8359375 C 15.45498 5.6737288 15.256606 5.5859375 15.019531 5.5859375 z M 15.042969 8.03125 C 14.793417 8.03125 14.594609 8.1182826 14.419922 8.2929688 C 14.245233 8.467655 14.158203 8.6808947 14.158203 8.9179688 L 14.158203 11.65625 L 18.34375 15.841797 L 21.144531 15.841797 C 21.369128 15.841797 21.570214 15.754006 21.732422 15.591797 C 21.894634 15.429589 21.980469 15.230456 21.980469 15.005859 C 21.980469 14.756308 21.894632 14.557498 21.732422 14.382812 C 21.570214 14.208122 21.369128 14.121094 21.144531 14.121094 L 17.115234 14.121094 L 19.958984 11.275391 C 20.108711 11.12566 20.183594 10.926527 20.183594 10.689453 C 20.183594 10.452379 20.108715 10.252811 19.958984 10.078125 C 19.784298 9.9034388 19.572252 9.8164062 19.347656 9.8164062 C 19.123059 9.8164062 18.924686 9.9034392 18.75 10.078125 L 15.892578 12.947266 L 15.892578 8.9179688 C 15.892578 8.6684171 15.804786 8.467655 15.642578 8.2929688 C 15.480369 8.1182825 15.280042 8.03125 15.042969 8.03125 z M 21.058594 8.0820312 C 20.821521 8.0820313 20.620434 8.1690637 20.470703 8.34375 C 20.296014 8.5059586 20.208984 8.7168097 20.208984 8.9414062 C 20.208984 9.1660028 20.296017 9.378048 20.470703 9.5527344 C 20.620434 9.7274197 20.821521 9.8164062 21.058594 9.8164062 C 21.295669 9.8164062 21.495236 9.7274206 21.669922 9.5527344 C 21.844611 9.3780481 21.931641 9.1660028 21.931641 8.9414062 C 21.931641 8.7168097 21.844607 8.5184362 21.669922 8.34375 C 21.495236 8.1690637 21.295669 8.0820312 21.058594 8.0820312 z M 8.4042969 8.2988281 C 8.38568 8.3166822 8.3610531 8.3235631 8.34375 8.34375 C 8.1690637 8.5059586 8.0820312 8.7168097 8.0820312 8.9414062 C 8.0820309 9.1660028 8.1690637 9.378048 8.34375 9.5527344 C 8.4934808 9.7274197 8.6926135 9.8164062 8.9296875 9.8164062 C 9.1667617 9.8164063 9.3663288 9.7274207 9.5410156 9.5527344 C 9.562202 9.531548 9.5692738 9.504665 9.5878906 9.4824219 L 8.4042969 8.2988281 z M 10.158203 10.052734 C 10.140929 10.06792 10.120317 10.073043 10.103516 10.089844 C 9.928825 10.26453 9.8398438 10.464097 9.8398438 10.701172 C 9.8398438 10.938246 9.9288285 11.137377 10.103516 11.287109 L 12.947266 14.132812 L 8.9179688 14.132812 C 8.6808946 14.132813 8.480568 14.219844 8.3183594 14.394531 C 8.1561517 14.569217 8.0683594 14.782457 8.0683594 15.019531 C 8.0683594 15.244128 8.1441085 15.442825 8.34375 15.580078 C 8.5059585 15.74229 8.7043323 15.830078 8.9414062 15.830078 L 12.984375 15.830078 L 10.115234 18.6875 C 9.9405437 18.849708 9.8535156 19.036362 9.8535156 19.273438 C 9.8535156 19.510511 9.9405471 19.71008 10.115234 19.884766 C 10.28992 20.059456 10.489489 20.146484 10.726562 20.146484 C 10.963637 20.146484 11.163204 20.059453 11.337891 19.884766 L 14.169922 17.052734 L 14.169922 21.070312 C 14.169922 21.307387 14.256955 21.519432 14.431641 21.681641 C 14.606328 21.843853 14.819566 21.931641 15.056641 21.931641 C 15.293714 21.931641 15.492089 21.843849 15.654297 21.681641 C 15.816509 21.519432 15.904297 21.307388 15.904297 21.070312 L 15.904297 17.027344 L 18.761719 19.896484 C 18.923928 20.071173 19.136731 20.160156 19.361328 20.160156 C 19.585924 20.160156 19.79797 20.071171 19.972656 19.896484 C 19.977861 19.890411 19.979351 19.883087 19.984375 19.876953 L 10.158203 10.052734 z M 6.4472656 14.132812 C 6.2101915 14.132813 6.0098648 14.219844 5.8476562 14.394531 C 5.6854476 14.569217 5.5976562 14.782457 5.5976562 15.019531 C 5.5976562 15.244128 5.6722112 15.442502 5.859375 15.617188 C 6.0215836 15.779399 6.2343878 15.867188 6.4589844 15.867188 C 6.6835809 15.867187 6.8963852 15.779397 7.0585938 15.617188 C 7.2208016 15.45498 7.3066406 15.256606 7.3066406 15.019531 C 7.3066406 14.76998 7.2208023 14.569217 7.0585938 14.394531 C 6.8963852 14.219842 6.6843397 14.132812 6.4472656 14.132812 z M 23.566406 14.132812 C 23.329332 14.132812 23.117287 14.219844 22.955078 14.394531 C 22.792866 14.569217 22.705078 14.782457 22.705078 15.019531 C 22.705078 15.244128 22.79287 15.443261 22.955078 15.605469 C 23.117287 15.76768 23.329332 15.855469 23.566406 15.855469 C 23.791002 15.855469 23.990135 15.767678 24.152344 15.605469 C 24.314556 15.443261 24.402344 15.244128 24.402344 15.019531 C 24.402344 14.76998 24.314552 14.569217 24.152344 14.394531 C 23.990135 14.219842 23.791002 14.132812 23.566406 14.132812 z M 8.9296875 20.197266 C 8.6926134 20.197266 8.4934811 20.284297 8.34375 20.458984 C 8.1690637 20.621192 8.0820312 20.833998 8.0820312 21.058594 C 8.0820309 21.295669 8.1690635 21.494042 8.34375 21.65625 C 8.4934811 21.830939 8.6926134 21.917969 8.9296875 21.917969 C 9.1667616 21.917969 9.3663293 21.830937 9.5410156 21.65625 C 9.7157018 21.494042 9.8027344 21.283191 9.8027344 21.058594 C 9.8027344 20.833998 9.7157018 20.63367 9.5410156 20.458984 C 9.3663293 20.284295 9.1667616 20.197266 8.9296875 20.197266 z M 20.525391 20.417969 C 20.508704 20.434287 20.486319 20.440766 20.470703 20.458984 C 20.296014 20.621192 20.208984 20.833998 20.208984 21.058594 C 20.208984 21.295669 20.296017 21.494042 20.470703 21.65625 C 20.620434 21.830939 20.821521 21.917969 21.058594 21.917969 C 21.295669 21.917969 21.495236 21.830937 21.669922 21.65625 C 21.687308 21.640106 21.693328 21.618659 21.708984 21.601562 L 20.525391 20.417969 z M 15.019531 22.716797 C 14.76998 22.716797 14.569217 22.804589 14.394531 22.966797 C 14.219842 23.129007 14.132812 23.328138 14.132812 23.552734 C 14.132812 23.802286 14.219844 24.001853 14.394531 24.164062 C 14.569217 24.326274 14.782457 24.414062 15.019531 24.414062 C 15.256606 24.414063 15.45498 24.32627 15.617188 24.164062 C 15.7794 24.001854 15.867188 23.789808 15.867188 23.552734 C 15.867188 23.328138 15.779397 23.129007 15.617188 22.966797 C 15.45498 22.804586 15.256606 22.716797 15.019531 22.716797 z "   class="freezeSkip0" /><path   d="m 6.5126951,5.6977075 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457544 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977075 Z"   id="path869"   class="skipStrikethrough" /></g>'
+freezeSkip2 = '<g transform="translate(0,0)"><path  id="path2"   d="M 15.019531 5.5859375 C 14.76998 5.5859375 14.569217 5.6737289 14.394531 5.8359375 C 14.219842 5.9981461 14.132812 6.2101915 14.132812 6.4472656 C 14.132812 6.6718621 14.219844 6.8709945 14.394531 7.0332031 C 14.569217 7.1954116 14.782457 7.2832031 15.019531 7.2832031 C 15.256606 7.2832031 15.45498 7.1954117 15.617188 7.0332031 C 15.7794 6.8709945 15.867188 6.6718621 15.867188 6.4472656 C 15.867188 6.2101915 15.779397 5.9981461 15.617188 5.8359375 C 15.45498 5.6737288 15.256606 5.5859375 15.019531 5.5859375 z M 15.042969 8.03125 C 14.793417 8.03125 14.594609 8.1182826 14.419922 8.2929688 C 14.245233 8.467655 14.158203 8.6808947 14.158203 8.9179688 L 14.158203 11.65625 L 18.34375 15.841797 L 21.144531 15.841797 C 21.369128 15.841797 21.570214 15.754006 21.732422 15.591797 C 21.894634 15.429589 21.980469 15.230456 21.980469 15.005859 C 21.980469 14.756308 21.894632 14.557498 21.732422 14.382812 C 21.570214 14.208122 21.369128 14.121094 21.144531 14.121094 L 17.115234 14.121094 L 19.958984 11.275391 C 20.108711 11.12566 20.183594 10.926527 20.183594 10.689453 C 20.183594 10.452379 20.108715 10.252811 19.958984 10.078125 C 19.784298 9.9034388 19.572252 9.8164062 19.347656 9.8164062 C 19.123059 9.8164062 18.924686 9.9034392 18.75 10.078125 L 15.892578 12.947266 L 15.892578 8.9179688 C 15.892578 8.6684171 15.804786 8.467655 15.642578 8.2929688 C 15.480369 8.1182825 15.280042 8.03125 15.042969 8.03125 z M 21.058594 8.0820312 C 20.821521 8.0820313 20.620434 8.1690637 20.470703 8.34375 C 20.296014 8.5059586 20.208984 8.7168097 20.208984 8.9414062 C 20.208984 9.1660028 20.296017 9.378048 20.470703 9.5527344 C 20.620434 9.7274197 20.821521 9.8164062 21.058594 9.8164062 C 21.295669 9.8164062 21.495236 9.7274206 21.669922 9.5527344 C 21.844611 9.3780481 21.931641 9.1660028 21.931641 8.9414062 C 21.931641 8.7168097 21.844607 8.5184362 21.669922 8.34375 C 21.495236 8.1690637 21.295669 8.0820312 21.058594 8.0820312 z M 8.4042969 8.2988281 C 8.38568 8.3166822 8.3610531 8.3235631 8.34375 8.34375 C 8.1690637 8.5059586 8.0820312 8.7168097 8.0820312 8.9414062 C 8.0820309 9.1660028 8.1690637 9.378048 8.34375 9.5527344 C 8.4934808 9.7274197 8.6926135 9.8164062 8.9296875 9.8164062 C 9.1667617 9.8164063 9.3663288 9.7274207 9.5410156 9.5527344 C 9.562202 9.531548 9.5692738 9.504665 9.5878906 9.4824219 L 8.4042969 8.2988281 z M 10.158203 10.052734 C 10.140929 10.06792 10.120317 10.073043 10.103516 10.089844 C 9.928825 10.26453 9.8398438 10.464097 9.8398438 10.701172 C 9.8398438 10.938246 9.9288285 11.137377 10.103516 11.287109 L 12.947266 14.132812 L 8.9179688 14.132812 C 8.6808946 14.132813 8.480568 14.219844 8.3183594 14.394531 C 8.1561517 14.569217 8.0683594 14.782457 8.0683594 15.019531 C 8.0683594 15.244128 8.1441085 15.442825 8.34375 15.580078 C 8.5059585 15.74229 8.7043323 15.830078 8.9414062 15.830078 L 12.984375 15.830078 L 10.115234 18.6875 C 9.9405437 18.849708 9.8535156 19.036362 9.8535156 19.273438 C 9.8535156 19.510511 9.9405471 19.71008 10.115234 19.884766 C 10.28992 20.059456 10.489489 20.146484 10.726562 20.146484 C 10.963637 20.146484 11.163204 20.059453 11.337891 19.884766 L 14.169922 17.052734 L 14.169922 21.070312 C 14.169922 21.307387 14.256955 21.519432 14.431641 21.681641 C 14.606328 21.843853 14.819566 21.931641 15.056641 21.931641 C 15.293714 21.931641 15.492089 21.843849 15.654297 21.681641 C 15.816509 21.519432 15.904297 21.307388 15.904297 21.070312 L 15.904297 17.027344 L 18.761719 19.896484 C 18.923928 20.071173 19.136731 20.160156 19.361328 20.160156 C 19.585924 20.160156 19.79797 20.071171 19.972656 19.896484 C 19.977861 19.890411 19.979351 19.883087 19.984375 19.876953 L 10.158203 10.052734 z M 6.4472656 14.132812 C 6.2101915 14.132813 6.0098648 14.219844 5.8476562 14.394531 C 5.6854476 14.569217 5.5976562 14.782457 5.5976562 15.019531 C 5.5976562 15.244128 5.6722112 15.442502 5.859375 15.617188 C 6.0215836 15.779399 6.2343878 15.867188 6.4589844 15.867188 C 6.6835809 15.867187 6.8963852 15.779397 7.0585938 15.617188 C 7.2208016 15.45498 7.3066406 15.256606 7.3066406 15.019531 C 7.3066406 14.76998 7.2208023 14.569217 7.0585938 14.394531 C 6.8963852 14.219842 6.6843397 14.132812 6.4472656 14.132812 z M 23.566406 14.132812 C 23.329332 14.132812 23.117287 14.219844 22.955078 14.394531 C 22.792866 14.569217 22.705078 14.782457 22.705078 15.019531 C 22.705078 15.244128 22.79287 15.443261 22.955078 15.605469 C 23.117287 15.76768 23.329332 15.855469 23.566406 15.855469 C 23.791002 15.855469 23.990135 15.767678 24.152344 15.605469 C 24.314556 15.443261 24.402344 15.244128 24.402344 15.019531 C 24.402344 14.76998 24.314552 14.569217 24.152344 14.394531 C 23.990135 14.219842 23.791002 14.132812 23.566406 14.132812 z M 8.9296875 20.197266 C 8.6926134 20.197266 8.4934811 20.284297 8.34375 20.458984 C 8.1690637 20.621192 8.0820312 20.833998 8.0820312 21.058594 C 8.0820309 21.295669 8.1690635 21.494042 8.34375 21.65625 C 8.4934811 21.830939 8.6926134 21.917969 8.9296875 21.917969 C 9.1667616 21.917969 9.3663293 21.830937 9.5410156 21.65625 C 9.7157018 21.494042 9.8027344 21.283191 9.8027344 21.058594 C 9.8027344 20.833998 9.7157018 20.63367 9.5410156 20.458984 C 9.3663293 20.284295 9.1667616 20.197266 8.9296875 20.197266 z M 20.525391 20.417969 C 20.508704 20.434287 20.486319 20.440766 20.470703 20.458984 C 20.296014 20.621192 20.208984 20.833998 20.208984 21.058594 C 20.208984 21.295669 20.296017 21.494042 20.470703 21.65625 C 20.620434 21.830939 20.821521 21.917969 21.058594 21.917969 C 21.295669 21.917969 21.495236 21.830937 21.669922 21.65625 C 21.687308 21.640106 21.693328 21.618659 21.708984 21.601562 L 20.525391 20.417969 z M 15.019531 22.716797 C 14.76998 22.716797 14.569217 22.804589 14.394531 22.966797 C 14.219842 23.129007 14.132812 23.328138 14.132812 23.552734 C 14.132812 23.802286 14.219844 24.001853 14.394531 24.164062 C 14.569217 24.326274 14.782457 24.414062 15.019531 24.414062 C 15.256606 24.414063 15.45498 24.32627 15.617188 24.164062 C 15.7794 24.001854 15.867188 23.789808 15.867188 23.552734 C 15.867188 23.328138 15.779397 23.129007 15.617188 22.966797 C 15.45498 22.804586 15.256606 22.716797 15.019531 22.716797 z "   class="freezeSkip" /><path   d="m 6.5126951,5.6977075 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457544 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977075 Z"   id="path869"   class="skipStrikethrough" /></g>'
 
 rainSensorSkip2 = '<g transform="translate(0,0)"><path   id="path2"   d="M 15 5.8496094 C 14.104678 5.8496094 13.912952 5.8611994 13.214844 5.9609375 C 11.946516 6.1421453 10.725634 6.5243764 9.5820312 7.0800781 L 11.283203 8.78125 C 12.062918 8.4811261 12.869781 8.2735315 13.703125 8.1699219 C 14.323876 8.0927729 15.290006 8.0694714 15.828125 8.1191406 C 17.269474 8.2522593 18.474363 8.5924445 19.691406 9.2089844 C 20.67514 9.7073399 21.471361 10.280372 22.279297 11.070312 C 22.469315 11.256108 22.60516 11.373334 22.65625 11.396484 C 22.761803 11.444474 22.936155 11.445087 23.042969 11.398438 C 23.154446 11.349697 24.055608 10.441836 24.085938 10.347656 C 24.098157 10.308406 24.105063 10.194361 24.101562 10.0625 C 24.096662 9.8836218 24.087821 9.8274816 24.056641 9.7675781 C 24.000024 9.6587637 23.418072 9.099267 22.984375 8.7363281 C 21.200546 7.2435141 19.064479 6.2865884 16.785156 5.9609375 C 16.087048 5.8612306 15.895328 5.8496094 15 5.8496094 z M 8.0625 7.9570312 C 7.7032104 8.1993889 7.351355 8.4553703 7.015625 8.7363281 C 6.5819283 9.099267 5.9999694 9.6587639 5.9433594 9.7675781 C 5.9121824 9.8274801 5.9029875 9.8836216 5.8984375 10.0625 C 5.8947975 10.194361 5.9014275 10.308406 5.9140625 10.347656 C 5.9425035 10.435976 6.8443948 11.34985 6.9511719 11.398438 C 7.0534716 11.444748 7.2400401 11.443584 7.34375 11.396484 C 7.394783 11.373324 7.5306853 11.256104 7.7207031 11.070312 C 8.3457208 10.459194 8.9666967 9.9798152 9.6699219 9.5625 L 8.0625 7.9570312 z M 15.279297 9.6191406 C 14.34242 9.5894845 13.400447 9.7173385 12.492188 9.9902344 L 14.431641 11.929688 C 14.619319 11.915045 14.79634 11.886719 15 11.886719 C 15.779637 11.886719 16.411825 11.988891 17.128906 12.232422 C 18.114934 12.56729 19.071509 13.173523 19.730469 13.880859 C 19.855737 14.015324 19.939921 14.090035 19.988281 14.109375 C 20.078431 14.145475 20.256194 14.146208 20.339844 14.111328 C 20.429624 14.073808 21.394032 13.105894 21.419922 13.027344 C 21.430722 12.993784 21.437094 12.872068 21.433594 12.748047 C 21.428694 12.569016 21.419902 12.515248 21.388672 12.455078 C 21.314452 12.312306 20.637725 11.684105 20.195312 11.347656 C 19.635649 10.922032 18.880399 10.497598 18.191406 10.222656 C 17.263131 9.8522298 16.2755 9.6506744 15.279297 9.6191406 z M 10.810547 10.705078 C 10.449852 10.904217 10.10299 11.120798 9.8046875 11.347656 C 9.3622803 11.684105 8.6855451 12.312305 8.6113281 12.455078 C 8.5800941 12.515248 8.5709462 12.569016 8.5664062 12.748047 C 8.5629962 12.871773 8.5690461 12.993944 8.5800781 13.027344 C 8.6040591 13.100014 9.5501104 14.054646 9.6464844 14.103516 C 9.7282854 14.144736 9.9145656 14.148195 10.011719 14.109375 C 10.060079 14.090035 10.144263 14.015324 10.269531 13.880859 C 10.843093 13.26519 11.644505 12.736921 12.492188 12.386719 L 10.810547 10.705078 z M 16.015625 13.513672 L 18.480469 15.978516 C 18.573889 15.876594 18.725061 15.724027 18.732422 15.701172 C 18.762692 15.607272 18.746061 15.232316 18.707031 15.134766 C 18.671911 15.046986 18.337212 14.715002 18.052734 14.484375 C 17.498253 14.03485 16.771247 13.68123 16.076172 13.523438 C 16.053349 13.518256 16.037427 13.518404 16.015625 13.513672 z M 13.697266 13.589844 C 13.073211 13.767358 12.441215 14.083704 11.947266 14.484375 C 11.695388 14.688695 11.341935 15.034404 11.296875 15.121094 C 11.264855 15.182724 11.257053 15.235707 11.251953 15.423828 C 11.246653 15.622167 11.251233 15.662726 11.283203 15.728516 C 11.331483 15.827786 12.221089 16.717349 12.322266 16.767578 C 12.419756 16.816138 12.608213 16.818144 12.710938 16.771484 C 12.754917 16.751504 12.834297 16.682415 12.904297 16.603516 C 12.969547 16.529956 13.097083 16.407168 13.189453 16.330078 C 13.971104 15.677754 15.021866 15.508337 15.949219 15.841797 L 13.697266 13.589844 z M 14.992188 17.664062 L 14.376953 18.285156 C 14.078378 18.574101 13.788169 18.906666 13.513672 19.287109 C 13.239176 19.667552 12.999136 20.077392 12.796875 20.515625 C 12.584983 20.953856 12.488281 21.333596 12.488281 21.65625 C 12.488281 22.099298 12.599833 22.514088 12.826172 22.894531 C 13.052512 23.274974 13.354976 23.582254 13.740234 23.808594 C 14.125494 24.034933 14.540419 24.150391 14.988281 24.150391 C 15.436145 24.150391 15.854067 24.034933 16.244141 23.808594 C 16.634215 23.582254 16.943584 23.274974 17.169922 22.894531 C 17.396263 22.509271 17.511719 22.099298 17.511719 21.65625 C 17.511719 21.367306 17.430269 21.024706 17.261719 20.625 C 17.093169 20.225295 16.890268 19.854679 16.654297 19.517578 C 16.442405 19.243081 16.191288 18.94075 15.902344 18.613281 C 15.6134 18.28581 15.107765 17.779641 14.992188 17.664062 z "   class="rainSensorSkip" /><path   d="m 6.5126951,5.6977078 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457547 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977078 Z"  class="skipStrikethrough" id="path869" /></g>'
     
