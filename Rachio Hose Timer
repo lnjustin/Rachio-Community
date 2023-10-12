@@ -162,7 +162,7 @@ def generateEvent(Map results) {
       //  valvePhotoEvent(results?.valveData?.photo.id)
 
         // process programs before state, so that program names will be available
-        valveProgramEvent(results?.programData.programs)
+        valveProgramEvent(results?.programData)
 
         valveStateEvent(results?.valveData?.valve.state)
         if(state?.isOnline == false) {

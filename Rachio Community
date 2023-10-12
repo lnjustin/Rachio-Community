@@ -46,13 +46,14 @@
  * V2.1.10: Added support for Gen 3 16 zone pro model
  * V2.2.11: icon fix
  * V2.2.12 Added support for 4 zone Gen 3 model
- * V3.0.0 Major rewrite to add support for Rachio Hose Timer; Improve logging customization; Differntiate schedules/programs in dashboard
+ * V3.0.0 Major rewrite to add support for Rachio Hose Timer; Allow user customization of logging level and polling period; Option to visually differntiate schedules/programs in dashboard
  */
 
 import groovy.json.*
 import java.text.SimpleDateFormat
 import groovy.json.JsonBuilder
 import groovy.transform.Field
+import java.math.*
 
 definition(
     name: "Rachio Community",
@@ -89,6 +90,7 @@ mappings {
 String appVer() { return "2.3.0" }
 
 @Field Integer zoneRunTimeDefault = 10
+@Field Integer pollingPeriodDefault = 15
 @Field String deviceLabelPrefixDefault = "Rachio - "
 
 def getZoneRunTimeDefaultSetting() {
@@ -270,7 +272,7 @@ def devicePage() {
             
              section(getInterface("header","Preferences")) {
                 href "authPage", title: "Manage Login", description: ""
-                
+                input(name: "pollingPeriod", title:"Polling Period (Minutes)", type: 'enum', required:false, multiple:false, defaultValue:"15", options:["1", "5", "10", "15", "30", "60"], width: 4)
                 if(settings?.controllers) {
                     input(name: "defaultZoneTime", title: "Default Zone Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
                     input(name: "pauseInStandby", title: "Disable Actions while in Standby?", type: "bool", defaultValue: true, multiple: false, submitOnChange: true,
@@ -279,10 +281,9 @@ def devicePage() {
                 if(settings?.baseStations) {
                   //  input(name: "defaultHoseTimerRunTime", title: "Default Hose Timer Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
                 }
-                input(name: "haveDeviceLabelPrefix", title: "Add Prefix to Device Labels?", type: "bool", required: true, defaultValue: true, submitOnChange: true)
+                 input(name: "haveDeviceLabelPrefix", title: "Add Prefix to Device Labels?", type: "bool", required: true, defaultValue: true, submitOnChange: true)
                 if (getHaveDeviceLabelPrefixSetting() == true) input(name: "deviceLabelPrefix", title: "Device Label Prefix", type: "text", defaultValue: "Rachio - ", required: false, submitOnChange: true)
-			    input(name: "debugLevel", title:"Debug Log Level", type: 'enum', required:false, multiple:false, defaultValue:"2", description: "2",
-					options:["5", "4", "3", "2", "1", "0"], width: 6)
+			    input(name: "debugLevel", title:"Debug Log Level", type: 'enum', required:false, multiple:false, defaultValue:"2", description: "2", options:["5", "4", "3", "2", "1", "0"], width: 4)
                 paragraph getInterface("note", "Higher levels send more information to IDE Live Logging. Level 2 or less is recommended for normal operations")
 			    if(settings.debugLevel == null){ app.updateSetting('debugLevel', "2") }
 		    }
@@ -296,16 +297,20 @@ def devicePage() {
     }
 }
 
-numPastDaysDashboardDefault = 2
-numFutureDaysDashboardDefault = 2
-showPrecipPercentDefault = true
-showPrecipAmountDefault = true
-showTempDefault = true
-colorSchemeSelectionDefault = "Black with Color"
-fontWeightDefault = "normal"
-globalScaleDefault = 100
-extraVerticalSpaceDefault = 0
-extraHorizontalSpaceDefault = 0
+def getPollingPeriod() {
+    return settings.pollingPeriod ?: pollingPeriodDefault
+}
+
+@Field static numPastDaysDashboardDefault = 2
+@Field static numFutureDaysDashboardDefault = 2
+@Field static showPrecipPercentDefault = true
+@Field static showPrecipAmountDefault = true
+@Field static showTempDefault = true
+@Field static colorSchemeSelectionDefault = "Black with Color"
+@Field static fontWeightDefault = "normal"
+@Field static globalScaleDefault = 100
+@Field static extraVerticalSpaceDefault = 0
+@Field static extraHorizontalSpaceDefault = 0
 
 def getRachioIconLocation() {
     return settings?.rachioIconLocation ?: "Side"
@@ -327,13 +332,25 @@ def dashboardSettingsPage(){
         }
         section(getSectionTitle("Configure Information on Dashboard")) {
             if(settings?.controllers && settings?.controllers.size() > 1) {
+                def controllerList = getControllerInputEnum(controllers)
                 def selectedControllerInputEnum = [:]
                 controllerList?.each { cont->
                     if(cont?.key in settings?.controllers) {
                         selectedControllerInputEnum[cont?.key] = cont?.value
                    }
                 }
-                input "controllerForWeather", "enum", title: "Select Controller For Dashboard Weather", description: "Tap to Select", required: true, multiple: false, options: selectedControllerInputEnum, submitOnChange: false
+                input "controllerForWeather", "enum", title: "Select Controller For All-Device Dashboard Weather", description: "Tap to Select", required: true, multiple: false, options: selectedControllerInputEnum, submitOnChange: false
+            }
+            else if (!settings?.controllers && settings?.baseStations && settings?.baseStations.size() > 1) {
+                def baseStationList = getBaseStationInputEnum(baseStations)
+                def selectedBaseStationInputEnum = [:]
+                baseStationList?.each { baseStation ->
+                    if(baseStation?.key in settings?.aseStations) {
+                        selectedBaseStationInputEnum[baseStation?.key] = baseStation?.value
+                   }
+                }
+                input "baseStationForWeather", "enum", title: "Select Base Station For All-Device Dashboard Weather", description: "Tap to Select", required: true, multiple: false, options: selectedBaseStationInputEnum, submitOnChange: false
+                
             }
             input "showPrecipPercent", "bool", title: "Show Precipitation %?", defaultValue: true, submitOnChange: false
             input "showPrecipAmount", "bool", title: "Show Precipitation Amount?", defaultValue: true, submitOnChange: false
@@ -342,7 +359,8 @@ def dashboardSettingsPage(){
         }
         section(getSectionTitle("Configure Handling of Multiple Schedules/Programs")) {
             paragraph getInterface("note", "Selecting to show only a single watering/skip icons means that separate watering/skip icons will not be shown for indvidual schedules/programs, but rather a single watering/skip icon will represent those schedules/programs collectively. If any schedule/program waters, a single watering icon will be shown. If all schedules/programs skip, a single skip icon will be shown.") 
-            input "singleRachioIcon", "bool", title: "Show Single Watering/Skip Icon?", defaultValue: true, submitOnChange: true
+            input "singleRachioIcon", "bool", title: "Show Single Watering/Skip Icon?", defaultValue: true, submitOnChange: true, width: 6
+            input "combineSkipIcons", "bool", title: "Combine Identical Skip Icons?", description: "Show a single, generic skip icon when all schedules/programs for a day are skipped for the same reason", defaultValue: false, submitOnChange: false, width: 6
              if (singleRachioIcon == false) {
                 input "colorScheme", "enum", title: "Select Color Scheme", options: ["Rachio Colors", "Custom Colors"], defaultValue: "Rachio Colors", submitOnChange: true, width: 4
                 if (settings.colorScheme == "Custom Colors") paragraph getInterface("note", "Specify Custom Colors as Hex Values: #FFFFFF")
@@ -808,13 +826,14 @@ def onAppTouch(event) {
 }
 
 def scheduler() {
-    // runEvery1Minute("heartbeat")
-    runEvery15Minutes("heartbeat")
-    //runEvery30Minutes("heartbeat")
+    def minsPollPeriod = getPollingPeriod()
+    def chronStr = "0 */" + minsPollPeriod + " * ? * *"
+    LOG("Scheduling heartbeat with chron string ${chronStr}", 3, "debug")
+    schedule(chronStr, heartbeat)
 }
 
 def heartbeat() {
-   LOG("heartbeat 15 minute keep alive poll()...", 5, "trace")
+   LOG("heartbeat keep alive poll()...", 5, "trace")
     poll()
 }
 
@@ -949,6 +968,7 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
 }
 
 void updateDeviceStates() {
+    LOG("updateDeviceStates()...", 5, "trace")
     def devMap = [:]
     devMap.controllers = [:]
     devMap.baseStations = [:]
@@ -984,6 +1004,9 @@ void updateDeviceStates() {
           //  results?.baseStations[baseStation?.id] = getBaseStationHardwareInfo(baseStation?.id)
             devMap.baseStations[baseStation?.id] = [:]
             devMap.baseStations[baseStation?.id]["serialNumber"] = baseStation?.serialNumber
+            devMap.baseStations[baseStation?.id]["latitude"] = baseStation?.address?.geoPoint?.latitude
+            devMap.baseStations[baseStation?.id]["longitude"] = baseStation?.address?.geoPoint?.longitude
+            devMap.baseStations[baseStation?.id]["timezone"] = baseStation?.address?.timezone
             def valveMap = [:]
             def valves = getHoseTimerValves(baseStation?.id)
             valves.each { valve ->
@@ -1417,7 +1440,7 @@ def pollChild(childDev, type) {
             String devLabel = childDev?.label
             Boolean pauseInStandby = settings?.pauseInStandby == false ? false : true
             def data = []
-            Map selectedDevices = atomicState?.selectedDevices ?: [:]
+            Map selectedDevices = atomicState?.selectedDevices
 
             if (type == "irrigationDevice") {
                 selectedDevices?.controllers.each { contDev ->
@@ -1861,14 +1884,14 @@ def getDeviceStatus(devId) {
     return _httpGet("device/${devId}")
 }
 
-def getChildById(id) {
+def getChildNameById(id) {
     def dev = getChildDevice(id)
     return dev ? dev?.displayName : null
 }
 
 def startZone(child, deviceId, zoneNum, mins) {
     def res = false
-    def ctrlLbl = getChildById(deviceId)
+    def ctrlLbl = getChildNameById(deviceId)
     LOG("Starting to Water on ${ctrlLbl ? "$ctrlLbl: " : ""}(ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})", 3, "debug")
     //child?.log("Starting to water on (ZoneName: ${child?.device.displayName} | ZoneNumber: ${zoneNum} | RunDuration: ${mins})...")
     def zoneId = child?.device?.deviceNetworkId
@@ -1885,7 +1908,7 @@ def runAllZones(child, deviceId, mins) {
     def res = false
     LOG("runAllZones(ZoneName: ${child?.device?.displayName}, Duration: ${mins})...", 5, "trace")
     //child?.log("runAllZones(ZoneName: ${child?.device?.displayName} | Duration: ${mins})")
-    def selectedDevices = atomicState?.selectedDevices ?: [:]
+    def selectedDevices = atomicState?.selectedDevices?.controllers
     if (deviceId && selectedDevices[deviceId] && selectedDevices[deviceId]?.zones && mins) {
         def zoneData = []
         def sortNum = 1
@@ -1901,7 +1924,6 @@ def runAllZones(child, deviceId, mins) {
     return res
 }
 
-// TO DO: update this method with the latest API that includes pause zone
 def pauseScheduleRun(child) {
     LOG("pauseScheduleRun...", 5, "trace")
     def schedData = getCurSchedule(atomicState?.deviceId)
@@ -1945,16 +1967,26 @@ def getScheduleRuleInfo(schedId) {
     return res
 }
 
-def getScheduleIdByName(name, scheduleType) {
-    LOG("getScheduleIdByName(${name}, ${scheduleType}...", 5, "trace")
+def getScheduleIdAndTypeByName(name, scheduleType) {
+    LOG("getScheduleIdAndTypeByName(${name}, ${scheduleType}...", 5, "trace")
     LOG("Using scheduleMap = ${state?.scheduleNameMap}", 3, "debug")
-    if (scheduleType == "fixed" || scheduleType == "Fixed" || scheduleType == "FIXED") return state?.scheduleNameMap[name]
-    else if (scheduleType == "flex" || scheduleType == "Flex" || scheduleType == "FLEX") return state?.flexScheduleNameMap[name]
-    else return null
+    def scheduleInfo = [:]
+    if (scheduleType == "fixed" || scheduleType == "Fixed" || scheduleType == "FIXED") return [id: state?.scheduleNameMap[name], type: "FIXED"]
+    else if (scheduleType == "flex" || scheduleType == "Flex" || scheduleType == "FLEX") return [id: state?.flexScheduleNameMap[name], type: "FIXED"]
+    else if (scheduleType == null || scheduleType == "") {
+        // handle API sometimes not reporting scheduleType
+        LOG("No schedule type specified for schedule ${name}", 3, "warn")
+        if (state?.scheduleNameMap[name] != null) return [id: state?.scheduleNameMap[name], type: "FIXED"]
+        else if (state?.flexScheduleNameMap[name] != null) return [id: state?.flexScheduleNameMap[name], type: "FLEX"]
+    }
+    else {
+        LOG("No schedule Id found for schedule ${name}", 3, "debug")
+        return null
+    }
 }
 
-def getScheduleIdFromSummary(summary, schedules) {
-    LOG("getScheduleIdFromSummary(${summary})", 5, "trace")
+def getScheduleInfoFromSummary(summary, schedules) {
+    LOG("getScheduleInfoFromSummary(${summary})", 5, "trace")
     def matches = []
     def sanitizedSummary = summary.toLowerCase()
     if (schedules && schedules.scheduleRules) {
@@ -1995,11 +2027,11 @@ def runAllValves(child, mins) {
     // child is baseStation
     def allTrue = true
     def anyFalse = false
-    def selectedDevices = atomicState?.selectedDevices?.baseStations ?: [:]
+    def selectedDevices = atomicState?.selectedDevices
     def baseStationId = child?.device?.deviceNetworkId
     if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves) {
         selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
-            def valveChild = getChildById(valve?.key)
+            def valveChild = getChildDevice(valve?.key)
             def valveRes = valveChild.startWatering(mins)
             if (valveRes == false) anyFalse = true
             else if (valveRes == true && allTrue == true) allTrue = true
@@ -2025,11 +2057,11 @@ def stopValve(child) {
 def stopAllValves(child) {
     // child is baseStation
     def res = false
-    def selectedDevices = atomicState?.selectedDevices?.baseStations ?: [:]
+    def selectedDevices = atomicState?.selectedDevices
     def baseStationId = child?.device?.deviceNetworkId
     if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves) {
         selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
-            def valveChild = getChildById(valve?.key)
+            def valveChild = getChildDevice(valve?.key)
             res = stopValve(valveChild, mins)
         }
     } else { LOG("stopAllValves Missing valveIds.. ${selectedDevices.baseStations[baseStationId]?.valves}", 1, "error") }
@@ -2039,11 +2071,11 @@ def stopAllValves(child) {
 def anyValveRunning(child) {
     // child is baseStation
     def isAnyRunning = false
-    def selectedDevices = atomicState?.selectedDevices?.baseStations ?: [:]
+    def selectedDevices = atomicState?.selectedDevices
     def baseStationId = child?.device?.deviceNetworkId
     if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves) {
         selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
-            def valveChild = getChildById(valve?.key)
+            def valveChild = getChildDevice(valve?.key)
             def isRunning = valveChild.isWatering()
             if (isRunning == true) isAnyRunning = true
         }
@@ -2169,11 +2201,6 @@ def getDashboardParameters(inputDate, today, yesterday, sevenDaysLater) {
     return [dayLabel: dayLabel, iconOffset: wateringIconOffset]
 }
 
-def getScheduleContentMap(startDate, endDate, devId, schedules) {
-        
-        
-}
-
 def buildDashboard() {
     Date startDate = getDashboardStartDate()
     Date endDate = getDashboardEndDate()
@@ -2221,8 +2248,51 @@ def buildDashboard() {
             contentMap[dateIndex].weatherIcon = getWeatherIcon(weather.weatherType)
         }
     }
-    else {
-        // TO DO: user does not have an irrigation controller. Must use external source for weather
+    else if (params.hoseTimerValveID || settings?.baseStations) {
+        // user does not have an irrigation controller. Must use external source for weather
+        def weatherBaseStationId = null
+        if (params.hoseTimerValveID) weatherBaseStationId = getBaseStationFromValve(params.hoseTimerValveID) // if controller-speciifc dashboard, use that controller for weather
+        else if (settings?.baseStationForWeather) weatherBaseStationId = settings?.baseStationForWeather  // otherwise, if the dashboard is global across base station, and there are multiple base stations selected, use whichever base station the user has specified in settings
+        else { weatherBaseStationId = settings?.baseStations?.first() } // default to first controller (may be only controller)
+        LOG("Using Base Station ${weatherBaseStationId} for dashboard weather", 3, "debug")
+
+        def selectedBaseStations = atomicState?.selectedDevices?.baseStations
+
+        def query = [:]
+        query.start_date = startDate.format('yyyy-MM-dd')
+        query.end_date = endDate.format('yyyy-MM-dd')
+        query.latitude = selectedBaseStations[weatherBaseStationId]["latitude"]
+        query.longitude = selectedBaseStations[weatherBaseStationId]["longitude"]
+        query.timezone = selectedBaseStations[weatherBaseStationId]["timezone"]
+        query.temperature_unit = getTemperatureScale() == "F" ? "fahrenheit" : "celsius"
+        query.precipitation_unit = "inch"
+        def queryStr = toQueryString(query)    
+        def uri = "https://api.open-meteo.com/v1/forecast?daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max&"
+        uri += queryStr
+        LOG("Getting Weather with URI: ${uri}", 3, "debug")
+        try {
+            httpGet(uri) { resp ->
+                
+                if(resp.status == 200) {
+                    LOG("Got Open-Meteo Weather response: ${resp?.data}", 3, "debug")
+                    def weatherIndex = 0
+                    for (date in startDate..endDate) {
+                        def dateIndex = getDateIndex(date)
+                        def weather = [precipPercent: resp?.data.daily.precipitation_probability_max[weatherIndex], precipAmount: resp?.data.daily.precipitation_sum[weatherIndex], highTemp: resp?.data.daily.temperature_2m_max[weatherIndex], lowTemp: resp?.data.daily.temperature_2m_min[weatherIndex], code: resp?.data.daily.weathercode[weatherIndex]]
+                        LOG("Got Open-Meteo Weather for day ${date}: ${weather}", 3, "debug")
+                        contentMap[dateIndex].precipPercent = (weather.precipPercent > 0) ? weather.precipPercent + "%" : ""
+                        contentMap[dateIndex].precipAmount = (weather.precipAmount > 0) ? weather.precipAmount.setScale(1, RoundingMode.HALF_UP) + "\"" : ""
+                        contentMap[dateIndex].highTemp = weather.highTemp.setScale(0, RoundingMode.HALF_UP)
+                        contentMap[dateIndex].lowTemp = weather.lowTemp.setScale(0, RoundingMode.HALF_UP)
+                        contentMap[dateIndex].weatherIcon = getWeatherIconFromOpenMeteo(weather.code)
+                        weatherIndex++
+                    }
+                } 
+            }
+        }
+        catch (ex) {
+            LOG("Exception getting or parsing Weather from Open-Meteo.Exception = ${ex.message}", 1, "error")
+        }
     }
 
     if (params.controllerID) {
@@ -2280,7 +2350,9 @@ def buildDashboard() {
                     def dateMap = getDateMap(date)
                     
                     def pastEvents = pastEventsData?.findAll { getDateMap(new Date(it?.eventDate)) == dateMap }
+                    LOG("Past Events for ${date} are: ${pastEvents}", 4, "debug")
                     def futureEvents = futureEventsData?.findAll { getDateMap(getDateObjectFromUTCDt(it?.timestamp)) == dateMap }
+                    LOG("Future Events for ${date} are: ${futureEvents}", 4, "debug")
                     contentMap[dateIndex].rachioIcons.addAll(getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules))
                 }                
 
@@ -2349,15 +2421,28 @@ def buildDashboard() {
         
         svg += '<g transform="translate(' + Integer.toString(columnWidth*i) + ', 10)">'
 
-        if (rachioIconLocation == "Top" && contentMap[dateIndex].rachioIcons != null) {
+        if ((settings.singleRachioIcon == false || (settings.singleRachioIcon == true && rachioIconLocation == "Top")) && contentMap[dateIndex].rachioIcons != null) {
+            def allSameSkipIcon = true
+            // prepare for the possibility to condense skip icons into a single skip icon if they are all the same
+            def seenType = null
+            contentMap[dateIndex].rachioIcons.each {
+                if (it.type == "watering") allSameSkipIcon = false 
+                if (seenType == null) seenType = it.type
+                else if (seenType != it.type) allSameSkipIcon = false 
+            }
+            
             def numIcons = contentMap[dateIndex].rachioIcons.size()
-            def iconWidth = 10
+            if (settings.combineSkipIcons == true && numIcons > 1 && allSameSkipIcon == true) {
+                // if all same skip icons, condense all skip icons into a single icon
+                contentMap[dateIndex].rachioIcons = [contentMap[dateIndex].rachioIcons.first()]
+                contentMap[dateIndex].rachioIcons.first().svg = contentMap[dateIndex].rachioIcons.first().originalSvg // revert to original svg so that no longer schedule/program specific
+            }
+            def iconWidth = 13
             def j = 1
             contentMap[dateIndex].rachioIcons.each { 
                 def hOffset = getRachioIconOffset(numIcons, j, iconWidth)
                 Double middle = halfColumnWidth - 12
                 Double translateH = middle + hOffset
-                LOG("Setting hOffset = ${hOffset} for iconIndex = ${j} out of ${numIcons} icons. Shifts ${hOffset} away from middle = ${middle}")
                 svg += '<g transform="translate(' + Double.toString(translateH) + ',-30) scale(.8)">'
                 svg += it.svg
                 svg += '</g>'
@@ -2367,7 +2452,7 @@ def buildDashboard() {
 
         svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="1.5" text-anchor="middle" class="dayText largeFontClass fontWeightClass">' + contentMap[dateIndex].parameters?.dayLabel + '</text>'
        
-        if (rachioIconLocation == "Side") {
+        if (settings.singleRachioIcon == true && rachioIconLocation == "Side") {
             svg += '<g transform="translate(' + Double.toString(halfColumnWidth + contentMap[dateIndex].parameters.iconOffset) + ',-15) scale(.8)">'
             contentMap[dateIndex].rachioIcons.each { 
                 svg += it.svg
@@ -2381,7 +2466,7 @@ def buildDashboard() {
         
         if (showTempSetting) {  // only show % for dates that are on or after today
             tempBaseY = 68
-            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString(tempBaseY + extraVerticalSpaceSetting) + '" text-anchor="middle" class="tempText largeFontClass fontWeightClass">' + contentMap[dateIndex].highTemp + ' | ' +  contentMap[dateIndex].lowTemp + '</text>'
+            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString(tempBaseY + extraVerticalSpaceSetting) + '" text-anchor="middle" class="tempText largeFontClass fontWeightClass">' + contentMap[dateIndex].lowTemp + ' | ' +  contentMap[dateIndex].highTemp + '</text>'
 
         }
 
@@ -2475,11 +2560,34 @@ def getWeatherIcon(weatherIconText) {
     return weatherIcon
 }
 
+def getWeatherIconFromOpenMeteo(weatherCode) {
+LOG("getWeatherIconFromOpenMeteo: ${weatherCode}", 5, "trace")
+    def weatherIcon = null
+    def iconPack = getIconPreference()
+    if (iconPack == "Filled") {
+        if (weatherCode == 77 || weatherCode == 71 || weatherCode == 85) { weatherIcon = iconPack == "Filled" ? chanceflurries : chanceflurries2 }
+        else if (weatherCode == 51 || weatherCode == 61 || weatherCode == 80 || weatherCode == 53) { weatherIcon = iconPack == "Filled" ? chancerain : chancerain2 }
+        else if (weatherCode == 56 || weatherCode == 66) { weatherIcon = iconPack == "Filled" ? chancesleet : chancesleet2 }
+        else if (weatherCode == 95) { weatherIcon = iconPack == "Filled" ? chancetstorms : chancetstorms }
+        else if (weatherCode == 1) { weatherIcon = iconPack == "Filled" ? clear : clear2 }
+        else if (weatherCode == 3) { weatherIcon = iconPack == "Filled" ? cloudy : cloudy2}
+        else if (weatherCode == 45 || weatherCode == 48) { weatherIcon = iconPack == "Filled" ? fog : fog2 }
+        else if (weatherCode == 55 || weatherCode == 63 || weatherCode == 65 || weaherCode == 81 || weatherCode == 82) { weatherIcon = iconPack == "Filled" ? rain : rain2 }
+        else if (weatherCode == 57 || weatherCode == 67) { weatherIcon = iconPack == "Filled" ? sleet : sleet2 }
+        else if (weatherCode == 73 || weatherCode == 75 || weatherCode == 86) { weatherIcon = iconPack == "Filled" ? snow : snow2 }
+        else if (weatherCode == 95 || weatherCode == 96 || weatherCode == 99) { weatherIcon = iconPack == "Filled" ? tstorms : tstorms2 }
+        else if (weatherCode == 2) { weatherIcon = iconPack == "Filled" ? partlycloudy :partlycloudly2 }
+    }
+    LOG("got Weather Icon: ${weatherIcon}", 5, "trace")
+    return weatherIcon
+}
+
 def getScheduleSpecificIcon(icon, scheduleId, scheduleSpecificColor, cssClass) {
     LOG("getScheduleSpecificIcon: ${icon}, ${scheduleId}, ${scheduleSpecificColor}, ${cssClass}", 5, "trace")
     def newIcon = [:]
     if (!scheduleId || !scheduleSpecificColor || !cssClass) return icon
     LOG("Inserting schedule specific color into ${icon}...", 3, "debug")
+    newIcon.originalSvg = icon.svg
     newIcon.svg = icon?.svg.replaceAll("class=\"${cssClass}\"", "class=\"${cssClass}${scheduleId}\"")
     def hexColor = null
     if (scheduleSpecificColor.contains("#")) hexColor = scheduleSpecificColor
@@ -2494,16 +2602,24 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
     def eventsList = []
     def iconPack = getIconPreference()
 
+    
     if (!pastEvents.isEmpty()) {
         for (event in pastEvents) {
             def foundEvent = [:]
             def icon = [:]
 
+            // TO DO: Handle incomplete API data when sometimes doesn't include subtype. Need to try to insert subtype based on parsing summary? (Although below example may have just been the event reported when the skip was set, not when the skip occurred)
+            // Example: [ category: SCHEDULE, deviceId: XXXXXX, eventDate: 1696911477000, hidden: false, id: XXXXX, summary: SingleRunwasscheduledfor10/10at11: 00AM(EDT)butwillbemanuallyskipped. ]
+
+            // TO DO: Handle incomplete API data that includes subtype but doesn't indicate even in summary which schedule is involved
+            // Example: [ category: SCHEDULE, deviceId: 8a0fd8ce-6c50-4572-8da5-68d2204b7e2b, eventDate: 1696941115000, hidden: false, id: a468f570-2d5a-366e-8421-d6c7e234040f, subType: ZONE_SKIPPED, summary: Thisschedulewasmanuallyskipped., type: USER_ACTION ]
+
+            // TO DO: Handle multiple events being reported for the same schedule, e.g., skip and disable skip, may need to parse date to determine which one is the latest event
             def scheduleSpecificColor = null
             def schedId = null
             if (event.subType == "SCHEDULE_STARTED" || event.subType == "WEATHER_INTELLIGENCE_SKIP" || event.subType == "WEATHER_INTELLIGENCE_CLIMATE_SKIP" || event.subType == "MANUAL_SKIP" || event.subType == "ZONE_SKIPPED") {
                 if (settings.singleRachioIcon == false && event.summary) {
-                    def schedule = getScheduleIdFromSummary(event.summary, schedules)
+                    def schedule = getScheduleInfoFromSummary(event.summary, schedules)
                     schedId = schedule?.id
                     scheduleSpecificColor = settings["colorFor${schedule?.type}Schedule${schedId}"]
                     LOG("Found Specific Color = ${scheduleSpecificColor} for schedule ${schedule?.name} with id = ${schedId}", 3, "debug")
@@ -2514,12 +2630,14 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
                     foundEvent = [eventType : "WATER", eventSubType : null, eventDescription: event.summary]
                     icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
                     if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropWatering") }
+                    icon.type = "watering"
                     break
                 case "WEATHER_INTELLIGENCE_SKIP":
                     foundEvent = [eventType : "SKIP", eventSubType : "RAIN_PREDICTED", eventDescription: event.summary]
                     if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
                         icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
                         if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                        icon.type = "rainPredictedSkip"
                     }
                     break
                 case "WEATHER_INTELLIGENCE_CLIMATE_SKIP":
@@ -2527,6 +2645,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
                     if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
                         icon.svg = iconPack == "Filled" ? saturationSkip : saturationSkip2 
                         if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                        icon.type = "rainObservedSkip"
                     }
                     break
                 case "MANUAL_SKIP":
@@ -2534,6 +2653,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
                     if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
                         icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
                         if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropSkip") }
+                        icon.type = "manualSkip"
                     }
                     break
                 case "ZONE_SKIPPED":
@@ -2541,6 +2661,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
                     if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
                         icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2 
                         if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropSkip") }
+                        icon.type = "manualSkip"
                     }
                     break
             }
@@ -2563,10 +2684,11 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
             def scheduleSpecificColor = null
             def schedId = null
             if (event.type == "FUTURE_FEED_SCHEDULE_EVENT" || event.type == "RAIN_FUTURE_FEED_SKIP_EVENT" || event.type == "WIND_FUTURE_FEED_SKIP_EVENT" || event.type == "FREEZE_FUTURE_FEED_SKIP_EVENT" || event.type == "CLIMATE_FUTURE_FEED_SKIP_EVENT" || event.type == "MANUAL_FUTURE_FEED_SKIP_EVENT") {
-                if (settings.singleRachioIcon == false && (event.scheduleType == "FLEX" || event.scheduleType == "FIXED")) {
-                    schedId = getScheduleIdByName(event.scheduleName, event.scheduleType)
-                    scheduleSpecificColor = settings["colorFor${event.scheduleType}Schedule${schedId}"]
-                    LOG("Found Specific Color = ${scheduleSpecificColor} for schedule ${event.scheduleName} with schedId = ${schedId}", 3, "debug")
+                if (settings.singleRachioIcon == false) {
+                    scheduleInfo = getScheduleIdAndTypeByName(event.scheduleName, event.scheduleType)
+                    schedId = scheduleInfo.id
+                    scheduleSpecificColor = settings["colorFor${scheduleInfo.type}Schedule${scheduleInfo.id}"]
+                    LOG("Found Specific Color = ${scheduleSpecificColor} for schedule ${event.scheduleName} with schedId = ${scheduleInfo.id}", 3, "debug")
                 }
             }
             LOG("Found Event ${event.type}", 3, "debug")
@@ -2576,6 +2698,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
                     if (rainSensorState == false) { 
                         icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2 
                         if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropWatering") }
+                        icon.type = "watering"
                     }
                     else if (rainSensorState == true) { icon.svg = iconPack == "Filled" ? rainSensorSkip : rainSensorSkip2 }
                     break
@@ -2584,6 +2707,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
                     if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
                         icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
                         if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                        icon.type = "rainPredictedSkip"
                     }
                     break
                 case "WIND_FUTURE_FEED_SKIP_EVENT":
@@ -2591,6 +2715,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
                     if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
                         icon.svg = iconPack == "Filled" ? windSkip : windSkip2 
                         if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                        icon.type = "windSkip"
                     }
                     break
                 case "FREEZE_FUTURE_FEED_SKIP_EVENT":
@@ -2598,13 +2723,15 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
                     if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
                         icon.svg = iconPack == "Filled" ? freezeSkip : freezeSkip2 
                         if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                        icon.type = "freezeSkip"
                     }
                     break
                 case "CLIMATE_FUTURE_FEED_SKIP_EVENT":
                     foundEvent = [eventType : "SKIP", eventSubType : "SOIL_SATURATED", eventDescription: event.summary]
                     if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
-                        icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2 
+                        icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2
                         if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                        icon.type = "rainObservedSkip"
                     }
                     break
                 case "MANUAL_FUTURE_FEED_SKIP_EVENT":
@@ -2612,6 +2739,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
                     if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
                         icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2 
                         if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropSkip") }
+                        icon.type = "manualSkip" 
                     }
                     break
             }
@@ -2631,16 +2759,16 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
 }
 
 def getHoseTimerIcons(baseStationDayViews, dateMap, valveIdFilter = null) {
+    LOG("getHoseTimerIcons(${baseStationDayViews}, {dateMap}, {valveIdFilter})....", 5, "trace")
     def hoseTimerIcons = []
     def iconPack = getIconPreference()
-
-    LOG("Parsing baseStationDayViews = ${baseStationDayViews}", 3, "debug")
 
     if (!baseStationDayViews.isEmpty()) {
         baseStationDayViews.each { day ->
             if (day.date == dateMap) {
                 day.valveProgramRunSummaries?.each { programAction ->
                     programAction?.valveRunSummaries?.each { valveRun ->
+                        LOG("Processing Valve Run for program id = ${programAction.programId}", 3, "debug")
                         if (valveIdFilter == null || valveRun.valveId == valveIdFilter) {
                             def icon = [:]
                             
@@ -2653,23 +2781,28 @@ def getHoseTimerIcons(baseStationDayViews, dateMap, valveIdFilter = null) {
                             }
                             if (valveRun.skip) {
                                 if (valveRun.skip?.containsKey("manualOverrideTrigger")) { // manual skip
-                                    icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
-                                    if (programSpecificColor) { icon = getScheduleSpecificIcon(icon, programId, programSpecificColor, "rainDropSkip") }
+                                   icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
+                                  // if (programSpecificColor) { icon = getScheduleSpecificIcon(icon, programId, programSpecificColor, "skipStrikethrough") }
+                                   if (programSpecificColor) { icon = getScheduleSpecificIcon(icon, programId, programSpecificColor, "rainDropSkip") }
+                                   icon.type = "manualSkip"
                                 }
                                 else if (valveRun.skip?.rainOverrideTrigger) {
                                     if (valveRun.skip?.rainOverrideTrigger.containsKey("predictedPrecipMm")) {
                                         icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
                                         if (programSpecificColor) { icon = getScheduleSpecificIcon(icon, programId, programSpecificColor, "skipStrikethrough") }
+                                        icon.type = "rainPredictedSkip"
                                     }
                                     else if (valveRun.skip?.rainOverrideTrigger.containsKey("observedPrecipMm")) {
-                                        icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2 
+                                        icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2
                                         if (programSpecificColor) { icon = getScheduleSpecificIcon(icon, programId, programSpecificColor, "skipStrikethrough") }
+                                        icon.type = "rainObservedSkip"
                                     }
                                 }
                             }
                             else { // absence of skip element indicates run that has happened or is still planned
                                 icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2 
                                 if (programSpecificColor) { icon = getScheduleSpecificIcon(icon, programId, programSpecificColor, "rainDropWatering") }
+                                icon.type = "watering"
                             }
 
                             if (!icon?.isEmpty()) {
@@ -2686,14 +2819,26 @@ def getHoseTimerIcons(baseStationDayViews, dateMap, valveIdFilter = null) {
                             def icon = [:]
 
                             if (valveRun.skip) {
-                                if (valveRun.skip?.containsKey("manualOverrideTrigger")) icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
+                                if (valveRun.skip?.containsKey("manualOverrideTrigger")) {
+                                    icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
+                                    icon.type = "manualSkip"
+                                }
                                 else if (valveRun.skip?.rainOverrideTrigger) {
-                                    if (valveRun.skip?.rainOverrideTrigger.containsKey("predictedPrecipMm")) icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
-                                    else if (valveRun.skip?.rainOverrideTrigger.containsKey("observedPrecipMm")) icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2
+                                    if (valveRun.skip?.rainOverrideTrigger.containsKey("predictedPrecipMm")) {
+                                        icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
+                                        icon.type = "rainPredictedSkip"
+                                    }
+                                    else if (valveRun.skip?.rainOverrideTrigger.containsKey("observedPrecipMm")) {
+                                        icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2
+                                        icon.type = "rainObservedSkip"
+                                    }
                                 }
                             }
-                            else icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
-                            // absence of skip element indicates run that has happened or is still planned
+                            else {
+                                icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
+                                icon.type = "watering"
+                                // absence of skip element indicates run that has happened or is still planned
+                            }
 
                             if (!icon?.isEmpty() && (hoseTimerIcons.size() == 0 || !settings?.singleRachioIcon)) hoseTimerIcons.add(icon)
                         }
@@ -2705,14 +2850,26 @@ def getHoseTimerIcons(baseStationDayViews, dateMap, valveIdFilter = null) {
                             def icon = [:]
 
                             if (valveRun.skip) {
-                                if (valveRun.skip?.containsKey("manualOverrideTrigger")) icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
+                                if (valveRun.skip?.containsKey("manualOverrideTrigger")){
+                                    icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
+                                    icon.type = "manualSkip"
+                                }
                                 else if (valveRun.skip?.rainOverrideTrigger) {
-                                    if (valveRun.skip?.rainOverrideTrigger.containsKey("predictedPrecipMm")) icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
-                                    else if (valveRun.skip?.rainOverrideTrigger.containsKey("observedPrecipMm")) icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2
+                                    if (valveRun.skip?.rainOverrideTrigger.containsKey("predictedPrecipMm")) {
+                                        icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
+                                        icon.type = "rainPredictedSkip"
+                                    }
+                                    else if (valveRun.skip?.rainOverrideTrigger.containsKey("observedPrecipMm")) {
+                                        icon.svg= iconPack == "Filled" ? saturationSkip : saturationSkip2
+                                        icon.type = "rainObservedSkip"
+                                    }
                                 }
                             }
-                            else icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
-                            // absence of skip element indicates run that has happened or is still planned
+                            else {
+                                icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
+                                icon.type = "watering"
+                                // absence of skip element indicates run that has happened or is still planned
+                            }
 
                             if (!icon?.isEmpty() && (hoseTimerIcons.size() == 0 || !settings?.singleRachioIcon)) hoseTimerIcons.add(icon)
                         }
@@ -2889,7 +3046,7 @@ partlycloudy = '<g transform="scale(2) translate(0,0)" id="mostlysunny"><path st
 
 partlysunny = '<g transform="scale(2) translate(0,3)" id="mostlycloudy"><path id="path2" d="m 17.769532,1.5390582 c -0.24,0 -0.439375,0.089766 -0.609375,0.2597656 -0.17,0.17 -0.25,0.3696094 -0.25,0.5996094 v 2.0410154 c 0,0.23 0.09977,0.4300782 0.259766,0.5800784 0.16,0.1499998 0.369609,0.2304686 0.599609,0.2304686 0.23,0 0.429609,-0.070469 0.599609,-0.2304686 0.17,-0.16 0.25,-0.3500784 0.25,-0.5800784 v -2.050781 c 0,-0.23 -0.08,-0.4296094 -0.25,-0.5996094 -0.17,-0.17 -0.359609,-0.25 -0.599609,-0.25 z m -6.90039,2.8496093 c -0.23,0 -0.438672,0.08 -0.638672,0.2499999 -0.15,0.1800002 -0.230469,0.3813282 -0.230469,0.6113282 0,0.2399999 0.08023,0.449375 0.240235,0.6093749 l 1.458984,1.4296882 c 0.15,0.16 0.349844,0.240234 0.589844,0.240234 0.24,0 0.439609,-0.08023 0.599609,-0.240234 0.16,-0.1600008 0.240234,-0.3596101 0.240234,-0.5996101 0,-0.24 -0.08023,-0.4398436 -0.240234,-0.5898436 L 11.458985,4.628902 c -0.17,-0.1600002 -0.369843,-0.2402345 -0.589843,-0.2402345 z m 13.800781,0.00977 c -0.22,0 -0.419844,0.080234 -0.589844,0.2402345 l -1.419922,1.4707031 c -0.15,0.14 -0.230469,0.3398436 -0.230469,0.5898436 0,0.2399999 0.08047,0.4396095 0.230469,0.59961 0.15,0.16 0.328594,0.240234 0.558594,0.240234 0.22,0 0.421562,-0.08023 0.601562,-0.240234 l 1.458985,-1.4296881 c 0.16,-0.16 0.240234,-0.3691405 0.240234,-0.6191405 0,-0.23 -0.08,-0.4315625 -0.25,-0.6015624 -0.16,-0.1700002 -0.359609,-0.2500002 -0.599609,-0.2500002 z m -6.910157,2.5507812 c -0.93,0 -1.789609,0.229219 -2.599609,0.699219 -0.81,0.47 -1.440156,1.110156 -1.910156,1.910156 -0.47,0.8000003 -0.701172,1.6696103 -0.701172,2.5996103 0,0.94 0.241406,1.811093 0.691406,2.621092 0.47,0.8 1.098438,1.43039 1.898438,1.900391 0.8,0.469999 1.671328,0.69922 2.611328,0.69922 0.94,0 1.809375,-0.229221 2.609375,-0.69922 0.8,-0.47 1.43039,-1.100391 1.90039,-1.900391 0.47,-0.8 0.699219,-1.669375 0.699219,-2.609375 0,-0.699999 -0.140156,-1.381483 -0.410156,-2.021483 -0.27,-0.6400003 -0.639375,-1.1901563 -1.109375,-1.6601563 -0.46,-0.47 -1.020156,-0.839141 -1.660156,-1.119141 -0.65,-0.2800002 -1.319532,-0.419922 -2.019532,-0.419922 z M 7.9902695,11.298829 c -0.22,0 -0.4315625,0.08023 -0.6015625,0.240233 -0.17,0.17 -0.25,0.379142 -0.25,0.619142 0,0.24 0.091719,0.441328 0.2617188,0.611328 0.17,0.17 0.3696093,0.25 0.5996094,0.25 h 2.0390628 c 0.23,0 0.430078,-0.08 0.580078,-0.25 0.15,-0.17 0.220703,-0.371328 0.220703,-0.611328 0,-0.24 -0.08047,-0.439375 -0.230469,-0.609375 -0.16,-0.17 -0.350078,-0.25 -0.580078,-0.25 z m 17.5097655,0 c -0.22,0 -0.410313,0.08023 -0.570313,0.240233 -0.16,0.18 -0.240234,0.379142 -0.240234,0.619142 0,0.24 0.08047,0.431562 0.230469,0.601562 0.15,0.17 0.350078,0.25 0.580078,0.25 h 2.019531 c 0.23,0 0.429609,-0.08 0.599609,-0.25 0.17,-0.17 0.259766,-0.371563 0.259766,-0.601562 0,-0.23 -0.08977,-0.42961 -0.259766,-0.59961 -0.17,-0.17 -0.369609,-0.259765 -0.599609,-0.259765 z m -13.210971,5.519527 c -0.24,0 -0.439844,0.07047 -0.589844,0.230467 l -1.46875,1.429689 c -0.15,0.18 -0.230469,0.381327 -0.230469,0.611328 0,0.229999 0.08023,0.429843 0.240235,0.589844 0.409999,0.32 0.818515,0.32 1.228515,0 l 1.419922,-1.419922 c 0.16,-0.18 0.240234,-0.400627 0.240234,-0.640625 0,-0.229999 -0.08023,-0.420311 -0.240234,-0.570314 -0.16,-0.149998 -0.359609,-0.230467 -0.599609,-0.230467 z m 10.929687,0.0098 c -0.22,3e-6 -0.408594,0.07047 -0.558594,0.230469 -0.15,0.140002 -0.230469,0.330547 -0.230469,0.560547 0,0.260001 0.08047,0.470393 0.230469,0.650393 l 1.419922,1.41992 c 0.4,0.31 0.799219,0.31 1.199219,0 0.16,-0.16 0.240234,-0.359844 0.240234,-0.589844 0,-0.23 -0.08023,-0.441328 -0.240234,-0.611328 l -1.458985,-1.429688 c -0.16,-0.15 -0.361562,-0.230469 -0.601562,-0.230469 z" class="light" style="stroke-width:0.999998" /><path class="cloud" d="m 11.179688,8.0292969 c -1.410001,0 -2.6504693,0.4405468 -3.7304692,1.3105469 -1.0800001,0.8700002 -1.7800782,1.9896092 -2.0800782,3.3496092 -1.12,0.26 -2.0282812,0.830469 -2.7382812,1.730469 -0.71,0.9 -1.0703125,1.920313 -1.0703125,3.070313 0,0.9 0.2201562,1.730234 0.6601562,2.490234 0.44,0.76 1.0388282,1.358828 1.7988281,1.798828 0.76,0.44 1.5807032,0.660156 2.4707032,0.660156 H 17.320312 c 0.890002,0 1.720469,-0.220156 2.480469,-0.660156 0.76,-0.44 1.368594,-1.038828 1.808594,-1.798828 0.44,-0.76 0.669922,-1.590234 0.669922,-2.490234 0,-0.595125 -0.129762,-1.19868 -0.357422,-1.802735 -0.289942,-0.712862 -0.55802,-1.154541 -1.279297,-1.796875 -0.936402,-0.857226 -2.037123,-1.300781 -3.322266,-1.300781 H 17 c -0.180857,-0.788537 -0.529944,-1.518006 -1.039062,-2.191406 -0.02329,-0.03076 -0.04472,-0.06579 -0.06836,-0.0957 -0.0015,-0.0019 -0.0024,-0.004 -0.0039,-0.0059 C 15.773745,10.150873 15.638669,10.013544 15.507812,9.8730469 14.83776,9.1898352 14.059093,8.7538463 13.222656,8.3828126 12.609999,8.1490155 11.930497,8.0292969 11.179688,8.0292969 Z" id="path849" /></g>'
 
-@Field static sprinklerWatering = '<g transform="translate(0,0)"><path   d="m 9.785,16.555 c 0,0.92 0.23,1.78 0.7,2.57 0.47,0.79 1.1,1.43 1.9,1.9 0.8,0.47 1.66,0.71 2.59,0.71 0.93,0 1.8,-0.24 2.61,-0.71 0.81,-0.47 1.45,-1.11 1.92,-1.9 0.47,-0.8 0.71,-1.65 0.71,-2.57 0,-0.6 -0.17,-1.31 -0.52,-2.14 -0.35,-0.83 -0.77,-1.6 -1.26,-2.3 -0.44,-0.57 -0.96,-1.2 -1.56,-1.88 -0.6,-0.68 -1.65,-1.73 -1.89,-1.97 l -1.28,1.29 c -0.62,0.6 -1.22,1.29 -1.79,2.08 -0.57,0.79 -1.07,1.64 -1.49,2.55 -0.44,0.91 -0.64,1.7 -0.64,2.37 z"   id="path2"   class="rainDropWatering" /></g>'
+sprinklerWatering = '<g transform="translate(0,0)"><path   d="m 9.785,16.555 c 0,0.92 0.23,1.78 0.7,2.57 0.47,0.79 1.1,1.43 1.9,1.9 0.8,0.47 1.66,0.71 2.59,0.71 0.93,0 1.8,-0.24 2.61,-0.71 0.81,-0.47 1.45,-1.11 1.92,-1.9 0.47,-0.8 0.71,-1.65 0.71,-2.57 0,-0.6 -0.17,-1.31 -0.52,-2.14 -0.35,-0.83 -0.77,-1.6 -1.26,-2.3 -0.44,-0.57 -0.96,-1.2 -1.56,-1.88 -0.6,-0.68 -1.65,-1.73 -1.89,-1.97 l -1.28,1.29 c -0.62,0.6 -1.22,1.29 -1.79,2.08 -0.57,0.79 -1.07,1.64 -1.49,2.55 -0.44,0.91 -0.64,1.7 -0.64,2.37 z"   id="path2"   class="rainDropWatering" /></g>'
 
 saturationSkip = '<g transform="translate(0,0)"><path   id="path2"   d="M 12.724609 7.4394531 L 12.380859 7.8242188 C 12.1204 8.1258033 11.887267 8.4540556 11.681641 8.8378906 C 11.634545 8.9226625 11.611082 8.9934112 11.574219 9.0722656 L 13.427734 10.925781 C 13.529105 10.869077 13.624622 10.803113 13.710938 10.716797 C 13.957688 10.456338 14.095703 10.139657 14.095703 9.7695312 C 14.095703 9.1800712 13.643071 8.3990405 12.724609 7.4394531 z M 18.400391 10.099609 L 17.892578 10.689453 C 17.508744 11.114413 17.166855 11.594207 16.851562 12.15625 C 16.536269 12.718294 16.371094 13.17089 16.371094 13.541016 C 16.371094 13.664728 16.383601 13.783612 16.402344 13.900391 L 18.068359 15.566406 C 18.176056 15.58282 18.284983 15.595703 18.400391 15.595703 C 18.962434 15.595703 19.455973 15.389731 19.853516 14.992188 C 20.25106 14.580936 20.455078 14.10306 20.455078 13.541016 C 20.455078 13.184598 20.278256 12.732002 19.935547 12.15625 C 19.592837 11.580499 19.248886 11.100595 18.933594 10.730469 C 18.851344 10.634509 18.742516 10.496495 18.619141 10.345703 C 18.495765 10.194911 18.414099 10.113318 18.400391 10.099609 z M 12.875 13.964844 L 12.533203 14.294922 C 11.998576 14.802132 11.394367 15.499616 10.722656 16.376953 C 10.366238 16.843038 10.092381 17.336504 9.8730469 17.857422 C 9.6537129 18.378341 9.5449219 18.830973 9.5449219 19.228516 C 9.5449219 20.174395 9.8596122 20.955314 10.503906 21.599609 C 11.1482 22.243903 11.94283 22.560547 12.875 22.560547 C 13.80717 22.560547 14.588127 22.230231 15.232422 21.585938 C 15.876716 20.941644 16.179688 20.146978 16.179688 19.228516 C 16.179688 18.830973 16.068943 18.378377 15.849609 17.84375 C 15.630275 17.322831 15.356345 16.829293 15.027344 16.390625 C 14.396758 15.554414 13.808174 14.856966 13.232422 14.294922 C 13.177592 14.253802 13.053209 14.143053 12.875 13.964844 z "   class="saturatedSoil" /><path   d="m 6.5126951,5.6977076 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457545 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977076 Z"   id="path869"   class="skipStrikethrough" /></g>'
 
@@ -2943,7 +3100,7 @@ partlycloudy2 = '<g transform="scale(2) translate(0,0)" id="partlycloudy"><path 
 
 partlysunny2 = '<g transform="scale(2) translate(0,3)" id="partlysunny"><path   id="path855"   d="m 17.759766,1.5 c -0.24,0 -0.429844,0.080469 -0.589844,0.2304687 -0.16,0.15 -0.230469,0.3498439 -0.230469,0.5898438 v 2.0488281 c 0,0.26 0.08047,0.4610937 0.230469,0.6210937 0.15,0.16 0.349844,0.2304688 0.589844,0.2304688 0.26,0 0.461093,-0.080469 0.621093,-0.2304688 0.16,-0.16 0.228516,-0.3610937 0.228516,-0.6210937 V 2.3203125 c 0,-0.2399999 -0.08023,-0.4298438 -0.240234,-0.5898438 C 18.209141,1.5704687 18.009766,1.5 17.759766,1.5 Z m -6.919922,2.8691406 c -0.24,0 -0.449141,0.08 -0.619141,0.25 -0.17,0.1600001 -0.2499999,0.3615625 -0.2499999,0.6015625 0,0.24 0.080235,0.4489062 0.2402349,0.6289062 l 0.658203,0.640625 c 0.25,0.19 0.460625,0.27 0.640625,0.25 0.21,0 0.390781,-0.089766 0.550781,-0.2597656 0.16,-0.17 0.240234,-0.3810937 0.240234,-0.6210937 0,-0.2400001 -0.09172,-0.4398437 -0.261719,-0.5898438 L 11.449219,4.609375 c -0.18,-0.1600001 -0.379375,-0.2402344 -0.609375,-0.2402344 z m 13.890625,0 c -0.24,0 -0.430078,0.080234 -0.580078,0.2402344 l -1.470703,1.4296875 c -0.150001,0.1899999 -0.21875,0.3910937 -0.21875,0.6210937 0,0.26 0.06875,0.4591406 0.21875,0.6191406 0.21,0.16 0.421093,0.2402344 0.621093,0.2402344 0.18,0 0.379844,-0.080234 0.589844,-0.2402344 l 1.429687,-1.4296875 c 0.160002,-0.18 0.240235,-0.390625 0.240235,-0.640625 0,-0.2399999 -0.08023,-0.4396093 -0.240235,-0.5996093 -0.16,-0.1600001 -0.359843,-0.2402344 -0.589843,-0.2402344 z m -6.970703,2.5800781 c -1.145923,0 -2.176855,0.3514587 -3.09961,1.046875 0.504737,0.2887054 0.998601,0.6326792 1.455078,1.0742189 0.499484,-0.2713159 1.044735,-0.4199219 1.644532,-0.4199219 0.99,0 1.829531,0.3392967 2.519531,1.0292969 0.69,0.6899994 1.041015,1.5197654 1.041015,2.5097654 0,0.288395 -0.03972,0.5769 -0.113281,0.863282 0.600233,0.52394 0.970428,0.98951 1.253907,1.484375 C 22.810508,13.832335 23,13.050775 23,12.189453 c 0,-0.71 -0.140156,-1.389062 -0.410156,-2.039062 -0.27,-0.6500003 -0.649141,-1.1999222 -1.119141,-1.6699222 -0.47,-0.47 -1.019922,-0.8510938 -1.669922,-1.1210938 -0.65,-0.2800001 -1.331015,-0.4101563 -2.041015,-0.4101563 z m 7.830078,4.3906253 c -0.24,0 -0.439375,0.08 -0.609375,0.25 -0.18,0.17 -0.259766,0.369609 -0.259766,0.599609 0,0.23 0.08977,0.420078 0.259766,0.580079 0.16,0.16 0.369375,0.240234 0.609375,0.240234 h 2.041015 c 0.23,0 0.420077,-0.08047 0.580079,-0.230469 0.159998,-0.15 0.228515,-0.349844 0.228515,-0.589844 0,-0.24 -0.07851,-0.439609 -0.228515,-0.599609 -0.150001,-0.16 -0.350079,-0.25 -0.580079,-0.25 z m -1.480469,6.320312 c -0.24,0 -0.439609,0.08023 -0.599609,0.240235 C 23.339766,18.060391 23.25,18.26 23.25,18.5 c 0,0.24 0.08,0.448907 0.25,0.628906 l 0.650391,0.63086 c 0.15,0.16 0.340078,0.240234 0.580078,0.240234 0.24,0 0.439609,-0.08 0.599609,-0.25 0.16,-0.17 0.240235,-0.371094 0.240234,-0.621094 0,-0.219999 -0.08023,-0.418126 -0.240234,-0.578124 l -0.65039,-0.650391 c -0.160002,-0.16 -0.350313,-0.240234 -0.570313,-0.240235 z"   class="light" /><path   id="path849"   d="m 11.179688,8.0292969 c -1.410001,0 -2.6504693,0.4405468 -3.7304692,1.3105469 -1.0800001,0.8700002 -1.7800782,1.9896092 -2.0800782,3.3496092 -1.12,0.26 -2.0282812,0.830469 -2.7382812,1.730469 -0.71,0.9 -1.0703125,1.920313 -1.0703125,3.070313 0,0.9 0.2201562,1.730234 0.6601562,2.490234 0.44,0.76 1.0388282,1.358828 1.7988281,1.798828 0.76,0.44 1.5807032,0.660156 2.4707032,0.660156 H 17.320312 c 0.890002,0 1.720469,-0.220156 2.480469,-0.660156 0.76,-0.44 1.368594,-1.038828 1.808594,-1.798828 0.44,-0.76 0.669922,-1.590234 0.669922,-2.490234 0,-0.595125 -0.129762,-1.19868 -0.357422,-1.802735 -0.289942,-0.712862 -0.55802,-1.154541 -1.279297,-1.796875 -0.936402,-0.857226 -2.037123,-1.300781 -3.322266,-1.300781 H 17 c -0.180857,-0.788537 -0.529944,-1.518006 -1.039062,-2.191406 -0.02329,-0.03076 -0.04472,-0.06579 -0.06836,-0.0957 -0.0015,-0.0019 -0.0024,-0.004 -0.0039,-0.0059 C 15.773745,10.150873 15.638669,10.013544 15.507812,9.8730469 14.83776,9.1898352 14.059093,8.7538463 13.222656,8.3828126 12.609999,8.1490155 11.930497,8.0292969 11.179688,8.0292969 Z m 0.0098,1.6796875 c 1.1,0 2.061094,0.3715626 2.871094,1.1015626 0.82,0.73 1.269141,1.628983 1.369141,2.708985 L 15.5,14.09961 c 0.02,0.11 0.09094,0.169921 0.210938,0.169922 h 1.609374 c 0.88,0 1.639297,0.320937 2.279297,0.960937 0.64,0.64 0.960938,1.389531 0.960938,2.269531 0,0.91 -0.321172,1.680313 -0.951172,2.320313 -0.63,0.64 -1.399297,0.958984 -2.279297,0.958984 H 6.4902344 c -0.88,0 -1.6295313,-0.31875 -2.2695313,-0.96875 -0.63,-0.65 -0.9511719,-1.420312 -0.9511719,-2.320312 0,-0.84 0.2798438,-1.559922 0.8398438,-2.169922 0.56,-0.61 1.2615625,-0.960547 2.1015625,-1.060547 l 0.5,-0.0293 c 0.12,0 0.1894531,-0.05969 0.1894531,-0.179687 l 0.070312,-0.541016 c 0.14,-1.08 0.6101563,-1.988985 1.4101563,-2.708984 0.8,-0.730001 1.7385936,-1.0917976 2.8085936,-1.0917976 z"   class="cloud" /></g>'
 
-@Field static sprinklerWatering2 = '<g transform="translate(0,0)"><path   d="m 9.785,16.555 c 0,0.92 0.23,1.78 0.7,2.57 0.47,0.79 1.1,1.43 1.9,1.9 0.8,0.47 1.66,0.71 2.59,0.71 0.93,0 1.8,-0.24 2.61,-0.71 0.81,-0.47 1.45,-1.11 1.92,-1.9 0.47,-0.8 0.71,-1.65 0.71,-2.57 0,-0.6 -0.17,-1.31 -0.52,-2.14 -0.35,-0.83 -0.77,-1.6 -1.26,-2.3 -0.44,-0.57 -0.96,-1.2 -1.56,-1.88 -0.6,-0.68 -1.65,-1.73 -1.89,-1.97 l -1.28,1.29 c -0.62,0.6 -1.22,1.29 -1.79,2.08 -0.57,0.79 -1.07,1.64 -1.49,2.55 -0.44,0.91 -0.64,1.7 -0.64,2.37 z"   id="path2"   class="rainDropWatering" /></g>'
+sprinklerWatering2 = '<g transform="translate(0,0)"><path   d="m 9.785,16.555 c 0,0.92 0.23,1.78 0.7,2.57 0.47,0.79 1.1,1.43 1.9,1.9 0.8,0.47 1.66,0.71 2.59,0.71 0.93,0 1.8,-0.24 2.61,-0.71 0.81,-0.47 1.45,-1.11 1.92,-1.9 0.47,-0.8 0.71,-1.65 0.71,-2.57 0,-0.6 -0.17,-1.31 -0.52,-2.14 -0.35,-0.83 -0.77,-1.6 -1.26,-2.3 -0.44,-0.57 -0.96,-1.2 -1.56,-1.88 -0.6,-0.68 -1.65,-1.73 -1.89,-1.97 l -1.28,1.29 c -0.62,0.6 -1.22,1.29 -1.79,2.08 -0.57,0.79 -1.07,1.64 -1.49,2.55 -0.44,0.91 -0.64,1.7 -0.64,2.37 z"   id="path2"   class="rainDropWatering" /></g>'
 
 saturationSkip2 = '<g transform="translate(0,0)"><path   id="path2"   d="M 12.724609 7.4394531 L 12.380859 7.8242188 C 12.1204 8.1258033 11.887267 8.4540556 11.681641 8.8378906 C 11.634545 8.9226625 11.611082 8.9934112 11.574219 9.0722656 L 13.427734 10.925781 C 13.529105 10.869077 13.624622 10.803113 13.710938 10.716797 C 13.957688 10.456338 14.095703 10.139657 14.095703 9.7695312 C 14.095703 9.1800712 13.643071 8.3990405 12.724609 7.4394531 z M 18.400391 10.099609 L 17.892578 10.689453 C 17.508744 11.114413 17.166855 11.594207 16.851562 12.15625 C 16.536269 12.718294 16.371094 13.17089 16.371094 13.541016 C 16.371094 13.664728 16.383601 13.783612 16.402344 13.900391 L 18.068359 15.566406 C 18.176056 15.58282 18.284983 15.595703 18.400391 15.595703 C 18.962434 15.595703 19.455973 15.389731 19.853516 14.992188 C 20.25106 14.580936 20.455078 14.10306 20.455078 13.541016 C 20.455078 13.184598 20.278256 12.732002 19.935547 12.15625 C 19.592837 11.580499 19.248886 11.100595 18.933594 10.730469 C 18.851344 10.634509 18.742516 10.496495 18.619141 10.345703 C 18.495765 10.194911 18.414099 10.113318 18.400391 10.099609 z M 12.875 13.964844 L 12.533203 14.294922 C 11.998576 14.802132 11.394367 15.499616 10.722656 16.376953 C 10.366238 16.843038 10.092381 17.336504 9.8730469 17.857422 C 9.6537129 18.378341 9.5449219 18.830973 9.5449219 19.228516 C 9.5449219 20.174395 9.8596122 20.955314 10.503906 21.599609 C 11.1482 22.243903 11.94283 22.560547 12.875 22.560547 C 13.80717 22.560547 14.588127 22.230231 15.232422 21.585938 C 15.876716 20.941644 16.179688 20.146978 16.179688 19.228516 C 16.179688 18.830973 16.068943 18.378377 15.849609 17.84375 C 15.630275 17.322831 15.356345 16.829293 15.027344 16.390625 C 14.396758 15.554414 13.808174 14.856966 13.232422 14.294922 C 13.177592 14.253802 13.053209 14.143053 12.875 13.964844 z "   class="saturatedSoil" /><path   d="m 6.5126951,5.6977076 a 0.84712499,0.84712499 0 0 0 -0.5683593,0.2480469 0.84712499,0.84712499 0 0 0 0,1.1972656 L 22.858398,24.05513 a 0.84712499,0.84712499 0 0 0 1.197266,0 0.84712499,0.84712499 0 0 0 0,-1.197266 L 7.1435545,5.9457545 A 0.84712499,0.84712499 0 0 0 6.5126951,5.6977076 Z"   id="path869"   class="skipStrikethrough" /></g>'
 
