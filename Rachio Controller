@@ -863,7 +863,7 @@ void generateActivityFeedsEvent(notificationMessage) {
 }
 
 void LOG(String message, Integer level=3, String logType="debug") {
-    String dbg=parent.settings.debugLevel == null ? "2" : settings.debugLevel
+    String dbg=parent.settings.debugLevel == null ? "2" : parent.settings.debugLevel
 	Integer dbgLevel = dbg.toInteger()
 	if (logType == "error") {
 		String a=getTimestamp()
