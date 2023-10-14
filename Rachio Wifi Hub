@@ -35,21 +35,15 @@ metadata {
         attribute "wifiBridgeFirmwareVersion", "string"
 
         attribute "watering", "string"
-        attribute "allValveWaterTime", "number"
-        
+
         attribute "lastUpdatedDt", "string"
         attribute "notificationMessage", "string"
         
         attribute "DeviceWatch-DeviceStatus", "string"
         
-        attribute "dashboard", "string"
-        
         command "stopWateringAllValves"
-
-        command "startWateringAllValves"
-        command "decAllValveWaterTime"
-        command "incAllValveWaterTime"
-        command "setAllValveWaterTime", ["number"]
+        command "startWateringAllValves", [[name:"Seconds", type:"NUMBER", description: "Duration for which to water all hose timers"]]
+        command "setAllValveDefaultWaterDurationSecs", [[name:"Seconds*", type:"NUMBER", description: "Default Duration of Start Watering Command For All Hose Timers"]]
 
         command(
              "setDashboardColorScheme", 
@@ -74,49 +68,7 @@ metadata {
                 ]
              ]
         )
-    }
-
-
-    tiles (scale: 2){
-        multiAttributeTile(name: "valveTile", type: "generic", width: 6, height: 4) {
-            tileAttribute("device.watering", key: "PRIMARY_CONTROL" ) {
-                attributeState "on", label: 'Watering', action: "close", icon: "st.valves.water.open", backgroundColor: "#00A7E1", nextState: "off"
-                attributeState "off", label: 'Off', action: "runAllZones", icon: "st.valves.water.closed", backgroundColor: "#7e7d7d", nextState:"on"
-                attributeState "offline", label: 'Offline', icon: "st.valves.water.closed", backgroundColor: "#FE2E2E"
-            }
-        }
-        valueTile("connected", "device.connected", inactiveLabel: true, width: 2, height: 1, decoration: "flat") {
-            state "default", label: 'Online Status:\n${currentValue}'
-        }
-        valueTile("blank", "device.blank", width: 2, height: 1, decoration: "flat") {
-            state("default", label: '')
-        }
-        standardTile("switch", "device.switch", inactiveLabel: false, decoration: "flat") {
-            state "off", icon: "st.switch.off"
-            state "on", action: "stopWateringAllValves", icon: "st.switch.on"
-        }
-
-        //zone Water time control
-        standardTile("leftValveTimeButton", "device.allValveWaterTime", inactiveLabel: false, decoration: "flat") {
-            state "default", action:"decAllValveWaterTime", icon:"st.thermostat.thermostat-left"
-        }
-        valueTile("allValveWaterTime", "device.allValveWaterTime", width: 2, height: 1, decoration: "flat") {
-            state "default", label:'Manual Valve Time:\n${currentValue} Minutes'
-        }
-        standardTile("rightValveTimeButton", "device.allValveWaterTime", inactiveLabel: false, decoration: "flat") {
-            state "default", action:"incAllValveWaterTime", icon:"st.thermostat.thermostat-right"
-        }
-        valueTile("runAllValvesTile", "device.allValveWaterTime", inactiveLabel: false, width: 2 , height: 1, decoration: "flat") {
-            state("default", label: 'Start Watering All Valves\n${currentValue} Minutes', action:'startWateringAllValves')
-        }
-        standardTile("refresh", "device.power", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
-            state "default", label:'', action:"refresh.refresh", icon:"st.secondary.refresh"
-        }
-
-    }
-    main "valveTile"
-    details(["valveTile", "leftValveTimeButton", "allValveWaterTime", "rightValveTimeButton", "runAllValvesTile",  "lastUpdatedDt", "refresh"])
-}
+    }}
 
 def setDashboardColorScheme(scheme) {
     parent?.settingUpdate("colorSchemeSelection", scheme, "enum") 
@@ -161,9 +113,6 @@ def generateEvent(Map results) {
         state?.deviceId = device?.deviceNetworkId.toString()
 
         stateDataEvent(results?.baseStationData.baseStation.reportedState)
-        valvesDataEvent(results?.valvesData.valves)
-
-        setDashboard()         // force dashboard update
 
         if(isOnline) { lastUpdatedEvent() }
     }
@@ -186,14 +135,6 @@ def stateDataEvent(stateData) {
 
     if (stateData?.bleHubFirmwareVersion) sendEvent(name:'bleHubFirmwareVersion', value: stateData?.bleHubFirmwareVersion)
     if (stateData?.wifiBridgeFirmwareVersion) sendEvent(name:'wifiBridgeFirmwareVersion', value: stateData?.wifiBridgeFirmwareVersion)
-}
-
-def valvesDataEvent(valves) {
-    def detectFlow = false
-    valves.each { valve ->
-        if (valve.detectFlow == "true") detectFlow = true
-    }
-    sendWateringEvents(detectFlow)
 }
 
 def getDurationDesc(long secondsCnt) {
@@ -225,22 +166,6 @@ def markOffLine() {
     }
 }
 
-def incAllValveWaterTime() {
-    LOG("Decrease All Valve Runtime", 5, "trace")
-    def value = device.latestValue('allValveWaterTime')
-    setAllValveWaterTime(value + 1)
-}
-
-def decAllValveWaterTime() {
-    LOG("Increase All Valve Runtime", 5, "trace")
-    def value = device.latestValue('allValveWaterTime')
-    setAllValveWaterTime(value - 1)
-}
-
-def setDashboard() {
-    parent.setDashboard(state?.deviceId)
-}
-
 def refresh() {
     LOG("refresh...", 5, "trace")
     poll()
@@ -260,16 +185,16 @@ def isCmdOk2Run() {
     else { return true }
 }
 
-def startWateringAllValves() {
+def startWateringAllValves(secs = null) {
     LOG("startWateringAllValves...", 5, "trace")
     if(!isCmdOk2Run()) { return }
-    // will apply valve-specific default runtime if valueWaterTime not set
-    def waterTime = device?.latestValue('allValveWaterTime') != null ? device?.latestValue('allValveWaterTime') : null
-    LOG("Sending Start Watering Command for All Valves for (${waterTime ? waterTime : 'value-specific default'} Minutes)", 3, "debug")
-    def res = parent?.runAllValves(this, state?.deviceId, waterTime)
+    // will apply valve-specific default runtime if command called without a water time
+     LOG("Sending Start Watering Command for All Valves for (${secs ? secs : 'value-specific default'} Seconds)", 3, "debug")
+    def res = parent?.runAllValves(this, secs)
     if (res) {
         LOG("All Valves were Started Successfully...", 4, "info")
         sendWateringEvents(true)
+        runIn(secs + 10, "poll", [overwrite: false]) // resynch after watering finished
     }
     else {
         LOG("Error Starting All Valves. Check individual valves for status.", 1, "error")
@@ -277,12 +202,12 @@ def startWateringAllValves() {
     }
 }
 
-def setAllValveWaterTime(timeVal) {
-    def curState = device?.currentState("allValveWaterTime")?.value.toString()
+def setAllValveDefaultWaterDurationSecs(timeVal) {
+    def curState = device?.currentState("allValveDefaultWaterDurationSecs")?.value.toString()
     def newVal = timeVal.toInteger()
-    if(isStateChange(device, "allValveWaterTime", newVal.toString())) {
-        LOG("UPDATED: Manual All Valve Water Time (${newVal}) | Previous: (${curState})", 3, "debug")
-        sendEvent(name: 'allValveWaterTime', value: newVal, displayed: true)
+    if(isStateChange(device, "allValveDefaultWaterDurationSecs", newVal.toString())) {
+        LOG("UPDATED: Manual All Valve Default Water Duration Secs (${newVal}) | Previous: (${curState})", 3, "debug")
+        sendEvent(name: 'allValveDefaultWaterDurationSecs', value: newVal, displayed: true)
     }
 }
 
@@ -310,6 +235,7 @@ def sendWateringEvents(isWatering) {
         sendEvent(name:'valve', value: "closed", displayed: false, isStateChange: true)
         sendEvent(name:'watering', value: "off", displayed: true, isStateChange: true)
     }
+    runIn(10, "poll", [overwrite: false]) // resynch after watering finished
 }
 
 def updateWateringStateFromValves() {

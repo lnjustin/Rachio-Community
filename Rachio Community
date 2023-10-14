@@ -733,6 +733,7 @@ def _httpGet(subUri, endpoint="open") {
             uri: "${baseURI}/${subUri}",
             headers: ["Authorization": "Bearer ${atomicState.authToken}"]
         ]
+        state.dailyAPICount++
         httpGet(params) { resp ->
             LOG("HTTP GET Response: ${resp} with status ${resp.status}", 3, "debug")
             if(resp.status == 200) {
@@ -758,6 +759,7 @@ def _httpGet(subUri, endpoint="open") {
         } else {
             LOG("_httpGet exception: ${ex.message}", 1, "error")
         }
+        dailyAPINotification()
     }
 }
 
@@ -785,6 +787,7 @@ def updated() {
 def initialize() {
     LOG("initialized...", 5, "trace")
     unschedule()
+    if (!state.dailyAPICount) state.dailyAPICount = 0
     scheduler()
     subscribe(app, onAppTouch)
     updateDeviceStates() //Creates the selectedDevices maps in state
@@ -830,11 +833,16 @@ def scheduler() {
     def chronStr = "0 */" + minsPollPeriod + " * ? * *"
     LOG("Scheduling heartbeat with chron string ${chronStr}", 3, "debug")
     schedule(chronStr, heartbeat)
+    schedule("01 01 00 ? * *", resetAPICount)
 }
 
 def heartbeat() {
    LOG("heartbeat keep alive poll()...", 5, "trace")
     poll()
+}
+
+def resetAPICount() {
+    state.dailyAPICount = 0
 }
 
 void initWebhooks() {
@@ -1221,6 +1229,7 @@ def updateStandbyItem(String id, Boolean val) {
 }
 
 def setDashboard(deviceId, type) {
+    LOG("setDasboard(${deviceId})...", 5, "trace")
     if (!atomicState.refreshNum) atomicState.refreshNum = 0
     atomicState.refreshNum++
     def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${type}/${deviceId}?access_token=${state.accessToken}&refreshNum=${refreshNum}"  // refreshNum forces the browser to retrieve the image instead of caching it
@@ -1275,7 +1284,6 @@ def addRemoveDevices(uninst=false) {
                 def d = getChildDevice(baseStation?.key)
                 if(!d) {
                     d = addChildDevice("lnjustin", getChildBaseStationName(), baseStation?.key, null, [label: getDeviceLabelStr(baseStation?.value), completedSetup: true])
-                    setDashboard(baseStation?.key, "hoseTimer")
                     LOG("Base Station Device Created: (${d?.displayName}) with id: [${baseStation?.key}]", 4, "info")
                 } else {
                     LOG("found ${d?.displayName} with dni: ${dni?.key} already exists", 3, "debug")
@@ -1287,6 +1295,7 @@ def addRemoveDevices(uninst=false) {
                     if(!d2) {
                         d2 = addChildDevice("lnjustin", getChildValveName(), valve?.key, null, [label: getDeviceLabelStr(valve?.value), completedSetup: true])
                         LOG("Hose Timer Device Created: (${d2?.displayName}) with id: [${valve?.key}]", 4, "info")
+                        setDashboard(valve?.key, "hoseTimer")
                     } else {
                         LOG("found ${d2?.displayName} with dni: ${valve?.key} already exists", 3, "debug")
                     }
@@ -1368,9 +1377,9 @@ void poll(child=null, type=null) {
     }
 
     def selectedDevices = atomicState?.selectedDevices
-    LOG("Selected Devices = ${selectedDevices}. atomicState = ${atomicState?.selectedDevices}", 3, "debug")
+
     // poll a specific device and all children of that specific device
-    if (child && type) {
+    if (child != null && type != null) {
         pollChild(child, type)
         // now poll any children if the child is a controller or base station
         String dni = child.device?.deviceNetworkId
@@ -1392,49 +1401,47 @@ void poll(child=null, type=null) {
                 }
             }
         }
-        atomicState?.lastPollDt = now()
-        return
     }
-    
-    // poll all devices and all children
-    def ctrlCnt = 0
-    def zoneCnt = 0
-    selectedDevices?.controllers.each { cont->
-        def cDev = getChildDevice(cont?.key)
-        if(cDev) {
-            ctrlCnt = ctrlCnt+1
-            pollChild(cDev, "irrigationDevice")
-            cont?.value?.zones?.each { zone->
-                zoneCnt = zoneCnt+1
-                def zDev = getChildDevice(zone?.key)
-                if(zDev) { pollChild(zDev, "irrigationDevice") }
+    else {
+        // poll all devices and all children
+        def ctrlCnt = 0
+        def zoneCnt = 0
+        selectedDevices?.controllers.each { cont->
+            def cDev = getChildDevice(cont?.key)
+            if(cDev) {
+                ctrlCnt = ctrlCnt+1
+                pollChild(cDev, "irrigationDevice")
+                cont?.value?.zones?.each { zone->
+                    zoneCnt = zoneCnt+1
+                    def zDev = getChildDevice(zone?.key)
+                    if(zDev) { pollChild(zDev, "irrigationDevice") }
+                }
             }
         }
-    }
-    LOG("Updated (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices...", 4, "info")
+        LOG("Updated (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices...", 4, "info")
 
-    def baseStationCnt = 0
-    def valveCnt = 0
-    selectedDevices?.baseStations.each { baseStation ->
-        def bDev = getChildDevice(baseStation?.key)
-        if(bDev) {
-            baseStationCnt = baseStationCnt+1
-            pollChild(bDev, "hoseTimerDevice")
-            baseStation?.value?.valves?.each { valve->
-                valveCnt = valveCnt+1
-                def vDev = getChildDevice(valve?.key)
-                if(vDev) { pollChild(vDev, "hoseTimerDevice") }
+        def baseStationCnt = 0
+        def valveCnt = 0
+        selectedDevices?.baseStations.each { baseStation ->
+            def bDev = getChildDevice(baseStation?.key)
+            if(bDev) {
+                baseStationCnt = baseStationCnt+1
+                pollChild(bDev, "hoseTimerDevice")
+                baseStation?.value?.valves?.each { valve->
+                    valveCnt = valveCnt+1
+                    def vDev = getChildDevice(valve?.key)
+                    if(vDev) { pollChild(vDev, "hoseTimerDevice") }
+                }
             }
         }
+        LOG("Updated (${baseStationCnt}) Base Stations and (${valveCnt}) hose timer valve devices...", 4, "info")
     }
-    LOG("Updated (${baseStationCnt}) Base Stations and (${valveCnt}) hose timer valve devices...", 4, "info")
-
     atomicState?.lastPollDt = now()
 }
 
 def pollChild(childDev, type) {
     LOG("updating child device ${childDev} of type ${type}", 3, "debug")
-    try {
+   // try {
         if(childDev && type) {
             String dni = childDev?.device?.deviceNetworkId
             String devLabel = childDev?.label
@@ -1493,14 +1500,6 @@ def pollChild(childDev, type) {
                         def baseStationData = getDeviceData(baseStation?.key, "baseStation")
                         def valvesData = getValveListData(baseStation?.key)
 
-                        /*
-                        def programDataByValve = [:]
-                        baseStation?.value?.valves?.each { valve ->
-                            programData[valve?.key] = getValvePrograms(valve?.key)
-                        }
-                        def summaryData = getSummaryData(baseStation?.key)
-                        */
-
                       //  Boolean programRunning = (devData?.currentSchedule?.status == "PROCESSING") ? true : false
                      //   if (isWatering() && !schedRunning) { handleWateringSched(dni, false) }
 
@@ -1539,9 +1538,9 @@ def pollChild(childDev, type) {
             else { LOG("pollChild cannot update child because there was a problem generating data for the update...", 1, "warn") }
         } else { LOG("pollChild cannot update child because it is missing the required parameters...", 1, "warn") }
         
-    } catch (e) {
-        LOG("exception polling child: ${e}", 1, "error")
-    }
+   // } catch (e) {
+   //     LOG("exception polling child: ${e}", 1, "error")
+  //  }
 }
 
 void setWateringDeviceState(devId, val) {
@@ -1606,7 +1605,7 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", nonS
             LOG("Skipping this command while controller is in 'Standby Mode'...", 3, "debug")
             return true
         }
-
+        state.dailyAPICount++
         httpPut(cmdParams) { resp ->
             returnStatus = resp
           //  LOG ("Send JSON Return Status: ${resp.status}")
@@ -1626,6 +1625,7 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", nonS
         }
     } catch(Exception e) {
         LOG("sendJson Exception Error: ${e}", 1, "error")
+        dailyAPINotification()
     }
     return returnStatus
 }
@@ -1645,7 +1645,7 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
     ]
 
     try{
-
+        state.dailyAPICount++
         if(type == "post") {
             httpPost(cmdParams) { resp ->
                 response = resp
@@ -1674,8 +1674,14 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
         } else { return returnStatus }
     } catch(Exception e) {
         LOG("sendJsonGetResponse Exception Error: ${e}", 1, "error")
+        dailyAPINotification()
     }
     return returnData
+}
+
+def dailyAPINotification() {
+    if (state.dailyAPICount > 1500) LOG("Approaching daily API Limit of 1700", 1, "warn")
+    else if (state.dailyAPICount >= 1700) LOG("Daily API Limit of 1700 reached", 1, "error")
 }
 
 //Section6: helper methods ---------------------------------------------------------------------------------------------
@@ -2009,13 +2015,12 @@ def getScheduleInfoFromSummary(summary, schedules) {
     return matches[0]
 }
 
-def startValve(child, mins) {
+def startValve(child, secs) {
     // child is valve
     def res = false
-    LOG("Starting to Water | ValveName: ${child?.device.displayName} | RunDuration: ${mins})", 3, "debug")
+    LOG("Starting to Water | ValveName: ${child?.device.displayName} | RunDuration: ${secs})", 3, "debug")
     def valveId = child?.device?.deviceNetworkId
-    if (valveId && mins) {
-        def secs = mins.toInteger() * 60
+    if (valveId && secs) {
         def jsonData = new JsonBuilder("valveId":valveId, "durationSeconds":secs)
         LOG("startValve jsonData: ${jsonData}", 3, "debug")
         res = sendJson("valve/startWatering", jsonData?.toString(), valveId, false, "closed", true )
@@ -2023,7 +2028,7 @@ def startValve(child, mins) {
     return res
 }
 
-def runAllValves(child, mins) {
+def runAllValves(child, secs) {
     // child is baseStation
     def allTrue = true
     def anyFalse = false
@@ -2032,7 +2037,7 @@ def runAllValves(child, mins) {
     if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves) {
         selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
             def valveChild = getChildDevice(valve?.key)
-            def valveRes = valveChild.startWatering(mins)
+            def valveRes = valveChild.startWatering(secs)
             if (valveRes == false) anyFalse = true
             else if (valveRes == true && allTrue == true) allTrue = true
         }
@@ -2062,7 +2067,7 @@ def stopAllValves(child) {
     if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves) {
         selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
             def valveChild = getChildDevice(valve?.key)
-            res = stopValve(valveChild, mins)
+            res = stopValve(valveChild)
         }
     } else { LOG("stopAllValves Missing valveIds.. ${selectedDevices.baseStations[baseStationId]?.valves}", 1, "error") }
     return res
@@ -2090,13 +2095,12 @@ def updateBaseStationWateringState(baseStationId) {
     }
 }
 
-def setValveDefaultRunTime(child, mins) {
+def setValveDefaultRunTime(child, secs) {
     // child is valve
     def res = false
-    LOG("Setting Default RunTime | ValveName: ${child?.device.displayName} | Default Rune Time: ${mins})", 3, "debug")
+    LOG("Setting Default RunTime | ValveName: ${child?.device.displayName} | Default Rune Time: ${secs})", 3, "debug")
     def valveId = child?.device?.deviceNetworkId
     if (valveId && mins) {
-        def secs = mins.toInteger() * 60
         def jsonData = new JsonBuilder("valveId":valveId, "defaultRuntimeSeconds":secs)
         LOG("setValveDefaultRunTime jsonData: ${jsonData}", 3, "debug")
         res = sendJson("valve/setDefaultRuntime", jsonData?.toString(), valveId, false, "closed", true )
@@ -2155,7 +2159,6 @@ def getRachioIconOffset(numIcons, iconIndex, iconWidth) {
     LOG("getRachioIconOffset(${numIcons}, ${iconIndex}, ${iconWidth})... ", 5, "trace")
     def hOffset = 0
     Double middle = Math.ceil(numIcons / 2)
-    LOG("Middle = ${middle}")
     if (numIcons % 2 == 0) {
         Double halfWidth = iconWidth/2
         if (iconIndex <= middle) {
