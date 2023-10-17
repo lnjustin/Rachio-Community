@@ -108,15 +108,25 @@ void updated() {
 def generateEvent(Map results) {
     LOG("---------------START OF WIFI HUB API RESULTS DATA----------------", 3, "debug")
     if(results) {
-        LOG("Results: ${results}", 3, "debug")
+        LOG("Wifi Hub Results: ${results}", 3, "debug")
 
         state?.deviceId = device?.deviceNetworkId.toString()
 
         stateDataEvent(results?.baseStationData.baseStation.reportedState)
 
-        if(isOnline) { lastUpdatedEvent() }
+        if(state.isOnline) { lastUpdatedEvent() }
     }
     return "Controller"
+}
+
+def lastUpdatedEvent() {
+    def lastDt = formatDt(new Date())
+    def lastUpd = device?.currentState("lastUpdatedDt")?.stringValue
+    state?.lastUpdatedDt = lastDt?.toString()
+    if(isStateChange(device, "lastUpdatedDt", lastDt.toString())) {
+        LOG("${device?.displayName} is ${state?.isOnline ? "Online and Active" : "OFFLINE"}) - Last Updated: (${lastDt})", 4, "info")
+        sendEvent(name: 'lastUpdatedDt', value: lastDt?.toString(), displayed: false)
+    }
 }
 
 def setWatchDogStatus() {
@@ -129,7 +139,7 @@ def stateDataEvent(stateData) {
 
     def reportedState = stateData?.reportedState
     if (stateData?.connected != null) sendEvent(name:'connected', value: stateData?.connected)
-    state?.isOnline = stateData?.connected == "true" ? true : false
+    state?.isOnline = (stateData?.connected == "true" || stateData?.connected == true) ? true : false
     if(!state?.isOnline) markOffLine()
     setWatchDogStatus()
 
@@ -194,7 +204,6 @@ def startWateringAllValves(secs = null) {
     if (res) {
         LOG("All Valves were Started Successfully...", 4, "info")
         sendWateringEvents(true)
-        runIn(secs + 10, "poll", [overwrite: false]) // resynch after watering finished
     }
     else {
         LOG("Error Starting All Valves. Check individual valves for status.", 1, "error")
@@ -235,7 +244,6 @@ def sendWateringEvents(isWatering) {
         sendEvent(name:'valve', value: "closed", displayed: false, isStateChange: true)
         sendEvent(name:'watering', value: "off", displayed: true, isStateChange: true)
     }
-    runIn(10, "poll", [overwrite: false]) // resynch after watering finished
 }
 
 def updateWateringStateFromValves() {

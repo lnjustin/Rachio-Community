@@ -20,6 +20,7 @@
  */
 
 import java.text.SimpleDateFormat
+import groovy.transform.Field
 
 String devVer() { return "2.0.2" }
 Integer statusRefresh() { return 60 }
@@ -216,7 +217,7 @@ def generateEvent(Map results) {
         state.swVersion = devVer()
     }
     if(results) {
-        LOG("---------------START OF API RESULTS DATA----------------", 3, "debug")
+        LOG("---------------START OF API RESULTS DATA FOR ${device?.currentValue('zoneName')}----------------", 3, "debug")
         LOG("results:" + results, 3, "debug")
         state?.pauseInStandby = (results?.pauseInStandby == true ? true : false)
         state?.zoneId = results?.data?.id
@@ -229,21 +230,20 @@ def generateEvent(Map results) {
         stateDataEvent(results?.stateData)
 
         state?.zoneImageUrl = results?.data?.imageUrl
-        def isOnline = results?.data?.status == "ONLINE" ? true : false
+        def isOnline = results?.status == "ONLINE" ? true : false
         state?.isOnline = isOnline
         if(!isOnline) {
             markOffLine()
         } else {
-            Boolean standby = results?.data?.on.toString() != "true" ? true : false
-            state?.inStandby = standby
-            if(isStateChange(device, "inStandby", standby.toString())) {
-                sendEvent(name: 'inStandby', value: standby, displayed: true, isStateChange: true)
+            state?.inStandby = results?.standby
+            if(isStateChange(device, "inStandby", results?.standby.toString())) {
+                sendEvent(name: 'inStandby', value: results?.standby, displayed: true, isStateChange: true)
             }
-            def isOn = isWatering(results?.data?.currentSchedule)
-            if(standby == true && results?.pauseInStandby == true) {
+            def isOn = isWatering(results?.schedData)
+            if(results?.standby == true && results?.pauseInStandby == true) {
                 markStandby()
             } else {
-                isWateringEvent(results?.data?.currentSchedule?.status, results?.data?.currentSchedule?.zoneId)
+                isWateringEvent(results?.schedData?.status, results?.schedData?.zoneId)
             }
         }
 
@@ -260,7 +260,7 @@ def generateEvent(Map results) {
             setZoneWaterTime(parent?.getZoneRunTimeDefaultSetting())
         }
 
-        scheduleDataEvent(results?.data?.currentSchedule)
+        scheduleDataEvent(results?.schedData)
 
         customNozzleDataEvent(results?.data?.customNozzle)
         customSoilDataEvent(results?.data?.customSoil)
@@ -310,7 +310,7 @@ def markOffLine() {
 		sendEvent(name: 'valve', value: "closed", displayed: false, isStateChange: true)
 		sendEvent(name: 'switch', value: "off", displayed: false, isStateChange: true)
 	}
-	if(isStateChange(device, "zoneRunStatus", "Device in Offline")) {
+	if(isStateChange(device, "zoneRunStatus", "Device is Offline")) {
 		sendEvent(name: 'zoneRunStatus', value: "Device is Offline", displayed: false, isStateChange: true)
 	}
 }
@@ -380,7 +380,7 @@ def maxRuntimeEvent(val) {
     def curState = device?.currentState("maxRuntime")?.value.toString()
     def newState = val ? val.toInteger() : 0
     if(isStateChange(device, "maxRuntime", newState.toString())) {
-        LOG("UPDATED: Max Runtime Value (${newState}) | Previous: (${curState})", 3, "debug"
+        LOG("UPDATED: Max Runtime Value (${newState}) | Previous: (${curState})", 3, "debug")
         sendEvent(name:'maxRuntime', value: newState, displayed: false)
     }
 }
@@ -389,7 +389,7 @@ def availableWaterEvent(val) {
     def curState = device?.currentState("availableWater")?.value.toString()
     def newState = val ? val.toDouble() : 0.0
     if(isStateChange(device, "availableWater", newState.toString())) {
-        LOG("UPDATED: Available Water Value (${newState}) | Previous: (${curState})", 3, "debug"
+        LOG("UPDATED: Available Water Value (${newState}) | Previous: (${curState})", 3, "debug")
         sendEvent(name:'availableWater', value: newState, displayed: true)
     }
 }
@@ -398,7 +398,7 @@ def zoneSquareFeetEvent(val) {
     def curState = device?.currentState("zoneSquareFeet")?.value.toString()
     def newState = val ? val.toInteger() : 0
     if(isStateChange(device, "zoneSquareFeet", newState.toString())) {
-        LOG("UPDATED: Zone Area Square Feet (${newState}) | Previous: (${curState})", 3, "debug"
+        LOG("UPDATED: Zone Area Square Feet (${newState}) | Previous: (${curState})", 3, "debug")
         sendEvent(name:'zoneSquareFeet', value: newState, displayed: true)
     }
 }
@@ -407,7 +407,7 @@ def rootZoneDepthEvent(val) {
     def curState = device?.currentState("rootZoneDepth")?.value.toString()
     def newState = val ? val.toInteger() : 0
     if(isStateChange(device, "rootZoneDepth", newState.toString())) {
-        LOG("UPDATED: Root Zone Depth Value (${newState}) | Previous: (${curState})", 3, "debug"
+        LOG("UPDATED: Root Zone Depth Value (${newState}) | Previous: (${curState})", 3, "debug")
         sendEvent(name:'rootZoneDepth', value: newState, displayed: false)
     }
 }
@@ -416,7 +416,7 @@ def zoneNumEvent(val) {
     def curState = device?.currentState("zoneNumber")?.value.toString()
     def newState = val ? val.toInteger() : 0
     if(isStateChange(device, "zoneNumber", newState.toString())) {
-        LOG("UPDATED: Zone Number (${newState}) | Previous: (${curState})", 3, "debug"
+        LOG("UPDATED: Zone Number (${newState}) | Previous: (${curState})", 3, "debug")
         sendEvent(name:'zoneNumber', value: newState, displayed: true)
     }
 }
@@ -425,7 +425,7 @@ def zoneNameEvent(val) {
     def curState = device?.currentState("zoneName")?.value.toString()
     def newState = val ? val.toString() : "unknown"
     if(isStateChange(device, "zoneName", newState.toString())) {
-        LOG("UPDATED: Zone Name (${newState}) | Previous: (${curState})", 3, "debug"
+        LOG("UPDATED: Zone Name (${newState}) | Previous: (${curState})", 3, "debug")
         sendEvent(name:'zoneName', value: newState, displayed: true)
     }
 }
@@ -445,7 +445,7 @@ def setZoneWaterTime(timeVal) {
     def curState = device?.currentState("valveWaterTime")?.value.toString()
     def newVal = timeVal ? timeVal.toInteger() : parent?.getValveRunTimeDefaultSetting()
     if(isStateChange(device, "zoneWaterTime", newVal.toString())) {
-        LOG("UPDATED: Manual Zone Water Time (${newVal}) | Previous: (${curState})", 3, "debug"
+        LOG("UPDATED: Manual Zone Water Time (${newVal}) | Previous: (${curState})", 3, "debug")
         sendEvent(name: 'zoneWaterTime', value: newVal, displayed: true)
     }
 }
@@ -729,7 +729,7 @@ void generateActivityFeedsEvent(notificationMessage) {
 @Field static final List<String> lLOGTYPES =	['error', 'debug', 'info', 'trace', 'warn']
 
 void LOG(String message, Integer level=3, String logType="debug") {
-    String dbg=parent.settings.debugLevel == null ? "2" : settings.debugLevel
+    String dbg=parent.getDebugLevel() == null ? "2" : parent.getDebugLevel()
 	Integer dbgLevel = dbg.toInteger()
 	if (logType == "error") {
 		String a=getTimestamp()

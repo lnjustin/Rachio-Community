@@ -7,7 +7,7 @@
  *  V1.1.1 written by Anthony Santilli (@tonesto7)
  *  Ported to Hubitat and Enhanced to V2.0+ by Justin Leonard (@JustinL)
  *
- * Many thanks to Tom Walling (@tomw) for high-level consultation on architecture and functionality for enhancing the native Rachio app/drivers.
+ * Many thanks to @tomw for high-level consultation on architecture and functionality for enhancing the native Rachio app/drivers.
  * Thanks also to Josh Lyon (@josh) for proof of concept for generating an SVG for output at an Oath endpoint
  * Thanks to Rob (@Equis) in the Hubitat Community for icon design
  *
@@ -80,7 +80,7 @@ preferences {
 }
 
 mappings {
-    path("/rachioIrrigationReceiver") { action: [ POST: "rachioIrrigationReceiveHandler" ] }
+    path("/rachioIrrigationWebookReceiver") { action: [ POST: "rachioIrrigationReceiveHandler" ] }
     path("/rachioHoseTimerReceiver") { action: [ POST: "rachioHoseTimerReceiveHandler" ] }
     path("/rachioDashboard/irrigation/:controllerID") { action: [ GET: "buildDashboard"] }
     path("/rachioDashboard/hoseTimer/:hoseTimerValveID") { action: [ GET: "buildDashboard"] }
@@ -331,6 +331,7 @@ def dashboardSettingsPage(){
             paragraph getInterface("line", "")
         }
         section(getSectionTitle("Configure Information on Dashboard")) {
+            input "hideNonScheduleQuickRuns", "bool", title: "Hide Non-Scheduled Quick Runs on Dashboard?", defaultValue: false, submitOnChange: false
             if(settings?.controllers && settings?.controllers.size() > 1) {
                 def controllerList = getControllerInputEnum(controllers)
                 def selectedControllerInputEnum = [:]
@@ -362,7 +363,7 @@ def dashboardSettingsPage(){
             input "singleRachioIcon", "bool", title: "Show Single Watering/Skip Icon?", defaultValue: true, submitOnChange: true, width: 6
             input "combineSkipIcons", "bool", title: "Combine Identical Skip Icons?", description: "Show a single, generic skip icon when all schedules/programs for a day are skipped for the same reason", defaultValue: false, submitOnChange: false, width: 6
              if (singleRachioIcon == false) {
-                input "colorScheme", "enum", title: "Select Color Scheme", options: ["Rachio Colors", "Custom Colors"], defaultValue: "Rachio Colors", submitOnChange: true, width: 4
+                input "colorScheme", "enum", title: "Select Watering/Skip Icon Color Scheme", options: ["Rachio Colors", "Custom Colors"], defaultValue: "Rachio Colors", submitOnChange: true, width: 4
                 if (settings.colorScheme == "Custom Colors") paragraph getInterface("note", "Specify Custom Colors as Hex Values: #FFFFFF")
                 state?.scheduleNameMap = [:]
                 state?.flexScheduleNameMap = [:]
@@ -399,8 +400,8 @@ def dashboardSettingsPage(){
         }
         section(getSectionTitle("Configure Display Formatting")) {
             if (settings?.singleRachioIcon == true) input "rachioIconLocation", "enum", title: "Select Watering/Skip Icon Location", defaultValue: "Top", options:["Top", "Side"], multiple: false, width: 12, submitOnChange: false
-            input(name: "iconSchemeSelection", type: "enum", title: "Select Icon Scheme:", required: true, multiple: false, options: ["Filled","Outline"], submitOnChange: false, defaultValue: 'Filled', width: 5)
-            input(name: "colorSchemeSelection", type: "enum", title: "Select Color Scheme:", required: true, multiple: false, options: ["White with Color","Black with Color", "White without Color", "Black without Color", "Custom"], submitOnChange: false, defaultValue: 'Black with Color', width: 5)
+            input(name: "iconSchemeSelection", type: "enum", title: "Select Icon Fill Scheme:", required: true, multiple: false, options: ["Filled","Outline"], submitOnChange: false, defaultValue: 'Filled', width: 5)
+            input(name: "colorSchemeSelection", type: "enum", title: "Select Overall Dashboard Color Scheme:", required: true, multiple: false, options: ["White with Color","Black with Color", "White without Color", "Black without Color", "Custom"], submitOnChange: false, defaultValue: 'Black with Color', width: 5)
             if(colorSchemeSelection == "Custom") {
                 input "cloudColorCustom", "string", title: "Cloud Color (format: #FFFFFF)", submitOnChange: false
                 input "lightColorCustom", "string", title: "Sun and Lightning Color (format: #FFFFFF)", submitOnChange: false
@@ -562,7 +563,7 @@ def getIrrigationSchedules(userInfo=null) {
 }
 
 def getHoseTimerPrograms() {
-    LOG("getIrrigationSchedules...", 5, "trace")
+    LOG("getHoseTimerPrograms...", 5, "trace")
     def programs = [:]
     def selectedDevices = atomicState?.selectedDevices
     selectedDevices?.baseStations.each { baseStation ->
@@ -724,6 +725,11 @@ def getBaseStationHardwareInfo(val) {
 
 def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/$imgName" }
 
+def updateAPICount() {
+    if (!state.dailyAPICount) state.dailyAPICount = 0
+    state.dailyAPICount++
+}
+
 def _httpGet(subUri, endpoint="open") {
     LOG("_httpGet($subUri)", 3, "debug")
     try {
@@ -733,9 +739,9 @@ def _httpGet(subUri, endpoint="open") {
             uri: "${baseURI}/${subUri}",
             headers: ["Authorization": "Bearer ${atomicState.authToken}"]
         ]
-        state.dailyAPICount++
+        updateAPICount()
         httpGet(params) { resp ->
-            LOG("HTTP GET Response: ${resp} with status ${resp.status}", 3, "debug")
+            LOG("HTTP GET Response: ${resp?.data} with status ${resp?.status}", 3, "debug")
             if(resp.status == 200) {
                 return resp?.data
             } else {
@@ -833,7 +839,7 @@ def scheduler() {
     def chronStr = "0 */" + minsPollPeriod + " * ? * *"
     LOG("Scheduling heartbeat with chron string ${chronStr}", 3, "debug")
     schedule(chronStr, heartbeat)
-    schedule("01 01 00 ? * *", resetAPICount)
+    schedule("01 00 00 ? * *", resetAPICount)
 }
 
 def heartbeat() {
@@ -842,6 +848,10 @@ def heartbeat() {
 }
 
 def resetAPICount() {
+    if (!state.numDaysInstalled) state.numDaysInstalled = 1
+    else state.numDaysInstalled++
+    if (!state.avgAPICallsPerDay) state.avgAPICallsPerDay = 0
+    state.avgAPICallsPerDay = state.avgAPICallsPerDay + ((state.dailyAPICount - state.avgAPICallsPerDay) / state.numDaysInstalled)
     state.dailyAPICount = 0
 }
 
@@ -859,9 +869,9 @@ def initWebhook(controlId) {
     LOG("initWebhook...", 5, "trace")
     def result = false
     def webhookIds = getWebhookIdsForDev(controlId)
-    def cmdType = webhookIds == null ? "post" : "put" // changed first option to "post" from "put" because seems to require post if creating a new webhookS
+    def cmdType = (webhookIds == null || webhookIds == []) ? "post" : "put" // changed first option to "post" from "put" because seems to require post if creating a new webhookS
     def apiWebhookUrl = "${rootApiUrl()}/notification/webhook"
-    def endpointUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/rachioReceiver?access_token=${atomicState?.accessToken}"
+    def endpointUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/rachioIrrigationWebookReceiver?access_token=${atomicState?.accessToken}"
     def bodyData
     if(!webhookIds) { 
         bodyData = new JsonOutput().toJson([device:[id: controlId], externalId: app.name, url: endpointUrl, eventTypes: webhookEvtTypes()])
@@ -884,7 +894,7 @@ def getWebhookIdsForDev(devId) {
     def data = _httpGet("notification/${devId}/webhook")
     def res = null
     if(data) { res = data?.findAll { it?.externalId == app?.name }?.collect { it?.id } }
-    LOG("Get webhookIdsForDevice received data: ${data}. Webhook IDs for Device ${devId} include: ${res}", 3, "debug")
+    LOG("Get webhookIdsForDevice received data: ${data}. Webhook IDs for Device ${devId} for ${app?.name} include: ${res}", 3, "debug")
     return res
 }
 
@@ -916,6 +926,7 @@ void removeAllWebhooks() {
 def webhookEvtTypes() {
     LOG("Updating webhook event types", 5, "trace")
     def typeIds = []
+    //  def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT", "RAIN_DELAY_EVENT", "WEATHER_INTELLIGENCE_EVENT"] 
     def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT"] 
     def data = _httpGet("notification/webhook_event_type")
     if(data) {
@@ -1053,7 +1064,7 @@ def getCurSchedule(controllerId) {
 }
 
 def getDeviceData(devId, type="controller") {
-    LOG("getDeviceData($devId)...", 5, "trace")
+    LOG("getDeviceData($devId) of type ${type}...", 5, "trace")
     def result = null
     if (type == "controller") {
         result = _httpGet("device_with_current_schedule/${devId}")
@@ -1229,10 +1240,11 @@ def updateStandbyItem(String id, Boolean val) {
 }
 
 def setDashboard(deviceId, type) {
-    LOG("setDasboard(${deviceId})...", 5, "trace")
-    if (!atomicState.refreshNum) atomicState.refreshNum = 0
-    atomicState.refreshNum++
-    def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${type}/${deviceId}?access_token=${state.accessToken}&refreshNum=${refreshNum}"  // refreshNum forces the browser to retrieve the image instead of caching it
+    // possible types: "irrigation" or "hoseTimer"
+    LOG("setDasboard(${deviceId}, ${type})...", 5, "trace")
+    if (!state.refreshNum) state.refreshNum = 0
+    state.refreshNum++
+    def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${type}/${deviceId}?access_token=${state.accessToken}&refreshNum=${state.refreshNum}"  // refreshNum forces the browser to retrieve the image instead of caching it
         
     String dashboard = '<style type=\'text/css\'>'
 	dashboard += '.centerImage'
@@ -1380,7 +1392,7 @@ void poll(child=null, type=null) {
 
     // poll a specific device and all children of that specific device
     if (child != null && type != null) {
-        pollChild(child, type)
+        def parentData = pollChild(child, type)
         // now poll any children if the child is a controller or base station
         String dni = child.device?.deviceNetworkId
         if (type == "irrigationDevice") {
@@ -1388,7 +1400,7 @@ void poll(child=null, type=null) {
             if (contDev) {
                 contDev?.zones?.each { zone->
                     def zDev = getChildDevice(zone?.key)
-                    if(zDev) { pollChild(zDev, "irrigationDevice") }
+                    if(zDev) { pollChild(zDev, "irrigationDevice", parentData) }
                 }
             }
         }
@@ -1410,11 +1422,11 @@ void poll(child=null, type=null) {
             def cDev = getChildDevice(cont?.key)
             if(cDev) {
                 ctrlCnt = ctrlCnt+1
-                pollChild(cDev, "irrigationDevice")
+                def controllerData = pollChild(cDev, "irrigationDevice")
                 cont?.value?.zones?.each { zone->
                     zoneCnt = zoneCnt+1
                     def zDev = getChildDevice(zone?.key)
-                    if(zDev) { pollChild(zDev, "irrigationDevice") }
+                    if(zDev) { pollChild(zDev, "irrigationDevice", controllerData) }
                 }
             }
         }
@@ -1430,7 +1442,7 @@ void poll(child=null, type=null) {
                 baseStation?.value?.valves?.each { valve->
                     valveCnt = valveCnt+1
                     def vDev = getChildDevice(valve?.key)
-                    if(vDev) { pollChild(vDev, "hoseTimerDevice") }
+                    if(vDev) { pollChild(vDev, "hoseTimerDevice")}
                 }
             }
         }
@@ -1439,9 +1451,10 @@ void poll(child=null, type=null) {
     atomicState?.lastPollDt = now()
 }
 
-def pollChild(childDev, type) {
+def pollChild(childDev, type, parentData = null) {
     LOG("updating child device ${childDev} of type ${type}", 3, "debug")
-   // try {
+    def returnData = null
+    try {
         if(childDev && type) {
             String dni = childDev?.device?.deviceNetworkId
             String devLabel = childDev?.label
@@ -1452,7 +1465,15 @@ def pollChild(childDev, type) {
             if (type == "irrigationDevice") {
                 selectedDevices?.controllers.each { contDev ->
                     if(dni == contDev?.key) {
+                        LOG("Polling Controller ${contDev?.key}", 5, "trace")
                         def devData = getDeviceData(contDev?.key)
+                        def devZoneDetails = getZoneDetails(contDev?.key)
+                        returnData = [devData: devData, devZoneDetails: devZoneDetails]
+
+                        def devState = getDeviceState(contDev?.key)
+                        def devDetails = getDeviceDetails(contDev?.key)
+                        def devMonthlyWateringSummary = getDeviceWateringSummary(contDev?.key, getMonthStart(), getMonthEnd()) 
+                        def devNextEvent = getDeviceNextEvent(contDev?.key)
 
                         Boolean inStandby = devData?.on.toString() != "true" ? true : false
                         updateStandbyItem(dni, inStandby)
@@ -1466,21 +1487,31 @@ def pollChild(childDev, type) {
                             LOG("Controller Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
                         }
 
-                        def devState = getDeviceState(contDev?.key)
-                        def devDetails = getDeviceDetails(contDev?.key)
-                        def devMonthlyWateringSummary = getDeviceWateringSummary(contDev?.key, getMonthStart(), getMonthEnd()) 
-                        def devNextEvent = getDeviceNextEvent(contDev?.key)
-
                         if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
+                        
                         data = [data: devData, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails, wateringSummaryData: devMonthlyWateringSummary, nextEvent: devNextEvent]
                     } else {
                         contDev?.value?.zones?.each { zone ->
                             if (dni == zone?.key) {
-
-                                def devData = getDeviceData(contDev?.key)
-                                def devZoneDetails = getZoneDetails(contDev?.key)
+                                
+                                def devData = null
+                                def devZoneDetails = null
+                                if (parentData != null) {
+                                    // re-use parent data to reduce API call count
+                                    LOG("Re-using parent controller data for zone ${zone?.key}", 5, "trace")
+                                    devData = parentData.devData
+                                    devZoneDetails = parentData.devZoneDetails
+                                }
+                                else {
+                                    LOG("Didn't get parent controller's data from previous poll; Re-polling", 5, "trace")
+                                    devData = getDeviceData(contDev?.key)
+                                    devZoneDetails = getZoneDetails(contDev?.key)
+                                }
 
                                 def zoneData = findZoneData(zone?.key, devData)
+                                def schedData = devData.currentSchedule
+                                def status = devData.status
+                                Boolean inStandby = devData?.on.toString() != "true" ? true : false
                                 def zoneState = findZoneState(zone?.key, devZoneDetails)
 
                                 def newLabel = getDeviceLabelStr(zone?.value).toString()
@@ -1488,7 +1519,8 @@ def pollChild(childDev, type) {
                                     childDev?.label = newLabel
                                     LOG("Zone Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
                                 }
-                                data = [data: zoneData, devId: contDev?.key, pauseInStandby: pauseInStandby, stateData: zoneState]
+                                LOG("Polling Zone ${zoneData.name}", 5, "trace")
+                                data = [data: zoneData, schedData: schedData, devId: contDev?.key, status: status, standby: inStandby, pauseInStandby: pauseInStandby, stateData: zoneState]
                             }
                         }
                     }
@@ -1498,25 +1530,25 @@ def pollChild(childDev, type) {
                 selectedDevices?.baseStations.each { baseStation ->
                     if(dni == baseStation?.key) {
                         def baseStationData = getDeviceData(baseStation?.key, "baseStation")
-                        def valvesData = getValveListData(baseStation?.key)
+                     //   def valvesData = getValveListData(baseStation?.key)
 
                       //  Boolean programRunning = (devData?.currentSchedule?.status == "PROCESSING") ? true : false
                      //   if (isWatering() && !schedRunning) { handleWateringSched(dni, false) }
 
                         if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
-                        data = [baseStationData: baseStationData, valvesData: valvesData]
+                        LOG("Polling Wifi Hub ${baseStation?.key}", 5, "trace")
+                        data = [baseStationData: baseStationData]
                     } else {
                         baseStation?.value?.valves?.each { valve ->
                             if (dni == valve?.key) {
                                 LOG("Generating data for update to valve", 3, "debug")
-                                def baseStationData = getDeviceData(baseStation?.key, "baseStation")
+                              //  def baseStationData = getDeviceData(baseStation?.key, "baseStation")
                                 def valveData = getValveData(valve?.key)
                                 def programData = getValvePrograms(valve?.key)
 
-                                // retrieve dayView data to get next run data
+                                // retrieve dayView data for the last 10 days and the next 10 days in order to get last action and next action data
                                 def today = new Date()
-                             //   def startDate = offsetDateByNumDays(today, -10)
-                                def startDate = today
+                                def startDate = offsetDateByNumDays(today, -10)
                                 def endDate = offsetDateByNumDays(today, 10)
                                 def dayViewData = getBaseStationDayViews(baseStation?.key, startDate, endDate)
 
@@ -1525,7 +1557,8 @@ def pollChild(childDev, type) {
                                     childDev?.label = newLabel
                                     LOG("Valve Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
                                 }
-                                data = [baseStationData: baseStationData, valveData: valveData, programData: programData, dayViewData: dayViewData]
+                                LOG("Polling Hose Timer ${newLabel}", 5, "trace")
+                                data = [baseStationId: baseStation?.key, valveData: valveData, programData: programData, dayViewData: dayViewData]
                             }
                         }
                     }
@@ -1538,9 +1571,10 @@ def pollChild(childDev, type) {
             else { LOG("pollChild cannot update child because there was a problem generating data for the update...", 1, "warn") }
         } else { LOG("pollChild cannot update child because it is missing the required parameters...", 1, "warn") }
         
-   // } catch (e) {
-   //     LOG("exception polling child: ${e}", 1, "error")
-  //  }
+    } catch (e) {
+        LOG("exception polling child: ${e}", 1, "error")
+    }
+    return returnData
 }
 
 void setWateringDeviceState(devId, val) {
@@ -1605,7 +1639,7 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", nonS
             LOG("Skipping this command while controller is in 'Standby Mode'...", 3, "debug")
             return true
         }
-        state.dailyAPICount++
+        updateAPICount()
         httpPut(cmdParams) { resp ->
             returnStatus = resp
           //  LOG ("Send JSON Return Status: ${resp.status}")
@@ -1645,7 +1679,7 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
     ]
 
     try{
-        state.dailyAPICount++
+        updateAPICount()
         if(type == "post") {
             httpPost(cmdParams) { resp ->
                 response = resp
@@ -1680,8 +1714,8 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
 }
 
 def dailyAPINotification() {
-    if (state.dailyAPICount > 1500) LOG("Approaching daily API Limit of 1700", 1, "warn")
-    else if (state.dailyAPICount >= 1700) LOG("Daily API Limit of 1700 reached", 1, "error")
+    if (state.dailyAPICount > 1500) LOG("Approaching daily API Limit of 1700. Averaging ${state.avgAPICallsPerDay} API calls per day.", 1, "warn")
+    else if (state.dailyAPICount >= 1700) LOG("Daily API Limit of 1700 reached.  Averaging ${state.avgAPICallsPerDay} API calls per day.", 1, "error")
 }
 
 //Section6: helper methods ---------------------------------------------------------------------------------------------
@@ -2037,6 +2071,7 @@ def runAllValves(child, secs) {
     if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves) {
         selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
             def valveChild = getChildDevice(valve?.key)
+            LOG("starting valve ${valve.value}", 3, "debug")
             def valveRes = valveChild.startWatering(secs)
             if (valveRes == false) anyFalse = true
             else if (valveRes == true && allTrue == true) allTrue = true
@@ -2078,21 +2113,36 @@ def anyValveRunning(child) {
     def isAnyRunning = false
     def selectedDevices = atomicState?.selectedDevices
     def baseStationId = child?.device?.deviceNetworkId
+    LOG("anyValveRunning for base station ${baseStationId}...", 5, "trace")
     if (baseStationId && selectedDevices?.baseStations[baseStationId] && selectedDevices.baseStations[baseStationId]?.valves) {
         selectedDevices.baseStations[baseStationId]?.valves?.each { valve ->
             def valveChild = getChildDevice(valve?.key)
             def isRunning = valveChild.isWatering()
-            if (isRunning == true) isAnyRunning = true
+            if (isRunning == true) {
+                LOG("Valve ${valve.value} is running", 3, "debug")
+                isAnyRunning = true
+            }
         }
     } else { LOG("anyValveRunning Missing valveIds.. ${selectedDevices.baseStations[baseStationId]?.valves}", 1, "error") }
+    LOG("isAnyRunning = ${isAnyRunning} for base station ${baseStationId}..", 3, "debug")
     return isAnyRunning
 }
 
 def updateBaseStationWateringState(baseStationId) {
+    LOG("updateBaseStationWateringState for base station ${baseStationId}...", 5, "trace")
+    if (baseStationId) {
+        Map dataMap = [baseStationId: baseStationId]
+        runIn(5, delayedBaseStationStateCheck, [data: dataMap])
+    }
+}
+
+def delayedBaseStationStateCheck(data) {
+    def baseStationId = data.baseStationId
+    LOG("delayedBaseStationStateCheck for base station ${baseStationId}...", 5, "trace")
     def bDev = getChildDevice(baseStationId)
     if (bDev) {
         bDev.updateWateringStateFromValves()
-    }
+    }    
 }
 
 def setValveDefaultRunTime(child, secs) {
@@ -2156,7 +2206,7 @@ def offsetDateByNumDays(Date date, Integer numDays) {
 }
 
 def getRachioIconOffset(numIcons, iconIndex, iconWidth) {
-    LOG("getRachioIconOffset(${numIcons}, ${iconIndex}, ${iconWidth})... ", 5, "trace")
+   // LOG("getRachioIconOffset(${numIcons}, ${iconIndex}, ${iconWidth})... ", 5, "trace")
     def hOffset = 0
     Double middle = Math.ceil(numIcons / 2)
     if (numIcons % 2 == 0) {
@@ -2251,7 +2301,7 @@ def buildDashboard() {
             contentMap[dateIndex].weatherIcon = getWeatherIcon(weather.weatherType)
         }
     }
-    else if (params.hoseTimerValveID || settings?.baseStations) {
+    else {
         // user does not have an irrigation controller. Must use external source for weather
         def weatherBaseStationId = null
         if (params.hoseTimerValveID) weatherBaseStationId = getBaseStationFromValve(params.hoseTimerValveID) // if controller-speciifc dashboard, use that controller for weather
@@ -2600,6 +2650,13 @@ def getScheduleSpecificIcon(icon, scheduleId, scheduleSpecificColor, cssClass) {
     return newIcon
 }
 
+def hideQuickRun(eventSummary) {
+    def hideEvent = false
+    def sanitizedSummary = eventSummary.toLowerCase()
+    if (settings["hideNonScheduleQuickRuns"] == true && sanitizedSummary.contains("quick run")) hideEvent = true
+    return hideEvent
+}
+
 def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
     def irrigationIcons = []
     def eventsList = []
@@ -2611,72 +2668,73 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
             def foundEvent = [:]
             def icon = [:]
 
-            // TO DO: Handle incomplete API data when sometimes doesn't include subtype. Need to try to insert subtype based on parsing summary? (Although below example may have just been the event reported when the skip was set, not when the skip occurred)
-            // Example: [ category: SCHEDULE, deviceId: XXXXXX, eventDate: 1696911477000, hidden: false, id: XXXXX, summary: SingleRunwasscheduledfor10/10at11: 00AM(EDT)butwillbemanuallyskipped. ]
-
             // TO DO: Handle incomplete API data that includes subtype but doesn't indicate even in summary which schedule is involved
             // Example: [ category: SCHEDULE, deviceId: 8a0fd8ce-6c50-4572-8da5-68d2204b7e2b, eventDate: 1696941115000, hidden: false, id: a468f570-2d5a-366e-8421-d6c7e234040f, subType: ZONE_SKIPPED, summary: Thisschedulewasmanuallyskipped., type: USER_ACTION ]
 
             // TO DO: Handle multiple events being reported for the same schedule, e.g., skip and disable skip, may need to parse date to determine which one is the latest event
-            def scheduleSpecificColor = null
-            def schedId = null
-            if (event.subType == "SCHEDULE_STARTED" || event.subType == "WEATHER_INTELLIGENCE_SKIP" || event.subType == "WEATHER_INTELLIGENCE_CLIMATE_SKIP" || event.subType == "MANUAL_SKIP" || event.subType == "ZONE_SKIPPED") {
-                if (settings.singleRachioIcon == false && event.summary) {
-                    def schedule = getScheduleInfoFromSummary(event.summary, schedules)
-                    schedId = schedule?.id
-                    scheduleSpecificColor = settings["colorFor${schedule?.type}Schedule${schedId}"]
-                    LOG("Found Specific Color = ${scheduleSpecificColor} for schedule ${schedule?.name} with id = ${schedId}", 3, "debug")
+            if (!hideQuickRun(event.summary)) {
+                def scheduleSpecificColor = null
+                def schedId = null
+                if (event.subType == "SCHEDULE_STARTED" || event.subType == "WEATHER_INTELLIGENCE_SKIP" || event.subType == "WEATHER_INTELLIGENCE_CLIMATE_SKIP" || event.subType == "MANUAL_SKIP" || event.subType == "ZONE_SKIPPED") {
+                    if (settings.singleRachioIcon == false && event.summary) {
+                        def schedule = getScheduleInfoFromSummary(event.summary, schedules)
+                        if (schedule) {
+                            schedId = schedule?.id
+                            scheduleSpecificColor = settings["colorFor${schedule?.type}Schedule${schedId}"]
+                            LOG("Found Specific Color = ${scheduleSpecificColor} for schedule ${schedule?.name} with id = ${schedId}", 3, "debug")
+                        }
+                    }
                 }
-            }
-            switch(event.subType) {
-                case "SCHEDULE_STARTED":
-                    foundEvent = [eventType : "WATER", eventSubType : null, eventDescription: event.summary]
-                    icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
-                    if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropWatering") }
-                    icon.type = "watering"
-                    break
-                case "WEATHER_INTELLIGENCE_SKIP":
-                    foundEvent = [eventType : "SKIP", eventSubType : "RAIN_PREDICTED", eventDescription: event.summary]
-                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
-                        icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
-                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
-                        icon.type = "rainPredictedSkip"
-                    }
-                    break
-                case "WEATHER_INTELLIGENCE_CLIMATE_SKIP":
-                    foundEvent = [eventType : "SKIP", eventSubType : "SOIL_SATURATED", eventDescription: event.summary]
-                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
-                        icon.svg = iconPack == "Filled" ? saturationSkip : saturationSkip2 
-                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
-                        icon.type = "rainObservedSkip"
-                    }
-                    break
-                case "MANUAL_SKIP":
-                    foundEvent = [eventType : "SKIP", eventSubType : "MANUAL", eventDescription: event.summary]
-                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
-                        icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
-                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropSkip") }
-                        icon.type = "manualSkip"
-                    }
-                    break
-                case "ZONE_SKIPPED":
-                    foundEvent = [eventType : "SKIP", eventSubType : "MANUAL", eventDescription: event.summary]
-                    if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
-                        icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2 
-                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropSkip") }
-                        icon.type = "manualSkip"
-                    }
-                    break
-            }
-            if(!foundEvent?.isEmpty()) { eventsList.add(foundEvent) }
-            if (!icon?.isEmpty()) {
-                LOG("Found Icon ${icon} for Event ${event.subType}. Icon svg = ${icon.svg}. Icon style = ${icon.style}", 3, "debug")
-                if (irrigationIcons.size() == 0 || !settings?.singleRachioIcon) {
-                    LOG("Adding Icon ${icon} to list", 3, "debug")
-                    irrigationIcons.add(icon)
+                switch(event.subType) {
+                    case "SCHEDULE_STARTED":
+                        foundEvent = [eventType : "WATER", eventSubType : null, eventDescription: event.summary]
+                        icon.svg = iconPack == "Filled" ? sprinklerWatering : sprinklerWatering2
+                        if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropWatering") }
+                        icon.type = "watering"
+                        break
+                    case "WEATHER_INTELLIGENCE_SKIP":
+                        foundEvent = [eventType : "SKIP", eventSubType : "RAIN_PREDICTED", eventDescription: event.summary]
+                        if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                            icon.svg = iconPack == "Filled" ? rainSkip : rainSkip2 
+                            if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                            icon.type = "rainPredictedSkip"
+                        }
+                        break
+                    case "WEATHER_INTELLIGENCE_CLIMATE_SKIP":
+                        foundEvent = [eventType : "SKIP", eventSubType : "SOIL_SATURATED", eventDescription: event.summary]
+                        if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                            icon.svg = iconPack == "Filled" ? saturationSkip : saturationSkip2 
+                            if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "skipStrikethrough") }
+                            icon.type = "rainObservedSkip"
+                        }
+                        break
+                    case "MANUAL_SKIP":
+                        foundEvent = [eventType : "SKIP", eventSubType : "MANUAL", eventDescription: event.summary]
+                        if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                            icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2
+                            if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropSkip") }
+                            icon.type = "manualSkip"
+                        }
+                        break
+                    case "ZONE_SKIPPED":
+                        foundEvent = [eventType : "SKIP", eventSubType : "MANUAL", eventDescription: event.summary]
+                        if (eventsList.isEmpty() || !settings?.singleRachioIcon) { 
+                            icon.svg = iconPack == "Filled" ? genericSkip : genericSkip2 
+                            if (scheduleSpecificColor) { icon = getScheduleSpecificIcon(icon, schedId, scheduleSpecificColor, "rainDropSkip") }
+                            icon.type = "manualSkip"
+                        }
+                        break
                 }
+                if(!foundEvent?.isEmpty()) { eventsList.add(foundEvent) }
+                if (!icon?.isEmpty()) {
+                    LOG("Found Icon ${icon} for Event ${event.subType}. Icon svg = ${icon.svg}. Icon style = ${icon.style}", 3, "debug")
+                    if (irrigationIcons.size() == 0 || !settings?.singleRachioIcon) {
+                        LOG("Adding Icon ${icon} to list", 3, "debug")
+                        irrigationIcons.add(icon)
+                    }
+                }
+                else LOG("No Icon found for Event ${event.subType}", 3, "debug")
             }
-            else LOG("No Icon found for Event ${event.subType}", 3, "debug")
         }
     }
     else if (!futureEvents?.isEmpty()) {
@@ -2688,10 +2746,12 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
             def schedId = null
             if (event.type == "FUTURE_FEED_SCHEDULE_EVENT" || event.type == "RAIN_FUTURE_FEED_SKIP_EVENT" || event.type == "WIND_FUTURE_FEED_SKIP_EVENT" || event.type == "FREEZE_FUTURE_FEED_SKIP_EVENT" || event.type == "CLIMATE_FUTURE_FEED_SKIP_EVENT" || event.type == "MANUAL_FUTURE_FEED_SKIP_EVENT") {
                 if (settings.singleRachioIcon == false) {
-                    scheduleInfo = getScheduleIdAndTypeByName(event.scheduleName, event.scheduleType)
-                    schedId = scheduleInfo.id
-                    scheduleSpecificColor = settings["colorFor${scheduleInfo.type}Schedule${scheduleInfo.id}"]
-                    LOG("Found Specific Color = ${scheduleSpecificColor} for schedule ${event.scheduleName} with schedId = ${scheduleInfo.id}", 3, "debug")
+                    def scheduleInfo = getScheduleIdAndTypeByName(event.scheduleName, event.scheduleType)
+                    if (scheduleInfo) {
+                        schedId = scheduleInfo.id
+                        scheduleSpecificColor = settings["colorFor${scheduleInfo.type}Schedule${scheduleInfo.id}"]
+                        LOG("Found Specific Color = ${scheduleSpecificColor} for schedule ${event.scheduleName} with schedId = ${scheduleInfo.id}", 3, "debug")
+                    }
                 }
             }
             LOG("Found Event ${event.type}", 3, "debug")

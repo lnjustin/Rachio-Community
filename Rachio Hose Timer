@@ -112,14 +112,15 @@ def generateEvent(Map results) {
     if(results) {
         LOG("generate Event for Valve. Results:" + results, 3, "debug")
         if (results.valveData && results.valveData.valve)  state?.valveId = results?.valveData?.valve.id
-        if (results.baseStationData && results.baseStationData.baseStation) state?.baseStationId = results?.baseStationData?.baseStation.id
+        state?.baseStationId = results?.baseStationId
+      //  if (results.baseStationData && results.baseStationData.baseStation) state?.baseStationId = results?.baseStationData?.baseStation.id
 
         // process programs before state, so that program names will be available
         valveProgramEvent(results?.programData)
 
         if (results.valveData && results.valveData.valve) {
             valveNameEvent(results?.valveData?.valve.name)
-            valveColorEvent(results?.valveData?.valve.color)
+        //    valveColorEvent(results?.valveData?.valve.color)
         //  valvePhotoEvent(results?.valveData?.photo.id)
             valveStateEvent(results?.valveData?.valve.state)
         }
@@ -184,7 +185,7 @@ def valveFlowEvent(isFlowDetected) {
     LOG("valveFlowEvent...", 5, "trace")
     def curState = device?.currentState("watering")?.value.toString()
     def newState = (isFlowDetected == "true" || isFlowDetected == true) ? "on" : "off"
-    LOG("Watering is (${newState}) | Previous: (${curState})", 3, "debug")
+    LOG("Flow is (${newState}) | Previous: (${curState})", 3, "debug")
     if(isStateChange(device, "watering", newState.toString())) {
         LOG("UPDATED: Watering (${newState}) | Previous: (${curState})", 3, "debug")
         sendEvent(name: 'watering', value: newState, displayed: true, isStateChange: true)
@@ -250,7 +251,7 @@ def valveStateEvent(stateData) {
         if (currentAction?.containsKey("skip")) {
             if (currentAction.skip?.containsKey("manualOverrideTrigger")) actionStr = "Manual Skip"
             else if (currentAction.skip?.containsKey("rainOverrideTrigger")) actionStr = "Rain Skip"
-            valveFlowEvent(false) // deduce that valve is off if the current action was a skip (as opposed to any sort of run)
+            sendWateringEvents(false, false) // deduce that valve is off if the current action was a skip (as opposed to any sort of run)
         }
         else if (currentAction.reason != null) {
             actionStr = currentAction.reason
@@ -263,16 +264,16 @@ def valveStateEvent(stateData) {
                 def now = new Date()
                 if (currentActionEnd.after(now)) {
                     LOG("Deduced valve is in fact on.)", 3, "debug")
-                    valveFlowEvent(true) // deduce that valve is on if the current action is a watering event and its end has not occurred yet
+                    sendWateringEvents(true, false) // deduce that valve is on if the current action is a watering event and its end has not occurred yet
                 }
                 else if (now.after(currentActionEnd)) {
                     LOG("Deduced valve must be off.)", 3, "debug")
-                    valveFlowEvent(false) // deduce that valve is off if the current action is a watering event and its end has already occurred
+                    sendWateringEvents(false, false) // deduce that valve is off if the current action is a watering event and its end has already occurred
                 }
             }
             else {
                 LOG("Unexpected: lastWateringAction present suggests watering action ongoing, but there is no start time or no duration. Setting valve to on given presence of lastWateringAction, but further investigation warranted.", 2, "warn")
-                valveFlowEvent(true) 
+                sendWateringEvents(true, false)
             }
         }
         sendEvent(name:'currentAction', value: actionStr ?: "None")
@@ -294,7 +295,7 @@ def valveStateEvent(stateData) {
         sendEvent(name:'currentActionSecsDuration', value: "None")
         sendEvent(name:'currentActionFlowDetected', value: "None")
         sendEvent(name:'currentActionProgramName', value: "None")
-        valveFlowEvent(false) // deduce that valve is off if there was no last action
+        sendWateringEvents(false, false) // deduce that valve is off if there was no last action
     }
 }
 
@@ -487,7 +488,7 @@ void poll() {
 }
 
 def getDefaultRunTime() {
-    return device?.currentValue("defaultWaterDurationSecs")?.value ?: 600
+    return device?.currentValue("defaultWaterDurationSecs") ?: 600
 }
 
 def isCmdOk2Run() {
@@ -509,7 +510,7 @@ def startWatering(secs=null) {
     def res = parent?.startValve(this, waterTime)
     if (res) {
         LOG("startWatering was Sent Successfully: ${res}", 3, "debug")
-        sendWateringEvents(true)
+        sendWateringEvents(true, true)
         runIn(waterTime.toInteger() + 10, "poll", [overwrite: false]) // resynch 10 seconds after the watering is scheduled to stop
     }
     else {
@@ -522,12 +523,12 @@ def startWatering(secs=null) {
 def stopWatering() {
     LOG("stopWatering()...", 5, "trace")
    // if(!isCmdOk2Run()) { return }
-    def isClosed = device?.currentState("valve")?.value.toString() == "closed" ? true : false
+    def isClosed = device?.currentValue("valve") == "closed" ? true : false
     if (!isClosed) {
         def res = parent?.stopValve(this)
         if (res) {
             LOG("Valve was Stopped Successfully...", 4, "info")
-            sendWateringEvents(false)
+            sendWateringEvents(false, true)
         }
         else {
             LOG("Rachio reports stopWatering was unsuccessful. Marking valve as offline: ${res}", 3, "debug")
@@ -539,7 +540,7 @@ def stopWatering() {
 def on() {
     LOG("valve on...", 5, "trace")
     if(!isCmdOk2Run()) { return }
-    def isOn = device?.currentState("switch")?.value.toString() == "on" ? true : false
+    def isOn = device?.currentValue("valve") == "on" ? true : false
     if (!isOn) { startWatering() }
     else { LOG("Valve is Already ON... Ignoring...", 4, "info") }
 }
@@ -547,7 +548,7 @@ def on() {
 def off() {
     LOG("valve off...", 5, "trace")
     //if(!isCmdOk2Run()) { return }
-    def isOff = device?.currentState("switch")?.value.toString() == "off" ? true : false
+    def isOff = device?.currentValue("valve") == "off" ? true : false
     if (!isOff) { stopWatering() }
     else { LOG("Valve is Already OFF... Ignoring...", 4, "info") }
 }
@@ -555,7 +556,7 @@ def off() {
 def open() {
     LOG("Valve open()...", 5, "trace")
     if(!isCmdOk2Run()) { return }
-    def isOpen = device?.currentState("valve")?.value.toString() == "open" ? true : false
+    def isOpen = device?.currentValue("valve") == "open" ? true : false
     if (!isOpen) {
         startWatering()
     }
@@ -565,14 +566,14 @@ def open() {
 def close() {
     LOG("Valve close()...", 5, "trace")
     //if(!isCmdOk2Run()) { return }
-    def isClosed = device?.currentState("valve")?.value.toString() == "closed" ? true : false
+    def isClosed = device?.currentValue("valve") == "closed" ? true : false
     if (!isClosed) {
         stopWatering()
     } else { LOG("Valve is Already Closed... Ignoring...", 4, "info") }
 }
 
-def sendWateringEvents(isWatering) {
-    LOG("sendWateringEvents(${isWatering})...", 5, "trace")
+def sendWateringEvents(isWatering, poll = false) {
+    LOG("sendWateringEvents(${isWatering}, ${poll})...", 5, "trace")
     if (isWatering == true) {
         sendEvent(name:'switch', value: "on", displayed: false, isStateChange: true)
         sendEvent(name:'valve', value: "open", displayed: false, isStateChange: true)
@@ -584,12 +585,14 @@ def sendWateringEvents(isWatering) {
         sendEvent(name:'watering', value: "off", displayed: true, isStateChange: true)
     }
     if (state?.baseStationId != null) parent?.updateBaseStationWateringState(state?.baseStationId)
-    LOG("scheduling poll to run in 10 seconds...", 5, "trace")
-    runIn(10, "poll", [overwrite: false]) // resynch 
+    if (poll) {
+        LOG("scheduling poll to run in 10 seconds...", 5, "trace")
+        runIn(10, "poll", [overwrite: false]) // resynch 
+    }
 }
 
 def isWatering() {
-    return device?.currentState("valve")?.value.toString() == "open" ? true : false
+    return device?.currentValue("valve") == "open" ? true : false
 }
 
 def setDefaultWaterDuration(waterTime) {

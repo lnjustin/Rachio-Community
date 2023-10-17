@@ -604,7 +604,7 @@ def decZoneWaterTime() {
 }
 
 def setDashboard() {
-    parent.setDashboard(state?.deviceId)
+    parent.setDashboard(state?.deviceId, "irrigation")
 }
 
 def setRainDelayString( rainDelay) {
