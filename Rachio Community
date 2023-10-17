@@ -2444,7 +2444,7 @@ def buildDashboard() {
     Integer numDays = 1 + numPastDaysDashboardSetting + numFutureDaysDashboardSetting
     Integer svgWidth = columnWidth * numDays
     LOG("Column Width = ${columnWidth}. numDays = ${numDays}. svgWidth = ${svgWidth}", 3, "debug")
-    svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="100%" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 140"  xml:space="preserve">'
+    svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="100%" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 170"  xml:space="preserve">'
     
     svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:' + colorScheme.skipStrikethroughColor + '} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} . cloudPredicted:{fill:' + colorScheme.cloudPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip{fill:' + colorScheme.freezeSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:10px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style>'
 
@@ -2496,11 +2496,12 @@ def buildDashboard() {
                 def hOffset = getRachioIconOffset(numIcons, j, iconWidth)
                 Double middle = halfColumnWidth - 12
                 Double translateH = middle + hOffset
-                svg += '<g transform="translate(' + Double.toString(translateH) + ',-30) scale(.8)">'
+                svg += '<g transform="translate(' + Double.toString(translateH) + ',-10) scale(.8)">'
                 svg += it.svg
                 svg += '</g>'
                 j++
             }
+            svg += '<g transform="translate(0, 20)">'
         }
 
         svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="1.5" text-anchor="middle" class="dayText largeFontClass fontWeightClass">' + contentMap[dateIndex].parameters?.dayLabel + '</text>'
@@ -2547,6 +2548,10 @@ def buildDashboard() {
             }
             svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString((precipAmountBaseY + tempExtraVerticalSpacing)) + '" text-anchor="middle" class="precipText smallFontClass">' + contentMap[dateIndex].precipAmount + '</text>'
 
+        }
+
+        if (settings.singleRachioIcon == false || (settings.singleRachioIcon == true && rachioIconLocation == "Top")) {
+            svg += '</g>'
         }
             
         svg += '</g>'
