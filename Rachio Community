@@ -219,13 +219,13 @@ def devicePage() {
         section(getInterface("header","Irrigation System Configuration")) {
             
             // TO DO: Fix images from modelInfo state
-            input "controllers", "enum", title: "Select your irrigation system controllers", description: "Tap to Select", required: true, multiple: true, options: controllerList, submitOnChange: true
+            input "controllers", "enum", title: "Select your irrigation system controllers", description: "Tap to Select", required: false, multiple: true, options: controllerList, submitOnChange: true
         
             if(settings?.controllers) {
                 controllerList?.sort { it?.value }?.each { cont->
                     if(cont?.key in settings?.controllers) {
                         def zoneData = zoneSelections(controllers, cont?.key)
-                        input "${cont?.key}_zones", "enum", title: "Select Zones for ${cont?.value}", description: "Tap to Select", required: true, multiple: true, options: zoneData, submitOnChange: true
+                        input "${cont?.key}_zones", "enum", title: "Select Zones for ${cont?.value}", description: "Tap to Select", required: false, multiple: true, options: zoneData, submitOnChange: true
                     }
                 }
             }
@@ -233,13 +233,13 @@ def devicePage() {
          section(getInterface("header","Hose Timer Configuration")) {
             
             // TO DO: Fix images from model info state
-            input "baseStations", "enum", title: "Select your hose timer wifi hubs (by serial number)", description: "Tap to Select", required: true, multiple: true, options: baseStationList, submitOnChange: true
+            input "baseStations", "enum", title: "Select your hose timer wifi hubs (by serial number)", description: "Tap to Select", required: false, multiple: true, options: baseStationList, submitOnChange: true
             if(settings?.baseStations) {
                 baseStationList?.sort { it?.value }?.each { station ->
                     if(station?.key in settings?.baseStations) {
                         def valveInputEnum = hoseTimerValveSelections(station?.key)
                         valveList.add(valveInputEnum)
-                        input "${station?.key}_valves", "enum", title: "Select Valves for hose timer wifi hub ${station?.value}", description: "Tap to Select", required: true, multiple: true, options: valveInputEnum, submitOnChange: true
+                        input "${station?.key}_valves", "enum", title: "Select Valves for hose timer wifi hub ${station?.value}", description: "Tap to Select", required: false, multiple: true, options: valveInputEnum, submitOnChange: true
                     }
                 }
             }
