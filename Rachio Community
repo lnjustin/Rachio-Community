@@ -736,7 +736,7 @@ def updateAPICount() {
 def _httpGet(subUri, endpoint="open") {
     LOG("_httpGet($subUri)", 3, "debug")
     try {
-        def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
+        def baseURI = (endpoint == "open") ? getApiEndpoint() + "/1/public" : getClosedApiEndpoint()
         LOG("URL: ${baseURI}/${subUri}", 3, "debug")
         def params = [
             uri: "${baseURI}/${subUri}",
@@ -1629,7 +1629,8 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", nonS
     LOG("Sending: ${jsonBody}", 5, "trace")
     def returnStatus = false
     
-    def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
+    def baseURI = (endpoint == "open") ? getApiEndpoint() + "/1/public" : getClosedApiEndpoint()
+    LOG("sendJson URL: ${baseURI}/${subUri}", 3, "debug")
     def cmdParams = [
         uri: "${baseURI}/${subUri}",
         requestContentType: "application/x-www-form-urlencoded; charset=utf-8",
@@ -1672,7 +1673,7 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
     def returnStatus = false
     def returnData = null
     def response = null
-    def baseURI = (endpoint == "open") ? "${apiEndpoint}/1/public" : getClosedApiEndpoint()
+    def baseURI = (endpoint == "open") ? getApiEndpoint() + "/1/public" : getClosedApiEndpoint()
     def cmdParams = [
         uri: "${baseURI}/${subUri}",
         requestContentType: "application/x-www-form-urlencoded; charset=utf-8",
@@ -1942,7 +1943,7 @@ def startZone(child, deviceId, zoneNum, mins) {
         def duration = mins.toInteger() * 60
         def jsonData = new JsonBuilder("id":zoneId, "duration":duration)
         LOG("startZone jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("zone/start", jsonData?.toString(), deviceId, false, "closed", true)
+        res = sendJson("zone/start", jsonData?.toString(), deviceId, false, "open", true)
     } else { LOG("startZone Missing ZoneId or duration... ${zoneId} | ${mins}", 1, "error") }
     return res
 }
@@ -1962,7 +1963,7 @@ def runAllZones(child, deviceId, mins) {
         }
         def jsonData = new JsonBuilder("zones":zoneData)
         //child?.log("runAllZones  jsonData: ${jsonData}")
-        res = sendJson("zone/start_multiple", jsonData?.toString(), deviceId, false, "closed", true)
+        res = sendJson("zone/start_multiple", jsonData?.toString(), deviceId, false, "open", true)
     } else { LOG("runAllZones Missing ZoneIds or Duration... ${selectedDevices[deviceId]?.zones} | ${mins}", 1, "error") }
     return res
 }
@@ -1988,13 +1989,13 @@ def pauseScheduleRun(child) {
 
 def pauseZoneRun(child, devId, duration) {
     def jsonData = new JsonBuilder("id":devId, "duration":duration)
-    def result = sendJson("device/pause_zone_run", jsonData?.toString(), devId, false, "closed", true)
+    def result = sendJson("device/pause_zone_run", jsonData?.toString(), devId, false, "open", true)
     return result
 }
 
 def resumeZoneRun(child, devId) {
     def jsonData = new JsonBuilder("id":devId)
-    def result = sendJson("device/resume_zone_run", jsonData?.toString(), devId, false, "closed", true)
+    def result = sendJson("device/resume_zone_run", jsonData?.toString(), devId, false, "open", true)
     return result
 }
 
