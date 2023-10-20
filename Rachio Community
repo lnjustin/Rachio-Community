@@ -2154,7 +2154,7 @@ def setValveDefaultRunTime(child, secs) {
     def res = false
     LOG("Setting Default RunTime | ValveName: ${child?.device.displayName} | Default Rune Time: ${secs})", 3, "debug")
     def valveId = child?.device?.deviceNetworkId
-    if (valveId && mins) {
+    if (valveId && secs) {
         def jsonData = new JsonBuilder("valveId":valveId, "defaultRuntimeSeconds":secs)
         LOG("setValveDefaultRunTime jsonData: ${jsonData}", 3, "debug")
         res = sendJson("valve/setDefaultRuntime", jsonData?.toString(), valveId, false, "closed", true )

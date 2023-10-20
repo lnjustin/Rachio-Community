@@ -751,6 +751,10 @@ void generateActivityFeedsEvent(notificationMessage) {
 	sendEvent(name: "notificationMessage", value: "${device.name} ${notificationMessage}", descriptionText: "${device.name} ${notificationMessage}", isStateChange: true)
 }
 
+static String getTimestamp() {
+	return new Date().format("yyyy-MM-dd HH:mm:ss z")
+}
+
 void LOG(String message, Integer level=3, String logType="debug") {
     String dbg=parent?.getDebugLevel()
 	Integer dbgLevel = dbg.toInteger()
