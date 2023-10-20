@@ -2268,6 +2268,7 @@ def buildDashboard() {
     yesterday -= 1
     def sevenDaysLater = today.copyWith(hourOfDay: 23, minute: 59, second: 59)
     sevenDaysLater += 6
+    def now = new Date()
 
     def contentMap = [:]
 
@@ -2360,7 +2361,7 @@ def buildDashboard() {
         def schedules = getIrrigationSchedules(userInfo)
 
         def rainSensorState = getDeviceState(devId)?.state?.rainSensorTripped
-        def pastEventsData = getDevicePastEvents(devId, startDate, endDate)
+        def pastEventsData = getDevicePastEvents(devId, startDate, now)
         def futureEventsData = getDeviceFutureEvents(devId, endDate)?.entries
 
         for (date in startDate..endDate) {
@@ -2746,7 +2747,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
             }
         }
     }
-    else if (!futureEvents?.isEmpty()) {
+    if (!futureEvents?.isEmpty()) {
         for (event in futureEvents) {
             def icon = [:]
             def foundEvent = [:]
