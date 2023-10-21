@@ -89,15 +89,13 @@ metadata {
         command "decZoneWaterTime"
         command "incZoneWaterTime"
         command "runAllZones"
-        command "pauseZoneRun", ["number"]
-        command "resumeZoneRun"
+        command "pauseRun", [[name:"Seconds", type:"NUMBER", description: "Duration for which to pause current run."]]
+        command "resumeRun"
         command "standbyOn"
         command "standbyOff"
-        //command "pauseScheduleRun"
 
         command "open"
         command "close"
-        //command "pause"
         
         command(
              "setDashboardColorScheme", 
@@ -167,10 +165,6 @@ metadata {
             state "off", icon: "st.switch.off"
             state "on", action: "stopWatering", icon: "st.switch.on"
         }
-        valueTile("pauseScheduleRun", "device.scheduleTypeBtnDesc", inactiveLabel: false, decoration: "flat", width: 2, height: 1) {
-            state "default", label: '${currentValue}', action: "pauseScheduleRun"
-        }
-
         // Rain Delay Control
         standardTile("leftButtonControl", "device.rainDelay", inactiveLabel: false, decoration: "flat") {
             state "default", action:"decreaseRainDelay", icon:"st.thermostat.thermostat-left"
@@ -682,7 +676,7 @@ def runAllZones() {
     }
 }
 
-def pauseZoneRun(duration) {
+def pauseRun(duration) {
     if(!isCmdOk2Run()) { return }
     def res = parent?.pauseZoneRun(this, state?.deviceId, duration)
     if (!res) {
@@ -690,19 +684,11 @@ def pauseZoneRun(duration) {
     }
 }
 
-def resumeZoneRun() {
+def resumeRun() {
     if(!isCmdOk2Run()) { return }
     def res = parent?.resumeZoneRun(this, state?.deviceId)
     if (!res) {
         markOffLine()
-    }
-}
-
-def pauseScheduleRun() {
-   LOG("pauseScheduleRun...", 5, "trace")
-    if(state?.curSchedType == "automatic") {
-        def res = parent?.pauseScheduleRun(this)
-        if(res) { LOG("Successfully Paused Scheduled Run...", 3, "debug") }
     }
 }
 

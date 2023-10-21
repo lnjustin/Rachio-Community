@@ -95,7 +95,6 @@ metadata {
 
         command "open"
         command "close"
-        command "pause"
     }
 
     simulator {

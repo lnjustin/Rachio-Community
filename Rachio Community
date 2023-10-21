@@ -1625,7 +1625,7 @@ def setValue(child, deviceId, newValue) {
     return result
 }
 
-def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", nonStandyByDevice = true) {
+def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", standyByDevice = true) {
     LOG("Sending: ${jsonBody}", 5, "trace")
     def returnStatus = false
     
@@ -1639,7 +1639,7 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", nonS
     ]
 
     try{
-        if(!nonStandyByDevice && !standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
+        if(standyByDevice && !standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
             LOG("Skipping this command while controller is in 'Standby Mode'...", 3, "debug")
             return true
         }
@@ -1943,7 +1943,7 @@ def startZone(child, deviceId, zoneNum, mins) {
         def duration = mins.toInteger() * 60
         def jsonData = new JsonBuilder("id":zoneId, "duration":duration)
         LOG("startZone jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("zone/start", jsonData?.toString(), deviceId, false, "open", true)
+        res = sendJson("zone/start", jsonData?.toString(), deviceId, false)
     } else { LOG("startZone Missing ZoneId or duration... ${zoneId} | ${mins}", 1, "error") }
     return res
 }
@@ -1963,39 +1963,20 @@ def runAllZones(child, deviceId, mins) {
         }
         def jsonData = new JsonBuilder("zones":zoneData)
         //child?.log("runAllZones  jsonData: ${jsonData}")
-        res = sendJson("zone/start_multiple", jsonData?.toString(), deviceId, false, "open", true)
+        res = sendJson("zone/start_multiple", jsonData?.toString(), deviceId, false)
     } else { LOG("runAllZones Missing ZoneIds or Duration... ${selectedDevices[deviceId]?.zones} | ${mins}", 1, "error") }
     return res
 }
 
-def pauseScheduleRun(child) {
-    LOG("pauseScheduleRun...", 5, "trace")
-    def schedData = getCurSchedule(atomicState?.deviceId)
-    def schedRuleData = getScheduleRuleInfo(schedData?.scheduleRuleId)
-    child?.log "schedRuleData: $schedRuleData"
-    child?.log "Schedule Started on: ${epochToDt(schedRuleData?.startDate)} | Total Duration: ${getDurationDesc(schedRuleData?.totalDuration.toLong())}"
-
-    if(schedRuleData) {
-        def zones = schedRuleData?.zones?.sort { a , b -> a.sortOrder <=> b.sortOrder }
-        zones?.each { zn ->
-            child?.log "Zone#: ${zn?.zoneNumber} | Zone Duration: ${getDurationDesc(zn?.duration.toLong())} | Order#: ${zn?.sortOrder}"
-            if(zn?.zoneId == schedData?.zoneId) {
-                def zoneRunTime = "Elapsed Runtime: ${getDurationDesc(GetTimeValDiff(schedData?.zoneStartDate.toLong()))}"
-                child?.log "Zone Started: ${epochToDt(schedData?.zoneStartDate)} | ${zoneRunTime} | Cycle Count: ${schedData?.cycleCount} | Cycling: ${schedData?.cycling}"
-            }
-        }
-    }
-}
-
 def pauseZoneRun(child, devId, duration) {
     def jsonData = new JsonBuilder("id":devId, "duration":duration)
-    def result = sendJson("device/pause_zone_run", jsonData?.toString(), devId, false, "open", true)
+    def result = sendJson("device/pause_zone_run", jsonData?.toString(), devId, false)
     return result
 }
 
 def resumeZoneRun(child, devId) {
     def jsonData = new JsonBuilder("id":devId)
-    def result = sendJson("device/resume_zone_run", jsonData?.toString(), devId, false, "open", true)
+    def result = sendJson("device/resume_zone_run", jsonData?.toString(), devId, false)
     return result
 }
 
@@ -2061,7 +2042,7 @@ def startValve(child, secs) {
     if (valveId && secs) {
         def jsonData = new JsonBuilder("valveId":valveId, "durationSeconds":secs)
         LOG("startValve jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("valve/startWatering", jsonData?.toString(), valveId, false, "closed", true )
+        res = sendJson("valve/startWatering", jsonData?.toString(), valveId, false, "closed", false)
     } else { LOG("startValve Missing valveId or duration... ${valveId} | ${secs}", 1, "error") }
     return res
 }
@@ -2093,7 +2074,7 @@ def stopValve(child) {
     if (valveId) {
         def jsonData = new JsonBuilder("valveId":valveId)
         LOG("stopValve jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("valve/stopWatering", jsonData?.toString(), valveId, false, "closed", true )
+        res = sendJson("valve/stopWatering", jsonData?.toString(), valveId, false, "closed", false)
     } else { LOG("stopValve Missing valveId... ${valveId}", 1, "error") }
     return res
 }
@@ -2157,7 +2138,7 @@ def setValveDefaultRunTime(child, secs) {
     if (valveId && secs) {
         def jsonData = new JsonBuilder("valveId":valveId, "defaultRuntimeSeconds":secs)
         LOG("setValveDefaultRunTime jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("valve/setDefaultRuntime", jsonData?.toString(), valveId, false, "closed", true )
+        res = sendJson("valve/setDefaultRuntime", jsonData?.toString(), valveId, false, "closed", false)
     } else { LOG("setValveDefaultRunTime Missing valveId or duration... ${valveId} | ${secs}", 1, "error") }
     return res
 }
