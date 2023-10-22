@@ -480,10 +480,12 @@ def scheduleDataEvent(data) {
     if(isStateChange(device, "scheduleType", curSchedType?.toString().toLowerCase()?.capitalize())) {
         sendEvent(name: 'scheduleType', value: curSchedType?.toString().toLowerCase()?.capitalize(), displayed: true, isStateChange: true)
     }
-    if(isStateChange(device, "zoneDuration", zoneDuration.toString())) {
-        sendEvent(name: 'zoneDuration', value: zoneDuration.toString(), displayed: true, isStateChange: true)
+
+    def zoneDurationValue = zoneDuration ?: 0
+    if(isStateChange(device, "zoneDuration", zoneDurationValue.toString())) {
+        sendEvent(name: 'zoneDuration', value: zoneDurationValue.toString(), displayed: true, isStateChange: true)
     }
-    def zoneElapsed = zoneDuration && timeDiff && timeDiff > 0 ? timeDiff : null
+    def zoneElapsed = zoneDuration && timeDiff && timeDiff > 0 ? timeDiff : 0
     if(isStateChange(device, "zoneElapsed", zoneElapsed.toString())) {
         sendEvent(name: 'zoneElapsed', value: zoneElapsed.toString(), displayed: false, isStateChange: true)
     }
