@@ -1,0 +1,778 @@
+/**
+ *  Rachio Hose Timer Valve Device Handler
+ *
+ *  Copyright\u00A9 2023 Justin Leonard
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ *  in compliance with the License. You may obtain a copy of the License at:
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+ *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
+ *  for the specific language governing permissions and limitations under the License.
+ *
+ * Version info in Rachio Community App
+ */
+
+import java.text.SimpleDateFormat
+
+Integer statusRefresh() { return 60 }
+
+metadata {
+    definition (name: "Rachio Hose Timer", namespace: "lnjustin", author: "Justin Leonard") {
+        capability "Refresh"
+        capability "Switch"
+        capability "Actuator"
+        capability "Valve"
+        capability "Sensor"
+        capability "Polling"
+        capability "Health Check"
+
+        attribute "valveName", "string"
+        attribute "valveColor", "string"
+      //  attribute "valvePhoto", "string"
+
+        attribute "dashboard", "string"
+
+        attribute "watering", "string"
+
+        attribute "defaultWaterDurationSecs", "number"
+        
+        attribute "connected", "string"
+        attribute "lastSeen", "string"
+        attribute "batteryStatus", "string"
+        attribute "firmwareVersion", "string"  
+        attribute "changesPending", "string"
+
+        attribute "lastAction", "string"
+        attribute "lastActionTime", "string"
+        attribute "lastActionTimeStr", "string"
+        attribute "lastActionSecsDuration", "string"
+        attribute "lastActionProgramName", "string"
+        attribute "lastActionFlowDetected", "string"
+
+        attribute "currentAction", "string"
+        attribute "currentActionTime", "string"
+        attribute "currentActionTimeStr", "string"
+        attribute "currentActionSecsDuration", "string"
+        attribute "currentActionProgramName", "string"
+        attribute "currentActionFlowDetected", "string"
+
+        attribute "nextAction", "string"
+        attribute "nextActionTime", "string"
+        attribute "nextActionTimeStr", "string"
+        attribute "nextActionSecsDuration", "string"
+        attribute "nextActionProgramName", "string"
+
+        attribute "lastUpdatedDt", "string"
+        attribute "notificationMessage", "string"
+
+        attribute "DeviceWatch-DeviceStatus", "string"
+
+        command "stopWatering"
+
+        command "startWatering", [[name:"Seconds", type:"NUMBER", description: "Duration of Start Watering Command"]]
+
+        command "setDefaultWaterDuration", [[name:"Seconds*", type:"NUMBER", description: "Default Duration of Start Watering Command"]]
+
+        command "skipNextProgramRun"
+        command "cancelPendingSkip"
+    }
+}
+
+// parse events into attributes
+def parse(String description) {
+    LOG("Parsing '${description}'", 5, "trace")
+}
+
+def initialize() {
+    sendEvent(name: "DeviceWatch-DeviceStatus", value: "online", displayed: false, isStateChange: true)
+    sendEvent(name: "DeviceWatch-Enroll", value: groovy.json.JsonOutput.toJson(["protocol":"cloud", "scheme":"untracked"]), displayed: false)
+    verifyDataAttr()
+}
+
+def verifyDataAttr() {
+    updateDataValue("HealthEnrolled", "true")
+    updateDataValue("manufacturer", "Rachio")
+    def gen = state?.deviceId ? parent?.getDevGeneration(state?.deviceId) : null
+    updateDataValue("model", "${device?.name}${gen ? " ($gen)" : ""}")
+}
+
+void installed() {
+    state.isInstalled = true
+    initialize()
+}
+
+void updated() {
+    initialize()
+}
+
+def generateEvent(Map results) {
+    if(results) {
+        LOG("generate Event for Valve. Results:" + results, 3, "debug")
+        if (results.valveData && results.valveData.valve)  state?.valveId = results?.valveData?.valve.id
+        state?.baseStationId = results?.baseStationId
+      //  if (results.baseStationData && results.baseStationData.baseStation) state?.baseStationId = results?.baseStationData?.baseStation.id
+
+        // process programs before state, so that program names will be available
+        valveProgramEvent(results?.programData)
+
+        if (results.valveData && results.valveData.valve) {
+            valveNameEvent(results?.valveData?.valve.name)
+        //    valveColorEvent(results?.valveData?.valve.color)
+        //  valvePhotoEvent(results?.valveData?.photo.id)
+            valveStateEvent(results?.valveData?.valve.state)
+        }
+        if(state?.isOnline == false) {
+            LOG("Rachio serves report the hose timer valve is offline. Marking valve as offline: ${res}", 3, "debug")
+            markOffLine()
+        }
+
+        if (results.dayViewData) dayViewEvent(results?.dayViewData?.valveDayViews)
+
+        if(isOnline) { lastUpdatedEvent() }
+
+        parent?.setDashboard(state?.valveId, "hoseTimer")
+    }
+    return "hello from zone"
+}
+
+def getDurationDesc(long secondsCnt) {
+    int seconds = secondsCnt %60
+    secondsCnt -= seconds
+    long minutesCnt = secondsCnt / 60
+    long minutes = minutesCnt % 60
+    minutesCnt -= minutes
+    long hoursCnt = minutesCnt / 60
+    return "${minutes} min ${(seconds >= 0 && seconds < 10) ? "0${seconds}" : "${seconds}"} sec"
+}
+
+def getDurationMinDesc(long secondsCnt) {
+    int seconds = secondsCnt %60
+    secondsCnt -= seconds
+    long minutesCnt = secondsCnt / 60
+    long minutes = minutesCnt % 60
+    minutesCnt -= minutes
+    long hoursCnt = minutesCnt / 60
+    return "${minutes}"
+}
+
+def lastUpdatedEvent() {
+    def lastDt = formatDt(new Date())
+    def lastUpd = device?.currentState("lastUpdatedDt")?.stringValue
+    state?.lastUpdatedDt = lastDt?.toString()
+    if(isStateChange(device, "lastUpdatedDt", lastDt.toString())) {
+        LOG("${device?.displayName} is ${state?.isOnline ? "Online and Active" : "OFFLINE"}) - Last Updated: (${lastDt})", 4, "info")
+        sendEvent(name: 'lastUpdatedDt', value: lastDt?.toString(), displayed: false)
+    }
+}
+
+def markOffLine() {
+	if(isStateChange(device, "watering", "offline")) { 
+		LOG("UPDATED: Watering (Offline)", 5, "trace")
+		sendEvent(name: 'watering', value: "offline", displayed: true, isStateChange: true)
+		sendEvent(name: 'valve', value: "closed", displayed: false, isStateChange: true)
+		sendEvent(name: 'switch', value: "off", displayed: false, isStateChange: true)
+	}
+	if(isStateChange(device, "valveRunStatus", "Device in Offline")) {
+		sendEvent(name: 'valveRunStatus', value: "Device is Offline", displayed: false, isStateChange: true)
+	}
+    setWatchDogStatus()
+}
+
+def valveFlowEvent(isFlowDetected) {
+    LOG("valveFlowEvent...", 5, "trace")
+    def curState = device?.currentState("watering")?.value.toString()
+    def newState = (isFlowDetected == "true" || isFlowDetected == true) ? "on" : "off"
+    LOG("Flow is (${newState}) | Previous: (${curState})", 3, "debug")
+    if(isStateChange(device, "watering", newState.toString())) {
+        LOG("UPDATED: Watering (${newState}) | Previous: (${curState})", 3, "debug")
+        sendEvent(name: 'watering', value: newState, displayed: true, isStateChange: true)
+        sendEvent(name: 'switch', value: ((isFlowDetected == "true" || isFlowDetected == true) ? "on" : "off"), displayed: false, isStateChange: true)
+        sendEvent(name: 'valve', value: ((isFlowDetected == "true" || isFlowDetected == true) ? "open" : "closed"), displayed: false, isStateChange: true)
+    }
+    if (state?.baseStationId != null) parent?.updateBaseStationWateringState(state?.baseStationId)
+}
+
+def valveNameEvent(val) {
+    def curState = device?.currentState("valveName")?.value.toString()
+    def newState = val ? val.toString() : "unknown"
+    if(isStateChange(device, "valveName", newState.toString())) {
+        LOG("UPDATED: Valve Name (${newState}) | Previous: (${curState})", 3, "debug")
+        sendEvent(name:'valveName', value: newState, displayed: true)
+    }
+}
+
+def valveColorEvent(val) {
+    def curState = device?.currentState("valveColor")?.value.toString()
+    def newState = val ? val.toString() : "unknown"
+    if(isStateChange(device, "valveColor", newState.toString())) {
+        LOG("UPDATED: Valve Color (${newState}) | Previous: (${curState})", 3, "debug")
+        sendEvent(name:'valveColor', value: newState, displayed: true)
+    }
+}
+
+def setWatchDogStatus() {
+    def onlStatus = state?.isOnline == true ? "online" : "offline"
+    sendEvent(name: "DeviceWatch-DeviceStatus", value: onlStatus, displayed: false)
+}
+
+def valveStateEvent(stateData) {
+    LOG("ValveStateEvent for ${device?.currentState("valveName")?.value}: (${stateData})", 5, "trace")
+    state?.stateData = stateData
+
+    def reportedState = stateData?.reportedState
+    if (reportedState.connected != null) sendEvent(name:'connected', value: reportedState?.connected)
+    state?.isOnline = (reportedState.connected == "true" || reportedState.connected == true) ? true : false
+    if(state?.isOnline == false) {
+        LOG("Rachio reports the hose timer valve as being offline. Marking valve as offline: reportedState = ${reportedState.connected} of type ${reportedState.connected.class}", 3, "debug")
+        markOffLine()
+    }
+    setWatchDogStatus()
+
+    if (reportedState.lastSeen) sendEvent(name:'lastSeen', value: formatUtcDt(reportedState.lastSeen))
+    if (reportedState.batteryStatus) sendEvent(name:'batteryStatus', value: reportedState.batteryStatus)
+    if (reportedState.firmwareVersion) sendEvent(name:'firmwareVersion', value: reportedState.firmwareVersion)
+
+    if (reportedState.defaultRuntimeSeconds) sendEvent(name:'defaultWaterDurationSecs', value: reportedState.defaultRuntimeSeconds)
+    
+    if (stateData.matches != null) {
+        def changesPendingVal = (stateData.matches == "false" || stateData.matches == false) ? true : false
+        sendEvent(name:'changesPending', value: changesPendingVal)
+        if (changesPendingVal == true) handleChangesPending()
+    }
+
+    // reportedState.lastWateringAction is only present if the watering action is actually ongoing, so lastWateringAction represents the current watering action (as of the valve's last report)
+    def currentAction = reportedState.lastWateringAction
+    if (currentAction) {
+
+        def actionStr = ""
+        if (currentAction?.containsKey("skip")) {
+            if (currentAction.skip?.containsKey("manualOverrideTrigger")) actionStr = "Manual Skip"
+            else if (currentAction.skip?.containsKey("rainOverrideTrigger")) actionStr = "Rain Skip"
+            sendWateringEvents(false, false) // deduce that valve is off if the current action was a skip (as opposed to any sort of run)
+        }
+        else if (currentAction.reason != null) {
+            actionStr = currentAction.reason
+
+            // current action is a watering event
+            LOG("Current Action is a watering event. Double check valve state from current action starting at ${currentAction.start} for a duration of ${currentAction.durationSeconds} seconds)", 3, "debug")
+            if (currentAction.start != null && currentAction.durationSeconds != null) {
+                Date currentActionStart = new Date(getUnixDtFromUTCDt(currentAction.start))
+                Date currentActionEnd = adjustDateBySecs(currentActionStart, currentAction.durationSeconds.toInteger())
+                def now = new Date()
+                if (currentActionEnd.after(now)) {
+                    LOG("Deduced valve is in fact on.)", 3, "debug")
+                    sendWateringEvents(true, false) // deduce that valve is on if the current action is a watering event and its end has not occurred yet
+                }
+                else if (now.after(currentActionEnd)) {
+                    LOG("Deduced valve must be off.)", 3, "debug")
+                    sendWateringEvents(false, false) // deduce that valve is off if the current action is a watering event and its end has already occurred
+                }
+            }
+            else {
+                LOG("Unexpected: lastWateringAction present suggests watering action ongoing, but there is no start time or no duration. Setting valve to on given presence of lastWateringAction, but further investigation warranted.", 2, "warn")
+                sendWateringEvents(true, false)
+            }
+        }
+        sendEvent(name:'currentAction', value: actionStr ?: "None")
+
+        if (currentAction.start) {
+            sendEvent(name:'currentActionTimeStr', value: formatUtcDt(currentAction.start))
+            sendEvent(name:'currentActionTime', value: getUnixDtFromUTCDt(currentAction.start) )
+        }
+        if (currentAction.durationSeconds) {
+            sendEvent(name:'currentActionSecsDuration', value: currentAction.durationSeconds.toInteger())
+        }
+        if (currentAction.flowDetected) sendEvent(name:'currentActionFlowDetected', value: currentAction.flowDetected)
+        if (currentAction.programId && state.programs[currentAction.programId]) sendEvent(name:'currentActionProgramName', value: state.programs[currentAction.programId])
+    }
+    else {
+        sendEvent(name:'currentAction', value: "None")
+        sendEvent(name:'currentActionTimeStr', value: "None")
+        sendEvent(name:'currentActionTime', value: "None")
+        sendEvent(name:'currentActionSecsDuration', value: "None")
+        sendEvent(name:'currentActionFlowDetected', value: "None")
+        sendEvent(name:'currentActionProgramName', value: "None")
+        sendWateringEvents(false, false) // deduce that valve is off if there was no last action
+    }
+}
+
+def valveProgramEvent(programs) {
+    LOG("valveProgramEvent: ${programs}", 5, "trace")
+    if (!state.programs) state.programs = [:]
+    programs.each { program ->
+        LOG("Found Program: ${program}", 3, "debug")
+        state.programs[program.id] = program.name
+    }
+}
+
+def dayViewEvent(dayViewData) {
+    LOG("dayViewEvent: with dayViewData = ${dayViewData}", 4, "info")
+
+    // API provides no guarantee about the sorting of this data structure, so need to ensure select the earliest next action
+    if (!dayViewData) {
+        LOG("No day view data for valve.", 4, "info")
+        return
+    }
+    def nextAction = [:]
+    def lastAction = [:]
+    dayViewData.each { day ->
+    // must traverse every day, because no guarantee of ordering. Plus, cannot rely on the day part of the data since different time zones could be in play
+        LOG("Processing Day: ${day}", 4, "info")
+        day.valveProgramRunSummaries?.each { programAction ->
+            if (state.programs?.containsKey(programAction?.programId)) {
+                // program contains this valve
+                programAction?.valveRunSummaries?.each { valveRun ->
+                    lastAction = processValveRunForLastAction("Program Run", valveRun, lastAction, programAction)
+                    nextAction = processValveRunForNextAction("Program Run", valveRun, nextAction, programAction)
+                }
+            }
+        }
+        day.valveQuickRunSummaries?.each { quickAction ->
+            quickAction?.valveRunSummaries?.each { valveRun ->
+                lastAction = processValveRunForLastAction("Quick Run", valveRun, lastAction)
+                nextAction = processValveRunForNextAction("Quick Run", valveRun, nextAction)
+            }
+        }
+        day.valveManualRunSummaries?.each { manualAction ->
+            manualAction?.valveRunSummaries?.each { valveRun ->
+                lastAction = processValveRunForLastAction("Manual Run", valveRun, lastAction)
+                nextAction = processValveRunForNextAction("Manual Run", valveRun, nextAction)
+            }
+        }
+    }
+
+    // It is expected that the last action will equal any current action until the current action ends. At that point, the last action will reflect the last action and there will be no more current action.
+    if (lastAction != null && lastAction != [:]) {
+        if (lastAction.action) {
+            sendEvent(name:'lastAction', value: lastAction.action)
+        }
+        if (lastAction.time) {
+            sendEvent(name:'lastActionTimeStr', value: formatUtcDt(lastAction.time))
+            sendEvent(name:'lastActionTime', value: getUnixDtFromUTCDt(lastAction.time) )
+        }
+        if (lastAction.durationSeconds) {
+            LOG("Last action duration seconds = ${lastAction.durationSeconds}")
+            sendEvent(name:'lastActionSecsDuration', value: lastAction.durationSeconds.toInteger())
+        }
+        sendEvent(name:'lastActionProgramName', value: lastAction.programName ?: "None")
+    }
+    else {
+        LOG("No previous runs of valveId ${state.valveId}.", 4, "info")
+        sendEvent(name:'lastAction', value: "None")
+        sendEvent(name:'lastActionTimeStr', value: "None")
+        sendEvent(name:'lastActionTime', value: "None")    
+        sendEvent(name:'lastActionSecsDuration', value: "None")  
+        sendEvent(name:'lastActionProgramName', value: "None") 
+    }
+
+    if (nextAction != null && nextAction != [:]) {
+        if (nextAction.action) {
+            sendEvent(name:'nextAction', value: nextAction.action)
+        }
+        if (nextAction.time) {
+            sendEvent(name:'nextActionTimeStr', value: formatUtcDt(nextAction.time))
+            sendEvent(name:'nextActionTime', value: getUnixDtFromUTCDt(nextAction.time) )
+        }
+        if (nextAction.durationSeconds) {
+            LOG("next action duration seconds = ${nextAction.durationSeconds}")
+            sendEvent(name:'nextActionSecsDuration', value: nextAction.durationSeconds.toInteger())
+        }
+        sendEvent(name:'nextActionProgramName', value: nextAction.programName ?: "None")
+
+        if (nextAction.programId != null) {
+            // save next action state for creating or deleting skips if needed
+            state.nextActionProgramId = nextAction.programId
+            state.nextActionProgramTimestamp = nextAction.programTime
+        }
+        else {
+            state.nextActionProgramId = null
+            state.nextActionProgramTimestamp = null
+        }
+        
+    }
+    else {
+        LOG("No upcoming runs of valveId ${state.valveId}.", 4, "info")
+        sendEvent(name:'nextAction', value: "None")
+        sendEvent(name:'nextActionTimeStr', value: "None")
+        sendEvent(name:'nextActionTime', value: "None")    
+        sendEvent(name:'nextActionSecsDuration', value: "None")  
+        sendEvent(name:'nextActionProgramName', value: "None") 
+    }
+}
+
+def processValveRunForNextAction(runType, valveRun, nextAction, programAction = null) {
+    def newNextAction = nextAction
+    if (valveRun && valveRun?.valveId == state?.valveId) {
+        def now = new Date()
+        def action = runType
+        LOG("Valve Run is ${valveRun}.", 3, "debug")
+        if (valveRun.containsKey("skip")) {
+            if (valveRun.skip?.containsKey("manualOverrideTrigger")) action = "Manual Skip"
+            else if (valveRun.skip?.containsKey("rainOverrideTrigger")) action = "Rain Skip"
+        }
+        def startDate = getDateObjectFromUTCDt(valveRun?.start)
+        LOG("Comparing time now ${now} to start date of ${startDate}", 4, "debug")
+        if (startDate && startDate.after(now)) {
+            if (nextAction == null || nextAction == [:]) {
+                newNextAction = [action: action, time: valveRun?.start, durationSeconds: valveRun?.durationSeconds, programName: programAction?.programName, programId: programAction?.programId, programTime: programAction?.start]
+                LOG("Setting new nextAction to ${newNextAction}", 4, "debug")
+            }
+            else {
+                def nextActionDate = getDateObjectFromUTCDt(nextAction?.time)
+                if (nextActionDate && nextActionDate.after(startDate)) {
+                    // action iterating over starts earlier than the action currently set as the next action, so set it as the next action
+                    newNextAction = [action: action, time: valveRun?.start, durationSeconds: valveRun?.durationSeconds, programName: programAction?.programName, programId: programAction?.programId, programTime: programAction?.start]
+                    LOG("Setting new nextAction to ${newNextAction}", 4, "debug")
+                }
+            }
+        }
+        else LOG("No start date or start date is before now.", 4, "debug")
+    }
+    return newNextAction
+}
+
+def processValveRunForLastAction(runType, valveRun, lastAction, programAction = null) {
+    def newLastAction = lastAction
+    if (valveRun && valveRun?.valveId == state?.valveId) {
+        def now = new Date()
+        def action = runType
+        LOG("Valve Run is ${valveRun}.", 3, "debug")
+        if (valveRun.containsKey("skip")) {
+            if (valveRun.skip?.containsKey("manualOverrideTrigger")) action = "Manual Skip"
+            else if (valveRun.skip?.containsKey("rainOverrideTrigger")) action = "Rain Skip"
+        }
+        def startDate = getDateObjectFromUTCDt(valveRun?.start)
+        LOG("Comparing time now ${now} to start date of ${startDate}", 4, "debug")
+        if (startDate && now.after(startDate)) {
+            if (lastAction == null || lastAction == [:]) {
+                newLastAction = [action: action, time: valveRun?.start, durationSeconds: valveRun?.durationSeconds, programName: programAction?.programName, programId: programAction?.programId, programTime: programAction?.start]
+                LOG("Setting new lastAction to ${newLastAction}", 4, "debug")
+            }
+            else {
+                def lastActionDate = getDateObjectFromUTCDt(lastAction?.time)
+                if (lastActionDate && startDate.after(lastActionDate)) {
+                    // action iterating over starts later than the action currently set as the last action, so set it as the last action
+                    newLastAction = [action: action, time: valveRun?.start, durationSeconds: valveRun?.durationSeconds, programName: programAction?.programName, programId: programAction?.programId, programTime: programAction?.start]
+                    LOG("Setting new lastAction to ${newLastAction}", 4, "debug")
+                }
+            }
+        }
+        else LOG("No start date or start date is after now.", 4, "debug")
+    }
+    return newLastAction
+}
+
+def handleChangesPending() {
+    LOG("Asynchornous changes to Hose Timer Valve settings are still pending and have not yet been downloaded to the value yet. State of Valve is only tentative.)", 1, "warn")
+}
+
+def fmtString(str) {
+    if(!str) { return null }
+    def out = []
+    def tmp = str?.replaceAll("_", " ")?.toLowerCase()?.split(" ")
+    tmp?.each { out.push(it?.toString().capitalize()) }
+    return out.join(" ")
+}
+
+def refresh() {
+    LOG("refresh...", 5, "trace")
+    poll()
+}
+
+void poll() {
+    LOG("Requested Parent Poll...", 5, "trace");
+    parent?.pollChild(this, "hoseTimerDevice")
+}
+
+def getDefaultRunTime() {
+    return device?.currentValue("defaultWaterDurationSecs") ?: 600
+}
+
+def isCmdOk2Run() {
+    LOG("isCmdOk2Run...", 5, "trace")
+    if(state?.isOnline == false) {
+        LOG("Skipping the request... Because the valve is unable to send commands while it's in an Offline State.", 1, "warn")
+        return false
+    }
+    else { return true }
+}
+
+def startWatering(secs=null) {
+    // Secs may be set by the wifi hub device
+    LOG("startWatering()...", 5, "trace")
+    if(!isCmdOk2Run()) { return }
+    def waterTime = getDefaultRunTime()
+    if (secs != null) waterTime = secs
+    LOG("Starting Watering for (${waterTime}) seconds", 3, "debug")
+    def res = parent?.startValve(this, waterTime)
+    if (res) {
+        LOG("startWatering was Sent Successfully: ${res}", 3, "debug")
+        sendWateringEvents(true, true)
+        runIn(waterTime.toInteger() + 10, "poll", [overwrite: false]) // resynch 10 seconds after the watering is scheduled to stop
+    }
+    else {
+        LOG("Rachio reports startWatering was unsuccessful. Marking valve as offline: ${res}", 3, "debug")
+        markOffLine()
+    }
+    return res
+}
+
+def stopWatering() {
+    LOG("stopWatering()...", 5, "trace")
+   // if(!isCmdOk2Run()) { return }
+    def isClosed = device?.currentValue("valve") == "closed" ? true : false
+    if (!isClosed) {
+        def res = parent?.stopValve(this)
+        if (res) {
+            LOG("Valve was Stopped Successfully...", 4, "info")
+            sendWateringEvents(false, true)
+        }
+        else {
+            LOG("Rachio reports stopWatering was unsuccessful. Marking valve as offline: ${res}", 3, "debug")
+            markOffLine()
+        }
+    } else { LOG("Valve is Already Closed... Ignoring...", 4, "info") }
+}
+
+def on() {
+    LOG("valve on...", 5, "trace")
+    if(!isCmdOk2Run()) { return }
+    def isOn = device?.currentValue("valve") == "on" ? true : false
+    if (!isOn) { startWatering() }
+    else { LOG("Valve is Already ON... Ignoring...", 4, "info") }
+}
+
+def off() {
+    LOG("valve off...", 5, "trace")
+    //if(!isCmdOk2Run()) { return }
+    def isOff = device?.currentValue("valve") == "off" ? true : false
+    if (!isOff) { stopWatering() }
+    else { LOG("Valve is Already OFF... Ignoring...", 4, "info") }
+}
+
+def open() {
+    LOG("Valve open()...", 5, "trace")
+    if(!isCmdOk2Run()) { return }
+    def isOpen = device?.currentValue("valve") == "open" ? true : false
+    if (!isOpen) {
+        startWatering()
+    }
+    else { LOG("Valve is Already Open... Ignoring...", 4, "info") }
+}
+
+def close() {
+    LOG("Valve close()...", 5, "trace")
+    //if(!isCmdOk2Run()) { return }
+    def isClosed = device?.currentValue("valve") == "closed" ? true : false
+    if (!isClosed) {
+        stopWatering()
+    } else { LOG("Valve is Already Closed... Ignoring...", 4, "info") }
+}
+
+def sendWateringEvents(isWatering, poll = false) {
+    LOG("sendWateringEvents(${isWatering}, ${poll})...", 5, "trace")
+    if (isWatering == true) {
+        sendEvent(name:'switch', value: "on", displayed: false, isStateChange: true)
+        sendEvent(name:'valve', value: "open", displayed: false, isStateChange: true)
+        sendEvent(name:'watering', value: "on", displayed: true, isStateChange: true)
+    }
+    else {
+        sendEvent(name:'switch', value: "off", displayed: false, isStateChange: true)
+        sendEvent(name:'valve', value: "closed", displayed: false, isStateChange: true)
+        sendEvent(name:'watering', value: "off", displayed: true, isStateChange: true)
+    }
+    if (state?.baseStationId != null) parent?.updateBaseStationWateringState(state?.baseStationId)
+    if (poll) {
+        LOG("scheduling poll to run in 10 seconds...", 5, "trace")
+        runIn(10, "poll", [overwrite: false]) // resynch 
+    }
+}
+
+def isWatering() {
+    return device?.currentValue("valve") == "open" ? true : false
+}
+
+def setDefaultWaterDuration(waterTime) {
+    LOG("setDefaultWaterDuration(${waterTime})...", 5, "trace")
+    sendEvent(name:'defaultWaterDurationSecs', value: waterTime)
+    if(!isCmdOk2Run()) { return }
+    def res = parent?.setValveDefaultRunTime(this, waterTime)
+    if (res) {
+        LOG("setDefaultWaterDuration was Sent Successfully: ${res}", 3, "debug")
+    }
+    else {
+        LOG("Rachio reports setDefaultWaterDuration was unsuccessful: ${res}", 1, "error")
+      //  markOffLine()
+    }
+}
+
+def skipNextProgramRun() {
+    if (device.latestValue('nextAction') == "Program Run" && state.nextActionProgramId && state.nextActionProgramTimestamp) {
+        def res = parent?.createHoseTimerProgramSkip(state.nextActionProgramId, state.nextActionProgramTimestamp)
+        if (res) {
+            runIn(5, "poll") // resynch 
+        }
+        else LOG("Error skipping next run", 1, "warn")
+    }
+    else {
+        LOG("No Next Run to Skip", 1, "warn")
+    }
+}
+
+def cancelPendingSkip() {
+    LOG("cancelPendingSkip()...", 5, "trace")
+    if ((device.latestValue('nextAction') == "Manual Skip" || device.latestValue('nextAction') == "Rain Skip") && state.nextActionProgramId && state.nextActionProgramTimestamp) {
+        def resp = parent?.deleteHoseTimerProgramSkip(state.nextActionProgramId, state.nextActionProgramTimestamp)
+        runIn(5, "poll") // resynch 
+    }
+    else {
+        LOG("No Pending Skip to Cancel", 1, "warn")
+    }
+}
+
+def getDtNow() {
+	def now = new Date()
+	return formatDt(now, false)
+}
+
+def epochToDt(val) {
+    if(val) { return formatDt(new Date(val)) }
+}
+
+def formatDt(dt, mdy = true) {
+	def formatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
+	def tf = new SimpleDateFormat(formatVal)
+	if(location?.timeZone) { tf.setTimeZone(location?.timeZone) }
+	return tf.format(dt)
+}
+
+//Returns time differences is seconds
+def GetTimeValDiff(timeVal) {
+    try {
+        def start = new Date(timeVal).getTime()
+        def now = new Date().getTime()
+        def diff = (int) (long) (now - start) / 1000
+        LOG("diff: $diff", 3, "debug")
+        return diff
+    }
+    catch (ex) {
+        LOG("GetTimeValDiff Exception: ${ex}", 1, "error")
+        return 1000
+    }
+}
+
+def getTimeDiffSeconds(strtDate, stpDate=null) {
+	if((strtDate && !stpDate) || (strtDate && stpDate)) {
+		def now = new Date()
+		def stopVal = stpDate ? stpDate.toString() : formatDt(now, false)
+		def start = Date.parse("E MMM dd HH:mm:ss z yyyy", strtDate).getTime()
+		def stop = Date.parse("E MMM dd HH:mm:ss z yyyy", stopVal).getTime()
+		def diff = (int) (long) (stop - start) / 1000
+		return diff
+	} else { return null }
+}
+
+def getTimeDiffSecondsUtc(strtDate, stpDate) {
+	if(strtDate && stpDate) {
+		def start = getUnixDtFromUTCDt(strtDate)
+        def stop = getUnixDtFromUTCDt(stpDate)
+		def diff = (int) (long) (stop - start) / 1000
+		return diff
+	} else { return null }
+}
+
+def getUnixDtFromUTCDt(utcDt) {
+     def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    Date date = inFormat.parse(utcDt)
+    return date.getTime()
+}
+
+def getDateObjectFromUTCDt(utcDt) {
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    return inFormat.parse(utcDt)
+}
+
+def formatUtcDt(utcDt, mdy = true) {
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    
+	LOG("formatDt($utcDt, $mdy)...", 5, "trace")
+	def formatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
+	def outFormat = new SimpleDateFormat(formatVal)
+    if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
+    
+  //  if (utcDt == null) return null
+    
+    def parsedInFormat = null
+    try {
+        parsedInFormat = inFormat.parse(utcDt)
+    } 
+    catch (ex1) {
+        try {
+            inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+            inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+            parsedInFormat = inFormat.parse(utcDt)
+        }
+        catch (ex2) {
+            inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+            inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+            parsedInFormat = inFormat.parse(utcDt)
+        }
+    }
+
+	return outFormat.format(parsedInFormat)
+}
+
+def adjustDateBySecs(Date date, Integer secs) {
+    Calendar cal = Calendar.getInstance()
+    cal.setTimeZone(location.timeZone)
+    cal.setTime(date)
+    cal.add(Calendar.SECOND, secs)
+    Date newDate = cal.getTime()
+    return newDate
+}
+
+def convertSecstoTimeStr(int secondsToConvert) {
+    long hours = TimeUnit.SECONDS.toHours(secondsToConvert)
+    long minutes = TimeUnit.SECONDS.toMinutes(secondsToConvert) % TimeUnit.HOURS.toMinutes(1)
+    long seconds = TimeUnit.SECONDS.toSeconds(secondsToConvert) % TimeUnit.MINUTES.toSeconds(1)
+
+    if (hours == 0) return String.format("%02d:%02d", Math.abs(minutes), Math.abs(seconds))
+    else return String.format("%02d:%02d:%02d", Math.abs(hours), Math.abs(minutes), Math.abs(seconds))
+}
+
+// generate custom mobile activity feeds event
+void generateActivityFeedsEvent(notificationMessage) {
+	sendEvent(name: "notificationMessage", value: "${device.name} ${notificationMessage}", descriptionText: "${device.name} ${notificationMessage}", isStateChange: true)
+}
+
+static String getTimestamp() {
+	return new Date().format("yyyy-MM-dd HH:mm:ss z")
+}
+
+void LOG(String message, Integer level=3, String logType="debug") {
+    String dbg=parent?.getDebugLevel()
+	Integer dbgLevel = dbg.toInteger()
+	if (logType == "error") {Ó
+		String a=getTimestamp()
+		state.lastLOGerror="${message} @ "+a
+		state.LastLOGerrorDate=a
+	} else {
+		if(level > dbgLevel) return
+	}
+    def List<String> lLOGTYPES =	['error', 'debug', 'info', 'trace', 'warn']
+	if(!lLOGTYPES.contains(logType)) {
+		logerror("LOG() - Received logType (${logType}) which is not in the list of allowed types ${lLOGTYPES}, message: ${message}, level: ${level}")
+		logType="debug"
+	}
+    if (logType == "debug") log.debug(message)
+    else if (logType == "error") log.error(message)
+    else if (logType == "info") log.info(message)
+    else if (logType == "trace") log.trace(message)
+    else if (logType == "warn") log.warn(message)
+}

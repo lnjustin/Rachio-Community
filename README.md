@@ -2,7 +2,8 @@
 Community version of Rachio App/Drivers for Hubitat
 
 Rachio Community builds off of the native Rachio integration. On top of the native features, this community version adds:
-* Dashboard. See your watering schedule and skips, in conjunction with Rachio weather information, on your smart home dashboard. Substantially similar to what you see on the Home tab of the mobile app, except Rachio Community enhances it to include different icons for different types of skips. Highly configurable.
+* Dashboard. See your watering schedule and skips, in conjunction with Rachio's weather information, on your smart home dashboard. Substantially similar to what you see on the Home tab of the mobile app, except Rachio Community enhances it to include different icons for different types of skips. Differentiate schedules/programs with different colored icons. Highly configurable.
+* Full Smart Hose Timer Support
 * Next Run and Last Run data exposed for automation & display. Automate based on when your next run will occur and/or when your last run occurred.
 * Rain Sensor State exposed. Use your irrigation system's rain sensor for automation and/or see its status on your smart home dashboard.
 * Next event data exposed. See information about your system's next event, e.g., scheduled run or skip.
@@ -42,8 +43,10 @@ The Dashboard outputs an SVG image to a local endpoint as well as a cloud endpoi
 **Dashboard Configuration**
 The dashboard is highly configurable with regard to:
 * Number of days on dashboard
+* Hide/Show Non-Scheduled Quick Runs
 * Hide/Show precipitation percentage, precipitation amount, high/low temp
 * Select from predefined color schemes or customize every color
+* Color code different schedules/programs
 * Expand or Collapse vertical or horizontal spacing
 * scale up or down in size
 
@@ -63,7 +66,14 @@ Rachio controllers 1, 2, 3, and 3e are supported.
 1. Uninstall the Rachio native app
 2. Install the Rachio Zone driver
 3. Install the Rachio Controller driver
-4. Install the Rachio Community app
-5. Enable Oath
-6. Follow the install instructions in the Rachio Community app
+4. Install the Rachio Wifi Hub driver
+5. Install the Rachio Hose Timer driver
+6. Install the Rachio Community app
+7. Enable Oath
+8. Follow the install instructions in the Rachio Community app
 
+
+**Setup & Troubleshooting**
+Some users report that, after installing Rachio Community, they needed to use the native Rachio mobile app (not Rachio Community) to trigger an automatic schedule to run for each zone. It was only then that Rachio pushed data to Rachio Community for populating and configuring each zone for them. Accordingly, if after installing you do not have but a few attributes showing on the device page of a zone, use the Rachio mobile app to trigger a schedule for that zone.
+
+If your install doesn't work well, with your devices not populating state or your dashboard not showing weather correctly, please send me your model number and # of zones. Rachio keeps adding different models with different numbers of zones, which requires updating the app to support.

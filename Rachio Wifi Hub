@@ -1,0 +1,415 @@
+/**
+ *  Rachio Wifi Hub Device Handler
+ *
+ *  Copyright\u00A9 2023 Justin Leonard
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ *  in compliance with the License. You may obtain a copy of the License at:
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+ *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
+ *  for the specific language governing permissions and limitations under the License.
+ *
+ * Version Info In Rachio Community App
+ */
+
+import java.text.SimpleDateFormat
+
+Integer statusRefresh() { return 60 }
+
+metadata {
+    definition (name: "Rachio Wifi Hub", namespace: "lnjustin", author: "Justin Leonard") {
+        capability "Refresh"
+        capability "Switch"
+        capability "Actuator"
+        capability "Valve"
+        capability "Sensor"
+        capability "WaterSensor"
+        capability "Polling"
+        capability "Health Check"
+
+        attribute "connected", "string"
+        attribute "bleHubFirmwareVersion", "string"
+        attribute "wifiBridgeFirmwareVersion", "string"
+
+        attribute "watering", "string"
+
+        attribute "lastUpdatedDt", "string"
+        attribute "notificationMessage", "string"
+        
+        attribute "DeviceWatch-DeviceStatus", "string"
+        
+        command "stopWateringAllValves"
+        command "startWateringAllValves", [[name:"Seconds", type:"NUMBER", description: "Duration for which to water all hose timers"]]
+        command "setAllValveDefaultWaterDurationSecs", [[name:"Seconds*", type:"NUMBER", description: "Default Duration of Start Watering Command For All Hose Timers"]]
+
+        command(
+             "setDashboardColorScheme", 
+             [
+                [
+                     "name":"Dashboard Color Scheme*",
+                     "description":"Choose one of several predefined color schemes for the dashboard. Custom must be specified in the Rachio Community App.).",
+                     "type":"ENUM",
+                     "constraints":["White with Color","Black with Color","White without Color","Black without Color","Custom"]
+                ]
+             ]
+        )
+        
+        command(
+             "setDashboardIconScheme", 
+             [
+                [
+                     "name":"Dashboard Icon Scheme*",
+                     "description":"Choose one of several predefined icon schemes for the dashboard.).",
+                     "type":"ENUM",
+                     "constraints":["Filled","Outline"]
+                ]
+             ]
+        )
+    }}
+
+def setDashboardColorScheme(scheme) {
+    parent?.settingUpdate("colorSchemeSelection", scheme, "enum") 
+}
+
+def setDashboardIconScheme(scheme) {
+    parent?.settingUpdate("iconSchemeSelection", scheme, "enum") 
+}
+
+def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/$imgName" }
+
+// parse events into attributes
+def parse(String description) {
+    LOG("Parsing '${description}'", 5, "trace")
+}
+
+def initialize() {
+    sendEvent(name: "DeviceWatch-DeviceStatus", value: "online", displayed: false, isStateChange: true)
+    sendEvent(name: "DeviceWatch-Enroll", value: groovy.json.JsonOutput.toJson(["protocol":"cloud", "scheme":"untracked"]), displayed: false)
+    
+    verifyDataAttr()
+}
+
+def verifyDataAttr() {
+    updateDataValue("HealthEnrolled", "true")
+}
+
+void installed() {
+    initialize()
+    state.isInstalled = true
+}
+
+void updated() {
+    initialize()
+}
+
+def generateEvent(Map results) {
+    LOG("---------------START OF WIFI HUB API RESULTS DATA----------------", 3, "debug")
+    if(results) {
+        LOG("Wifi Hub Results: ${results}", 3, "debug")
+
+        state?.deviceId = device?.deviceNetworkId.toString()
+
+        stateDataEvent(results?.baseStationData.baseStation.reportedState)
+
+        if(state.isOnline) { lastUpdatedEvent() }
+    }
+    return "Controller"
+}
+
+def lastUpdatedEvent() {
+    def lastDt = formatDt(new Date())
+    def lastUpd = device?.currentState("lastUpdatedDt")?.stringValue
+    state?.lastUpdatedDt = lastDt?.toString()
+    if(isStateChange(device, "lastUpdatedDt", lastDt.toString())) {
+        LOG("${device?.displayName} is ${state?.isOnline ? "Online and Active" : "OFFLINE"}) - Last Updated: (${lastDt})", 4, "info")
+        sendEvent(name: 'lastUpdatedDt', value: lastDt?.toString(), displayed: false)
+    }
+}
+
+def setWatchDogStatus() {
+    def onlStatus = state?.isOnline == true ? "online" : "offline"
+    sendEvent(name: "DeviceWatch-DeviceStatus", value: onlStatus, displayed: false)
+}
+
+def stateDataEvent(stateData) {
+    state?.stateData = stateData
+
+    def reportedState = stateData?.reportedState
+    if (stateData?.connected != null) sendEvent(name:'connected', value: stateData?.connected)
+    state?.isOnline = (stateData?.connected == "true" || stateData?.connected == true) ? true : false
+    if(!state?.isOnline) markOffLine()
+    setWatchDogStatus()
+
+    if (stateData?.bleHubFirmwareVersion) sendEvent(name:'bleHubFirmwareVersion', value: stateData?.bleHubFirmwareVersion)
+    if (stateData?.wifiBridgeFirmwareVersion) sendEvent(name:'wifiBridgeFirmwareVersion', value: stateData?.wifiBridgeFirmwareVersion)
+}
+
+def getDurationDesc(long secondsCnt) {
+    int seconds = secondsCnt %60
+    secondsCnt -= seconds
+    long minutesCnt = secondsCnt / 60
+    long minutes = minutesCnt % 60
+    minutesCnt -= minutes
+    long hoursCnt = minutesCnt / 60
+    return "${minutes} min ${(seconds >= 0 && seconds < 10) ? "0${seconds}" : "${seconds}"} sec"
+}
+
+def getDurationMinDesc(long secondsCnt) {
+    int seconds = secondsCnt %60
+    secondsCnt -= seconds
+    long minutesCnt = secondsCnt / 60
+    long minutes = minutesCnt % 60
+    minutesCnt -= minutes
+    long hoursCnt = minutesCnt / 60
+    return "${minutes}"
+}
+
+def markOffLine() {
+    if(isStateChange(device, "watering", "offline") || isStateChange(device, "connected", "false")) {
+        LOG("UPDATED: Watering is set to (Offline)", 3, "debug")
+        sendEvent(name: 'watering', value: "offline", displayed: true, isStateChange: true)
+        sendEvent(name: 'valve', value: "closed", displayed: false, isStateChange: true)
+        sendEvent(name: 'switch', value: "off", displayed: false, isStateChange: true)
+    }
+}
+
+def refresh() {
+    LOG("refresh...", 5, "trace")
+    poll()
+}
+
+void poll() {
+    LOG("Requested Parent Poll...", 5, "trace")
+    parent?.poll(this, "hoseTimerDevice")
+}
+
+def isCmdOk2Run() {
+    LOG("isCmdOk2Run...", 5, "trace")
+    if(state?.isOnline == false) {
+        LOG("Skipping the request... Because the Wifi Hub is unable to send commands while it's in an Offline State.", 1, "warn")
+        return false
+    }
+    else { return true }
+}
+
+def startWateringAllValves(secs = null) {
+    LOG("startWateringAllValves...", 5, "trace")
+    if(!isCmdOk2Run()) { return }
+    // will apply valve-specific default runtime if command called without a water time
+     LOG("Sending Start Watering Command for All Valves for (${secs ? secs : 'value-specific default'} Seconds)", 3, "debug")
+    def res = parent?.runAllValves(this, secs)
+    if (res) {
+        LOG("All Valves were Started Successfully...", 4, "info")
+        sendWateringEvents(true)
+    }
+    else {
+        LOG("Error Starting All Valves. Check individual valves for status.", 1, "error")
+      //  markOffLine()
+    }
+}
+
+def setAllValveDefaultWaterDurationSecs(timeVal) {
+    def curState = device?.currentState("allValveDefaultWaterDurationSecs")?.value.toString()
+    def newVal = timeVal.toInteger()
+    if(isStateChange(device, "allValveDefaultWaterDurationSecs", newVal.toString())) {
+        LOG("UPDATED: Manual All Valve Default Water Duration Secs (${newVal}) | Previous: (${curState})", 3, "debug")
+        sendEvent(name: 'allValveDefaultWaterDurationSecs', value: newVal, displayed: true)
+    }
+}
+
+def stopWateringAllValves() {
+    LOG("stopWateringAllValves", 5, "trace")
+    def res = parent?.stopAllValvesValve(this)
+    if (res) {
+        LOG("Valve was Stopped Successfully...", 4, "info")
+        sendWateringEvents(false)
+    }
+    else {
+        LOG("Error Stopping All Valves. Check individual valves for status.", 1, "error")
+       // markOffLine()
+    }
+}
+
+def sendWateringEvents(isWatering) {
+    if (isWatering == true) {
+        sendEvent(name:'switch', value: "on", displayed: false, isStateChange: true)
+        sendEvent(name:'valve', value: "open", displayed: false, isStateChange: true)
+        sendEvent(name:'watering', value: "on", displayed: true, isStateChange: true)
+    }
+    else {
+        sendEvent(name:'switch', value: "off", displayed: false, isStateChange: true)
+        sendEvent(name:'valve', value: "closed", displayed: false, isStateChange: true)
+        sendEvent(name:'watering', value: "off", displayed: true, isStateChange: true)
+    }
+}
+
+def updateWateringStateFromValves() {
+    def anyValveRunning = parent?.anyValveRunning(this)
+    if (anyValveRunning) sendWateringEvents(true)
+    else sendWateringEvents(false)
+}
+
+def on() {
+    LOG("on...", 5, "trace")
+    if(!isCmdOk2Run()) { return }
+    def isOn = device?.currentState("switch")?.value.toString() == "on" ? true : false
+    if (!isOn) startWateringAllValves() 
+    else { LOG("Switch is Already ON... Ignoring...", 5, "trace") }
+}
+
+def off() {
+    LOG("off...", 5, "trace")
+    //if(!isCmdOk2Run()) { return }
+    def isOff = device?.currentState("switch")?.value.toString() == "off" ? true : false
+    if (!isOff) { stopWateringAllValves() }
+    else { LOG("Switch is Already OFF... Ignoring...", 5, "trace") }
+}
+
+def open() {
+    LOG("open()...", 5, "trace")
+    if(!isCmdOk2Run()) { return }
+    def isOpen = device?.currentState("valve")?.value.toString() == "open" ? true : false
+    if (!isOpen) { startWateringAllValves() }
+    else { LOG("Valve is Already OPEN... Ignoring...", 5, "trace") }
+}
+
+def close() {
+   LOG("close()...", 5, "trace")
+    //if(!isCmdOk2Run()) { return }
+    def isClosed = device?.currentState("valve")?.value.toString() == "closed" ? true : false
+    if (!isClosed) { stopWateringAllValves() }
+    else { LOG("Close command Ignored... The Valve is Already Closed", 4, "info") }
+}
+
+def getDtNow() {
+	def now = new Date()
+	return formatDt(now, false)
+}
+
+def epochToDt(val) {
+    return formatDt(new Date(val))
+}
+
+def getUnixDtFromUTCDt(utcDt) {
+     def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    Date date = inFormat.parse(utcDt)
+    return date.getTime()
+}
+
+def getDateObjectFromUTCDt(utcDt) {
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    return inFormat.parse(utcDt)
+}
+
+def formatDt(dt, mdy = true) {
+	LOG("formatDt($dt, $mdy)...", 5, "trace")
+	def formatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
+	def tf = new SimpleDateFormat(formatVal)
+	if(location?.timeZone) { tf.setTimeZone(location?.timeZone) }
+	return tf.format(dt)
+}
+
+def formatUtcDt(utcDt, mdy = true) {
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    
+	LOG("formatDt($utcDt, $mdy)...", 5, "trace")
+	def formatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
+	def outFormat = new SimpleDateFormat(formatVal)
+    if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
+    
+  //  if (utcDt == null) return null
+    
+    def parsedInFormat = null
+    try {
+        parsedInFormat = inFormat.parse(utcDt)
+    } 
+    catch (ex1) {
+        try {
+            inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+            inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+            parsedInFormat = inFormat.parse(utcDt)
+        }
+        catch (ex2) {
+            inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+            inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+            parsedInFormat = inFormat.parse(utcDt)
+        }
+    }
+
+	return outFormat.format(parsedInFormat)
+}
+
+def formatUtcDtNoTime(utcDt) {
+    def inFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")
+    inFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
+    
+	LOG("formatDt($dt, $mdy)...", 5, "trace")
+	def formatVal = "MMM d, yyyy"
+	def outFormat = new SimpleDateFormat(formatVal)
+    if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
+    
+	return outFormat.format(inFormat.parse(utcDt))
+}
+
+//Returns time differences is seconds
+def GetTimeValDiff(timeVal) {
+    try {
+        def start = new Date(timeVal).getTime()
+        def now = new Date().getTime()
+        def diff = (int) (long) (now - start) / 1000
+        LOG("diff: $diff", 3, "debug")
+        return diff
+    }
+    catch (ex) {
+        LOG("GetTimeValDiff Exception: ${ex}", 1, "error")
+        return 1000
+    }
+}
+
+def getTimeDiffSeconds(strtDate, stpDate=null) {
+	if((strtDate && !stpDate) || (strtDate && stpDate)) {
+		def now = new Date()
+		def stopVal = stpDate ? stpDate.toString() : formatDt(now, false)
+		def start = Date.parse("E MMM dd HH:mm:ss z yyyy", strtDate).getTime()
+		def stop = Date.parse("E MMM dd HH:mm:ss z yyyy", stopVal).getTime()
+		def diff = (int) (long) (stop - start) / 1000
+		return diff
+	} else { return null }
+}
+
+// generate custom mobile activity feeds event
+void generateActivityFeedsEvent(notificationMessage) {
+	sendEvent(name: "notificationMessage", value: "${device.name} ${notificationMessage}", descriptionText: "${device.name} ${notificationMessage}", isStateChange: true)
+}
+
+static String getTimestamp() {
+	return new Date().format("yyyy-MM-dd HH:mm:ss z")
+}
+
+void LOG(String message, Integer level=3, String logType="debug") {
+    String dbg=parent?.getDebugLevel()
+	Integer dbgLevel = dbg.toInteger()
+	if (logType == "error") {
+		String a=getTimestamp()
+		state.lastLOGerror="${message} @ "+a
+		state.LastLOGerrorDate=a
+	} else {
+		if(level > dbgLevel) return
+	}
+    def List<String> lLOGTYPES =	['error', 'debug', 'info', 'trace', 'warn']
+	if(!lLOGTYPES.contains(logType)) {
+		logerror("LOG() - Received logType (${logType}) which is not in the list of allowed types ${lLOGTYPES}, message: ${message}, level: ${level}")
+		logType="debug"
+	}
+    if (logType == "debug") log.debug(message)
+    else if (logType == "error") log.error(message)
+    else if (logType == "info") log.info(message)
+    else if (logType == "trace") log.trace(message)
+    else if (logType == "warn") log.warn(message)
+}
