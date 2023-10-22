@@ -2309,7 +2309,7 @@ def buildDashboard() {
             useExternalWeatherSource = true
             // if for some reason, Rachio doesn't report locationId but still reports geoPoint, use that geoPoint for external weather source
             weatherGeoPoint = [latitude: selectedControllers[weatherControllerId]["latitude"], longitude: selectedControllers[weatherControllerId]["longitude"], timeZone: selectedControllers[weatherControllerId]["timeZone"]]
-            LOG("Have controller but no locationId found. Using external weather source with geopoint data: ${weatherGeoPoint}", 3, "debug")
+            LOG("Have controller but no locationId found. Using external weather source with geopoint data: ${weatherGeoPoint}", 3, "war")
         }
     }
     else useExternalWeatherSource = true
