@@ -141,6 +141,7 @@ metadata {
             state "8ZoneV2", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen2.png"
             state "16ZoneV2", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen2.png"
             state "8ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
+            state "8ZoneV3Pro", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3_pro.png"
 	        state "12ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
             state "16ZoneV3", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
             state "16ZoneV3Pro", icon: "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/rachio_gen3.png"
