@@ -406,7 +406,12 @@ def hardwareModelEvent(val) {
             newDesc = "8-Zone (Gen 3)"
             state?.controllerDescription = "gen3IrrigationController"
             break
-	case "GENERATION3_12ZONE":
+        case "GENERATION3_8ZONE_PRO":
+            newModel = "8ZoneV3Pro"
+            newDesc = "8-Zone (Gen 3) Pro"
+            state?.controllerDescription = "gen3IrrigationController"
+            break
+	    case "GENERATION3_12ZONE":
             newModel = "12ZoneV3"
             newDesc = "12-Zone (Gen 3)"
             state?.controllerDescription = "gen3IrrigationController"

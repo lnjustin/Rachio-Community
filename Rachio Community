@@ -709,6 +709,8 @@ def getControllerHardwareInfo(val) {
             return [model: "4ZoneV3", desc: "4-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_8ZONE":
             return [model: "8ZoneV3", desc: "8-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+        case "GENERATION3_8ZONE_PRO":
+            return [model: "8ZoneV3Pro", desc: "8-Zone (Gen 3) Pro", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_12ZONE":
             return [model: "12ZoneV3", desc: "12-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_16ZONE":
@@ -1012,6 +1014,9 @@ void updateDeviceStates() {
             devMap.controllers[controller?.id]["zones"] = zoneMap
             def detailsData = getDeviceDetails(controller?.id)
             devMap.controllers[controller?.id]["locationId"] = getLocationId(controller?.id, detailsData)
+            devMap.controllers[controller?.id]["latitude"] = controller?.latitude
+            devMap.controllers[controller?.id]["longitude"] = controller?.longitude
+            devMap.controllers[controller?.id]["timeZone"] = controller?.timeZone
         }
     }
 
@@ -1172,6 +1177,16 @@ def getLocationId(devId, detailsData) {
     return null
 }
 
+def getGeopoint(devId, detailsData) {
+    LOG("getGeopoint(${devId}, ${detailsData}) ...", 5, "trace")
+    def controller = getControllerJsonTag(devId)
+    if (controller) {
+        def controllerDetails = detailsData.get(controller)
+        if (controllerDetails) return controllerDetails.geoPoint 
+    }
+    return null
+}
+
 def getValveListData(baseStationId) {
     LOG("getValveListData($baseStationId)...", 5, "trace")
     def result = _httpGet("valve/listValves/${baseStationId}", "closed'")
@@ -1278,7 +1293,7 @@ def addRemoveDevices(uninst=false) {
                     setDashboard(contDev?.key, "irrigation")
                     LOG("Controller Device Created: (${d?.displayName}) with id: [${contDev?.key}]", 4, "info")
                 } else {
-                    LOG("found ${d?.displayName} with dni: ${dni?.key} already exists", 3, "debug")
+                    LOG("found ${d?.displayName} with dni: ${contDev?.key} already exists", 3, "debug")
                 }
                 devsInUse += contDev.key
                 contDev?.value?.zones?.each { zoneDni ->
@@ -1301,7 +1316,7 @@ def addRemoveDevices(uninst=false) {
                     d = addChildDevice("lnjustin", getChildBaseStationName(), baseStation?.key, null, [label: getDeviceLabelStr(baseStation?.value), completedSetup: true])
                     LOG("Base Station Device Created: (${d?.displayName}) with id: [${baseStation?.key}]", 4, "info")
                 } else {
-                    LOG("found ${d?.displayName} with dni: ${dni?.key} already exists", 3, "debug")
+                    LOG("found ${d?.displayName} with dni: ${baseStation?.key} already exists", 3, "debug")
                 }
                 devsInUse += baseStation?.key
                 baseStation?.value?.valves?.each { valve ->
@@ -2261,6 +2276,8 @@ def buildDashboard() {
         contentMap[dateIndex].rachioIcons = []
     }
 
+    def useExternalWeatherSource = false
+    def weatherGeoPoint = null
     // set weather parameters for dashboard, from either controllers if configured or from external source if no controllers configured
     if(params.controllerID || settings?.controllers) {
         // user has irrigation controller, so can use rachio for weather
@@ -2274,35 +2291,57 @@ def buildDashboard() {
         LOG("Selected Devices: ${selectedDevices}", 3, "debug")
         def selectedControllers = selectedDevices.controllers
         def locationId = selectedControllers[weatherControllerId]["locationId"]   
-        def weatherData = getWeather(locationId, startDate, endDate)?.weatherReadings
+        if (locationId != null) {
+            def weatherData = getWeather(locationId, startDate, endDate)?.weatherReadings
 
-        for (date in startDate..endDate) {
-            def dateIndex = getDateIndex(date)
-            def dateMap = getDateMap(date)
-            def weather = weatherData?.find { it?.date == dateMap }
-            contentMap[dateIndex].precipPercent = (weather.precipProbability > 0) ? ((int) (weather.precipProbability * 100)).toString() + "%" : ""
-            contentMap[dateIndex].precipAmount = (weather.calculatedPrecip > 0) ? weather.calculatedPrecip + "\"" : ""
-            contentMap[dateIndex].highTemp = weather.temperatureMax
-            contentMap[dateIndex].lowTemp = weather.temperatureMin
-            contentMap[dateIndex].weatherIcon = getWeatherIcon(weather.weatherType)
+            for (date in startDate..endDate) {
+                def dateIndex = getDateIndex(date)
+                def dateMap = getDateMap(date)
+                def weather = weatherData?.find { it?.date == dateMap }
+                contentMap[dateIndex].precipPercent = (weather.precipProbability > 0) ? ((int) (weather.precipProbability * 100)).toString() + "%" : ""
+                contentMap[dateIndex].precipAmount = (weather.calculatedPrecip > 0) ? weather.calculatedPrecip + "\"" : ""
+                contentMap[dateIndex].highTemp = weather.temperatureMax
+                contentMap[dateIndex].lowTemp = weather.temperatureMin
+                contentMap[dateIndex].weatherIcon = getWeatherIcon(weather.weatherType)
+            }
+        }
+        else if (locationId == null) {
+            useExternalWeatherSource = true
+            // if for some reason, Rachio doesn't report locationId but still reports geoPoint, use that geoPoint for external weather source
+            weatherGeoPoint = [latitude: selectedControllers[weatherControllerId]["latitude"], longitude: selectedControllers[weatherControllerId]["longitude"], timeZone: selectedControllers[weatherControllerId]["timeZone"]]
+            LOG("Have controller but no locationId found. Using external weather source with geopoint data: ${weatherGeoPoint}", 3, "debug")
         }
     }
-    else {
-        // user does not have an irrigation controller. Must use external source for weather
-        def weatherBaseStationId = null
-        if (params.hoseTimerValveID) weatherBaseStationId = getBaseStationFromValve(params.hoseTimerValveID) // if controller-speciifc dashboard, use that controller for weather
-        else if (settings?.baseStationForWeather) weatherBaseStationId = settings?.baseStationForWeather  // otherwise, if the dashboard is global across base station, and there are multiple base stations selected, use whichever base station the user has specified in settings
-        else { weatherBaseStationId = settings?.baseStations?.first() } // default to first controller (may be only controller)
-        LOG("Using Base Station ${weatherBaseStationId} for dashboard weather", 3, "debug")
+    else useExternalWeatherSource = true
 
-        def selectedBaseStations = atomicState?.selectedDevices?.baseStations
+    if (useExternalWeatherSource == true) {
+        // user does not have an irrigation controller. Must use external source for weather
+        LOG("Using external source for dashboard weather.", 3, "debug")
+        def queryGeoPoint = [:]
+        if (weatherGeoPoint != null) {
+            queryGeoPoint.latitude = weatherGeoPoint.latitude
+            queryGeoPoint.longitude = weatherGeoPoint.longitude
+            queryGeoPoint.timeZone = weatherGeoPoint.timeZone
+        }
+        else if (params.hoseTimerValveID || settings?.baseStationForWeather) {
+            def weatherBaseStationId = null
+            if (params.hoseTimerValveID) weatherBaseStationId = getBaseStationFromValve(params.hoseTimerValveID) // if controller-speciifc dashboard, use that controller for weather
+            else if (settings?.baseStationForWeather) weatherBaseStationId = settings?.baseStationForWeather  // otherwise, if the dashboard is global across base station, and there are multiple base stations selected, use whichever base station the user has specified in settings
+            else { weatherBaseStationId = settings?.baseStations?.first() } // default to first controller (may be only controller)
+            LOG("Using Base Station ${weatherBaseStationId} for dashboard weather", 3, "debug")
+            def selectedBaseStations = atomicState?.selectedDevices?.baseStations
+            queryGeoPoint.latitude = selectedBaseStations[weatherBaseStationId]["latitude"]
+            queryGeoPoint.longitude = selectedBaseStations[weatherBaseStationId]["longitude"]
+            queryGeoPoint.timeZone = selectedBaseStations[weatherBaseStationId]["timezone"]
+        }
+ 
 
         def query = [:]
         query.start_date = startDate.format('yyyy-MM-dd')
         query.end_date = endDate.format('yyyy-MM-dd')
-        query.latitude = selectedBaseStations[weatherBaseStationId]["latitude"]
-        query.longitude = selectedBaseStations[weatherBaseStationId]["longitude"]
-        query.timezone = selectedBaseStations[weatherBaseStationId]["timezone"]
+        query.latitude = queryGeoPoint.latitude
+        query.longitude = queryGeoPoint.longitude
+        query.timezone = queryGeoPoint.timeZone
         query.temperature_unit = getTemperatureScale() == "F" ? "fahrenheit" : "celsius"
         query.precipitation_unit = "inch"
         def queryStr = toQueryString(query)    
