@@ -430,6 +430,7 @@ def dashboardSettingsPage(){
                 
             }
             input "fontWeight", "enum", title: "Text Weight", defaultValue: "normal", options:["normal", "bold"], multiple: false, width: 2, submitOnChange: false
+            input "tempFormat", "enum", title: "Temperature Format", defaultValue: "hilo", options:["hilo": "Hi | Lo", "lohi": "Lo | Hi"], multiple: false, width: 4, submitOnChange: false
           //  input "globalScale", "number", title: "Global Scale (in percent)",defaultValue: 100, submitOnChange: false
           //  input "extraVerticalSpace", "number", title: "Extra Vertical Spacing (in pts)", defaultValue: 0, submitOnChange: false
           //  input "extraHorizontalSpace", "number", title: "Extra Horizontal Spacing (in pts)", defaultValue: 0, submitOnChange: false
@@ -2545,7 +2546,8 @@ def buildDashboard() {
         
         if (showTempSetting) {  // only show % for dates that are on or after today
             tempBaseY = 68
-            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString(tempBaseY + extraVerticalSpaceSetting) + '" text-anchor="middle" class="tempText largeFontClass fontWeightClass">' + contentMap[dateIndex].lowTemp + ' | ' +  contentMap[dateIndex].highTemp + '</text>'
+            def tempText = (settings["tempFormat"] && settings["tempFormat"] == "lohi") ? (contentMap[dateIndex].lowTemp + ' | ' +  contentMap[dateIndex].highTemp) : (contentMap[dateIndex].highTemp + ' | ' +  contentMap[dateIndex].lowTemp)
+            svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString(tempBaseY + extraVerticalSpaceSetting) + '" text-anchor="middle" class="tempText largeFontClass fontWeightClass">' + tempText + '</text>'
 
         }
 

@@ -1,9 +1,9 @@
 {
   "packageName": "Rachio Community Package",
   "author": "Justin Leonard",
-  "version": "2.1.12",
+  "version": "3.0.1",
   "minimumHEVersion": "2.1.4",
-  "dateReleased": "2023-09-26",
+  "dateReleased": "2023-10-25",
   "apps": [
     {
       "id": "2f59ef09-2381-48e8-81ea-e9eca85bbc3d",
@@ -27,6 +27,20 @@
       "name": "Rachio Zone",
       "namespace": "lnjustin",
       "location": "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Rachio%20Zone",
+      "required": true
+    },
+    {
+      "id": "b204c116-ae87-4f11-aeac-6bfc0d015e79",
+      "name": "Rachio Wifi Hub",
+      "namespace": "lnjustin",
+      "location": "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Rachio%20Wifi%20Hub",
+      "required": true
+    },
+    {
+      "id": "7fd6d55e-1289-4944-8f37-9736b5f2343c",
+      "name": "Rachio Hose Timer",
+      "namespace": "lnjustin",
+      "location": "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Rachio%20Hose%20Timer",
       "required": true
     }
   ]
