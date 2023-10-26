@@ -2050,6 +2050,32 @@ def getScheduleInfoFromSummary(summary, schedules) {
     return matches[0]
 }
 
+def getScheduleInfoFromEvent(event, schedules) {
+    LOG("getScheduleInfoFromEvent(${event})", 5, "trace")
+    def matches = []
+    def sanitizedSummary = event?.summary.toLowerCase()
+    if (schedules && schedules.scheduleRules) {
+        schedules.scheduleRules.each { schedule ->
+            def sanitizedName = schedule.name.toLowerCase()
+            if (event?.scheduleId && event?.scheduleId == schedule.id) matches.add([name:schedule.name, id: schedule.id, type: "FIXED"])
+            else if (sanitizedSummary.contains(sanitizedName)) matches.add([name:schedule.name, id: schedule.id, type: "FIXED"])
+        }
+    }
+    if (schedules && schedules.flexScheduleRules) {
+        schedules.flexScheduleRules.each { schedule ->
+            def sanitizedName = schedule.name.toLowerCase()
+            if (event?.scheduleId && event?.scheduleId == schedule.id) matches.add([name:schedule.name, id: schedule.id, type: "FLEX"])
+            else if (sanitizedSummary.contains(sanitizedName)) matches.add([name:schedule.name, id: schedule.id, type: "FLEX"])
+        }
+    }
+    if (matches.size() > 1) LOG("Multiple Schedules have the same name. Non-Unique schedule names jeopardizes the ability of Rachio Community to differentiate schedules on the dashboard.", 1, "warn")
+    else if (matches.size() == 0) {
+        LOG("No schedule id found and no names found in event summary ${summary}", 3, "debug")
+        return null
+    }
+    return matches[0]
+}
+
 def startValve(child, secs) {
     // child is valve
     def res = false
@@ -2700,16 +2726,13 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
             def foundEvent = [:]
             def icon = [:]
 
-            // TO DO: Handle incomplete API data that includes subtype but doesn't indicate even in summary which schedule is involved
-            // Example: [ category: SCHEDULE, deviceId: 8a0fd8ce-6c50-4572-8da5-68d2204b7e2b, eventDate: 1696941115000, hidden: false, id: a468f570-2d5a-366e-8421-d6c7e234040f, subType: ZONE_SKIPPED, summary: Thisschedulewasmanuallyskipped., type: USER_ACTION ]
-
             // TO DO: Handle multiple events being reported for the same schedule, e.g., skip and disable skip, may need to parse date to determine which one is the latest event
             if (!hideQuickRun(event.summary)) {
                 def scheduleSpecificColor = null
                 def schedId = null
                 if (event.subType == "SCHEDULE_STARTED" || event.subType == "WEATHER_INTELLIGENCE_SKIP" || event.subType == "WEATHER_INTELLIGENCE_CLIMATE_SKIP" || event.subType == "MANUAL_SKIP" || event.subType == "ZONE_SKIPPED") {
                     if (settings.singleRachioIcon == false && event.summary) {
-                        def schedule = getScheduleInfoFromSummary(event.summary, schedules)
+                        def schedule = getScheduleInfoFromEvent(event, schedules)
                         if (schedule) {
                             schedId = schedule?.id
                             scheduleSpecificColor = settings["colorFor${schedule?.type}Schedule${schedId}"]
