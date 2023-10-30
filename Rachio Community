@@ -49,6 +49,7 @@
  * V3.0.0 Major rewrite to add support for Rachio Hose Timer; Allow user customization of logging level and polling period; Option to color code schedules/programs in dashboard; Various bug fixes
  * V3.0.1 Configurable temperature order display
  * V3.0.2 Update schedule search for dashboard to take advantage of updated Rachio API event results
+ * V3.0.3 Add Gen 3 USI support
  */
 
 import groovy.json.*
@@ -713,17 +714,20 @@ def getControllerHardwareInfo(val) {
         case "GENERATION3_8ZONE":
             return [model: "8ZoneV3", desc: "8-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_8ZONE_PRO":
-            return [model: "8ZoneV3Pro", desc: "8-Zone (Gen 3) Pro", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+            return [model: "8ZoneV3Pro", desc: "8-Zone (Gen 3) Pro", img: getAppImg("rachio_gen3_pro.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_12ZONE":
             return [model: "12ZoneV3", desc: "12-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_16ZONE":
             return [model: "16ZoneV3", desc: "16-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_16ZONE_PRO":
-            return [model: "16ZoneV3Pro", desc: "16-Zone (Gen 3) Pro", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+            return [model: "16ZoneV3Pro", desc: "16-Zone (Gen 3) Pro", img: getAppImg("rachio_gen3_pro.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+        case "GENERATION3_16ZONE_USI":
+            return [model: "16ZoneV3USi", desc: "16-Zone (Gen 3) USI", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_8ZONE_LITE":
             return [model: "8ZoneV3Lite", desc: "8-Zone (Gen 3 Lite)", img: getAppImg("rachio_gen3_lite.PNG"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         
     }
+    if (val.contains("GENERATION3")) return [model: "genericGen3", desc: "Generic Gen 3", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
     return [desc: null, model: null, img: "", gen: null]
 }
 

@@ -427,11 +427,21 @@ def hardwareModelEvent(val) {
             newDesc = "16-Zone (Gen 3) Pro"
             state?.controllerDescription = "gen3IrrigationController"
             break
+       case "GENERATION3_16ZONE_USI":
+            newModel = "16ZoneV3USi"
+            newDesc = "16-Zone (Gen 3) USI"
+            state?.controllerDescription = "gen3IrrigationController"
+            break
         case "GENERATION3_8ZONE_LITE":
             newModel = "8ZoneV3Lite"
             newDesc = "8-Zone (Gen 3 Lite)"
             state?.controllerDescription = "gen3IrrigationController"
             break
+    }
+    if (newModel == null && val.contains("GENERATION3")) {
+        newModel = "V3"
+        newDesc = "Gen 3"
+        state?.controllerDescription = "gen3IrrigationController"
     }
     if(isStateChange(device, "hardwareModel", newModel.toString())) {
        LOG("UPDATED: Controller Model (${newModel}) | Previous: (${curModel})", 3, "debug")
