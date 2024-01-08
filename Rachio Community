@@ -47,7 +47,7 @@
  * V2.2.11: icon fix
  * V2.2.12 Added support for 4 zone Gen 3 model
  * V3.0.0 Major rewrite to add support for Rachio Hose Timer; Allow user customization of logging level and polling period; Option to color code schedules/programs in dashboard; Various bug fixes
- * V3.0.1 Fix stop watering all valves bug
+ * V3.0.2 Fix stop watering all valves bug
  */
 
 import groovy.json.*
