@@ -47,7 +47,10 @@
  * V2.2.11: icon fix
  * V2.2.12 Added support for 4 zone Gen 3 model
  * V3.0.0 Major rewrite to add support for Rachio Hose Timer; Allow user customization of logging level and polling period; Option to color code schedules/programs in dashboard; Various bug fixes
- * V3.0.2 Fix stop watering all valves bug
+ * V3.0.1 Configurable temperature order display
+ * V3.0.2 Update schedule search for dashboard to take advantage of updated Rachio API event results
+ * V3.0.3 Add Gen 3 USI support
+ * V3.0.4 Fix create base station bug in label value
  */
 
 import groovy.json.*
@@ -712,17 +715,20 @@ def getControllerHardwareInfo(val) {
         case "GENERATION3_8ZONE":
             return [model: "8ZoneV3", desc: "8-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_8ZONE_PRO":
-            return [model: "8ZoneV3Pro", desc: "8-Zone (Gen 3) Pro", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+            return [model: "8ZoneV3Pro", desc: "8-Zone (Gen 3) Pro", img: getAppImg("rachio_gen3_pro.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_12ZONE":
             return [model: "12ZoneV3", desc: "12-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_16ZONE":
             return [model: "16ZoneV3", desc: "16-Zone (Gen 3)", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_16ZONE_PRO":
-            return [model: "16ZoneV3Pro", desc: "16-Zone (Gen 3) Pro", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+            return [model: "16ZoneV3Pro", desc: "16-Zone (Gen 3) Pro", img: getAppImg("rachio_gen3_pro.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
+        case "GENERATION3_16ZONE_USI":
+            return [model: "16ZoneV3USi", desc: "16-Zone (Gen 3) USI", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         case "GENERATION3_8ZONE_LITE":
             return [model: "8ZoneV3Lite", desc: "8-Zone (Gen 3 Lite)", img: getAppImg("rachio_gen3_lite.PNG"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
         
     }
+    if (val.contains("GENERATION3")) return [model: "genericGen3", desc: "Generic Gen 3", img: getAppImg("rachio_gen3.png"), gen: "Gen3", jsonTag: "gen3IrrigationController"]
     return [desc: null, model: null, img: "", gen: null]
 }
 
@@ -1315,7 +1321,7 @@ def addRemoveDevices(uninst=false) {
                 //Check if the discovered hubs are already initiated with corresponding device types.
                 def d = getChildDevice(baseStation?.key)
                 if(!d) {
-                    d = addChildDevice("lnjustin", getChildBaseStationName(), baseStation?.key, null, [label: getDeviceLabelStr(baseStation?.value), completedSetup: true])
+                    d = addChildDevice("lnjustin", getChildBaseStationName(), baseStation?.key, null, [label: getDeviceLabelStr(baseStation?.value?.serialNumber), completedSetup: true])
                     LOG("Base Station Device Created: (${d?.displayName}) with id: [${baseStation?.key}]", 4, "info")
                 } else {
                     LOG("found ${d?.displayName} with dni: ${baseStation?.key} already exists", 3, "debug")
@@ -2051,6 +2057,32 @@ def getScheduleInfoFromSummary(summary, schedules) {
     return matches[0]
 }
 
+def getScheduleInfoFromEvent(event, schedules) {
+    LOG("getScheduleInfoFromEvent(${event})", 5, "trace")
+    def matches = []
+    def sanitizedSummary = event?.summary.toLowerCase()
+    if (schedules && schedules.scheduleRules) {
+        schedules.scheduleRules.each { schedule ->
+            def sanitizedName = schedule.name.toLowerCase()
+            if (event?.scheduleId && event?.scheduleId == schedule.id) matches.add([name:schedule.name, id: schedule.id, type: "FIXED"])
+            else if (sanitizedSummary.contains(sanitizedName)) matches.add([name:schedule.name, id: schedule.id, type: "FIXED"])
+        }
+    }
+    if (schedules && schedules.flexScheduleRules) {
+        schedules.flexScheduleRules.each { schedule ->
+            def sanitizedName = schedule.name.toLowerCase()
+            if (event?.scheduleId && event?.scheduleId == schedule.id) matches.add([name:schedule.name, id: schedule.id, type: "FLEX"])
+            else if (sanitizedSummary.contains(sanitizedName)) matches.add([name:schedule.name, id: schedule.id, type: "FLEX"])
+        }
+    }
+    if (matches.size() > 1) LOG("Multiple Schedules have the same name. Non-Unique schedule names jeopardizes the ability of Rachio Community to differentiate schedules on the dashboard.", 1, "warn")
+    else if (matches.size() == 0) {
+        LOG("No schedule id found and no names found in event summary ${summary}", 3, "debug")
+        return null
+    }
+    return matches[0]
+}
+
 def startValve(child, secs) {
     // child is valve
     def res = false
@@ -2701,16 +2733,13 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
             def foundEvent = [:]
             def icon = [:]
 
-            // TO DO: Handle incomplete API data that includes subtype but doesn't indicate even in summary which schedule is involved
-            // Example: [ category: SCHEDULE, deviceId: 8a0fd8ce-6c50-4572-8da5-68d2204b7e2b, eventDate: 1696941115000, hidden: false, id: a468f570-2d5a-366e-8421-d6c7e234040f, subType: ZONE_SKIPPED, summary: Thisschedulewasmanuallyskipped., type: USER_ACTION ]
-
             // TO DO: Handle multiple events being reported for the same schedule, e.g., skip and disable skip, may need to parse date to determine which one is the latest event
             if (!hideQuickRun(event.summary)) {
                 def scheduleSpecificColor = null
                 def schedId = null
                 if (event.subType == "SCHEDULE_STARTED" || event.subType == "WEATHER_INTELLIGENCE_SKIP" || event.subType == "WEATHER_INTELLIGENCE_CLIMATE_SKIP" || event.subType == "MANUAL_SKIP" || event.subType == "ZONE_SKIPPED") {
                     if (settings.singleRachioIcon == false && event.summary) {
-                        def schedule = getScheduleInfoFromSummary(event.summary, schedules)
+                        def schedule = getScheduleInfoFromEvent(event, schedules)
                         if (schedule) {
                             schedId = schedule?.id
                             scheduleSpecificColor = settings["colorFor${schedule?.type}Schedule${schedId}"]
