@@ -222,7 +222,7 @@ def setAllValveDefaultWaterDurationSecs(timeVal) {
 
 def stopWateringAllValves() {
     LOG("stopWateringAllValves", 5, "trace")
-    def res = parent?.stopAllValves(this)
+    def res = parent?.stopAllValvesValve(this)
     if (res) {
         LOG("Valve was Stopped Successfully...", 4, "info")
         sendWateringEvents(false)
