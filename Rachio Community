@@ -50,6 +50,8 @@
  * V3.0.1 Configurable temperature order display
  * V3.0.2 Update schedule search for dashboard to take advantage of updated Rachio API event results
  * V3.0.3 Add Gen 3 USI support
+ * V3.0.4 Fix create base station bug in label value
+ * V3.0.5 Bug fix API Count stats
  */
 
 import groovy.json.*
@@ -292,6 +294,7 @@ def devicePage() {
 			    input(name: "debugLevel", title:"Debug Log Level", type: 'enum', required:false, multiple:false, defaultValue:"2", description: "2", options:["5", "4", "3", "2", "1", "0"], width: 4)
                 paragraph getInterface("note", "Higher levels send more information to IDE Live Logging. Level 2 or less is recommended for normal operations")
 			    if(settings.debugLevel == null){ app.updateSetting('debugLevel', "2") }
+                input(name: "resetAllAPICountStats", title: "Reset all API Count Stats?", type: "bool", defaultValue: false)
 		    }
             
 
@@ -806,6 +809,10 @@ def initialize() {
     LOG("initialized...", 5, "trace")
     unschedule()
     if (!state.dailyAPICount) state.dailyAPICount = 0
+    if (resetAllAPICountStats) {
+        resetAllAPICountStats()
+        app.updateSetting('resetAllAPICountStats', false)
+    }
     scheduler()
     subscribe(app, onAppTouch)
     updateDeviceStates() //Creates the selectedDevices maps in state
@@ -848,10 +855,10 @@ def onAppTouch(event) {
 
 def scheduler() {
     def minsPollPeriod = getPollingPeriod()
-    def chronStr = "0 */" + minsPollPeriod + " * ? * *"
+    def chronStr = "01 */" + minsPollPeriod + " * ? * *"
     LOG("Scheduling heartbeat with chron string ${chronStr}", 3, "debug")
     schedule(chronStr, heartbeat)
-    schedule("01 00 00 ? * *", resetAPICount)
+    schedule("00 00 00 ? * *", resetAPICount)
 }
 
 def heartbeat() {
@@ -865,6 +872,13 @@ def resetAPICount() {
     if (!state.avgAPICallsPerDay) state.avgAPICallsPerDay = 0
     state.avgAPICallsPerDay = state.avgAPICallsPerDay + ((state.dailyAPICount - state.avgAPICallsPerDay) / state.numDaysInstalled)
     state.dailyAPICount = 0
+}
+
+def resetAllAPICountStats() {
+    state.avgAPICallsPerDay = 0
+    state.dailyAPICount = 0
+    state.numDaysInstalled = null
+    resetAPICount()
 }
 
 void initWebhooks() {
@@ -1320,7 +1334,7 @@ def addRemoveDevices(uninst=false) {
                 //Check if the discovered hubs are already initiated with corresponding device types.
                 def d = getChildDevice(baseStation?.key)
                 if(!d) {
-                    d = addChildDevice("lnjustin", getChildBaseStationName(), baseStation?.key, null, [label: getDeviceLabelStr(baseStation?.value), completedSetup: true])
+                    d = addChildDevice("lnjustin", getChildBaseStationName(), baseStation?.key, null, [label: getDeviceLabelStr(baseStation?.value?.serialNumber), completedSetup: true])
                     LOG("Base Station Device Created: (${d?.displayName}) with id: [${baseStation?.key}]", 4, "info")
                 } else {
                     LOG("found ${d?.displayName} with dni: ${baseStation?.key} already exists", 3, "debug")
