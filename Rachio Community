@@ -52,6 +52,7 @@
  * V3.0.3 Add Gen 3 USI support
  * V3.0.4 Fix create base station bug in label value
  * V3.0.5 Bug fix API Count stats
+ * V3.1.0 Rework polling to separate for irrigation and hose timers; more bug fixes for API count stats
  */
 
 import groovy.json.*
@@ -124,6 +125,7 @@ def footer() {
 }
 
 def startPage() {
+    initializeAPICountState()
     getAccessToken()
     if(!state?.accessToken) {
         noOauthPage()
@@ -280,14 +282,15 @@ def devicePage() {
             
              section(getInterface("header","Preferences")) {
                 href "authPage", title: "Manage Login", description: ""
-                input(name: "pollingPeriod", title:"Polling Period (Minutes)", type: 'enum', required:false, multiple:false, defaultValue:"15", options:["1", "5", "10", "15", "30", "60"], width: 4)
                 if(settings?.controllers) {
                     input(name: "defaultZoneTime", title: "Default Zone Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
+                    input(name: "pollingPeriod", title:"Polling Period for Irrigation Controllers (Minutes)", type: 'enum', required:false, multiple:false, defaultValue:"15", options:["1", "5", "10", "15", "30", "60", "No Polling"], width: 4)
                     input(name: "pauseInStandby", title: "Disable Actions while in Standby?", type: "bool", defaultValue: true, multiple: false, submitOnChange: true,
                     description: "Allow your device to be disabled in Hubitat when you place your controller in Standby Mode...")
                 }
                 if(settings?.baseStations) {
-                  //  input(name: "defaultHoseTimerRunTime", title: "Default Hose Timer Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
+                    input(name: "pollingPeriodHoseTimers", title:"Polling Period for Hose Timers (Minutes)", type: 'enum', required:false, multiple:false, defaultValue:"15", options:["1", "5", "10", "15", "30", "60", "No Polling"], width: 4)
+                    input(name: "defaultHoseTimerRunTime", title: "Default Hose Timer Runtime (Minutes)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true)
                 }
                  input(name: "haveDeviceLabelPrefix", title: "Add Prefix to Device Labels?", type: "bool", required: true, defaultValue: true, submitOnChange: true)
                 if (getHaveDeviceLabelPrefixSetting() == true) input(name: "deviceLabelPrefix", title: "Device Label Prefix", type: "text", defaultValue: "Rachio - ", required: false, submitOnChange: true)
@@ -306,8 +309,10 @@ def devicePage() {
     }
 }
 
-def getPollingPeriod() {
-    return settings.pollingPeriod ?: pollingPeriodDefault
+def getPollingPeriod(type) {
+    if (type == 'irrigation') return settings.pollingPeriod ?: pollingPeriodDefault
+    else if (type == 'hoseTimers') return settings.pollingPeriodHoseTimers ?: pollingPeriodDefault
+    else return pollingPeriodDefault
 }
 
 @Field static numPastDaysDashboardDefault = 2
@@ -740,9 +745,8 @@ def getBaseStationHardwareInfo(val) {
 
 def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/$imgName" }
 
-def updateAPICount() {
-    if (!state.dailyAPICount) state.dailyAPICount = 0
-    state.dailyAPICount++
+def updateAPICount(endpoint) {
+    state.dailyAPICount[endpoint]++
 }
 
 def _httpGet(subUri, endpoint="open") {
@@ -754,7 +758,7 @@ def _httpGet(subUri, endpoint="open") {
             uri: "${baseURI}/${subUri}",
             headers: ["Authorization": "Bearer ${atomicState.authToken}"]
         ]
-        updateAPICount()
+        updateAPICount(endpoint)
         httpGet(params) { resp ->
             LOG("HTTP GET Response: ${resp?.data} with status ${resp?.status}", 3, "debug")
             if(resp.status == 200) {
@@ -807,9 +811,10 @@ def updated() {
 
 def initialize() {
     LOG("initialized...", 5, "trace")
+    tallyDailyAPICount()
     unschedule()
-    if (!state.dailyAPICount) state.dailyAPICount = 0
-    if (resetAllAPICountStats) {
+    initializeAPICountState()
+    if (resetAllAPICountStats == true) {
         resetAllAPICountStats()
         app.updateSetting('resetAllAPICountStats', false)
     }
@@ -854,31 +859,75 @@ def onAppTouch(event) {
 }
 
 def scheduler() {
-    def minsPollPeriod = getPollingPeriod()
-    def chronStr = "01 */" + minsPollPeriod + " * ? * *"
-    LOG("Scheduling heartbeat with chron string ${chronStr}", 3, "debug")
-    schedule(chronStr, heartbeat)
-    schedule("00 00 00 ? * *", resetAPICount)
+    if(settings?.controllers) {
+        def minsPollPeriod = getPollingPeriod('irrigation')
+        if (minsPollPeriod != null && minsPollPeriod != "No Polling") {
+            def chronStr = ""
+            if (minsPollPeriod == "60") chronStr = "01 0 * ? * *"
+            else chronStr = "01 */" + minsPollPeriod + " * ? * *"
+            LOG("Scheduling irrigation heartbeat with chron string ${chronStr}", 3, "debug")
+            schedule(chronStr, irrigationHeartbeat)
+        }
+    }
+    if(settings?.baseStations) {
+        def minsPollPeriod = getPollingPeriod('hoseTimers')
+        if (minsPollPeriod != null && minsPollPeriod != "No Polling") {
+            def chronStr = ""
+            if (minsPollPeriod == "60") chronStr = "01 0 * ? * *"
+            else chronStr = "01 */" + minsPollPeriod + " * ? * *"
+            LOG("Scheduling hose timer heartbeat with chron string ${chronStr}", 3, "debug")
+            schedule(chronStr, hoseTimerHeartbeat)
+        }
+    }
+    schedule("59 59 23 ? * *", tallyDailyAPICount)
+    tallyDailyAPICount()
 }
 
-def heartbeat() {
-   LOG("heartbeat keep alive poll()...", 5, "trace")
-    poll()
+def irrigationHeartbeat() {
+    LOG("heartbeat keep alive for irrigation poll()...", 5, "trace")
+    poll(null, 'irrigationDevice')
 }
 
-def resetAPICount() {
+def hoseTimerHeartbeat() {
+    LOG("heartbeat keep alive for hose timer poll()...", 5, "trace")
+    poll(null, 'hoseTimerDevice')
+}
+
+def initializeAPICountState() {
+    LOG("Initializing API Count State if needed....", 2, "trace")
+    if (!state.avgAPICallsPerDay instanceof Map) {
+        LOG("Initializing avgAPICallsPerDay.", 2, "trace")
+        state.avgAPICallsPerDay = [open:0, closed:0]
+    }
+    if (!state.dailyAPICount instanceof Map) {
+        LOG("Initializing dailyAPICount.", 2, "trace")
+        state.dailyAPICount = [open:0, closed:0]
+    }
+    if (state.maxAPICallsPerDay == null) {
+        LOG("Initializing maxAPICallsPerDay.", 2, "trace")
+        state.maxAPICallsPerDay = [open:0, closed:0]
+    }
+}
+
+def tallyDailyAPICount() {
+    LOG("Tallying daily API Count...", 3, "trace")
+    initializeAPICountState()
     if (!state.numDaysInstalled) state.numDaysInstalled = 1
     else state.numDaysInstalled++
-    if (!state.avgAPICallsPerDay) state.avgAPICallsPerDay = 0
-    state.avgAPICallsPerDay = state.avgAPICallsPerDay + ((state.dailyAPICount - state.avgAPICallsPerDay) / state.numDaysInstalled)
-    state.dailyAPICount = 0
+    state.avgAPICallsPerDay.open = state.avgAPICallsPerDay.open + ((state.dailyAPICount.open - state.avgAPICallsPerDay.open) / state.numDaysInstalled)
+    state.avgAPICallsPerDay.closed = state.avgAPICallsPerDay.closed + ((state.dailyAPICount.closed - state.avgAPICallsPerDay.closed) / state.numDaysInstalled)
+    if (state.dailyAPICount.open > state.maxAPICallsPerDay.open) state.maxAPICallsPerDay.open = state.dailyAPICount.open
+    if (state.dailyAPICount.closed > state.maxAPICallsPerDay.closed) state.maxAPICallsPerDay.closed = state.dailyAPICount.closed
+    state.dailyAPICount = [open:0, closed:0]
+    LOG("Tallied avg = ${state.avgAPICallsPerDay.open}, ${state.avgAPICallsPerDay.closed}, tallied max = ${state.maxAPICallsPerDay.open}, ${state.maxAPICallsPerDay.closed}.", 2, "trace")
 }
 
 def resetAllAPICountStats() {
-    state.avgAPICallsPerDay = 0
-    state.dailyAPICount = 0
+    LOG("Resetting ALL API Count state...", 3, "trace")
+    state.avgAPICallsPerDay = [open:0, closed:0]
+    state.maxAPICallsPerDay = [open:0, closed:0]
+    state.dailyAPICount = [open:0, closed:0]
     state.numDaysInstalled = null
-    resetAPICount()
 }
 
 void initWebhooks() {
@@ -1400,7 +1449,7 @@ def rachioIrrigationReceiveHandler() {
         if(reqData?.deviceId) {
             def dev = getChildDevice(reqData?.deviceId)
             poll(dev, "irrigationDevice")
-        } else { poll() }
+        } else { poll(null, "irrigationDevice") }
     }
 }
 
@@ -1412,8 +1461,12 @@ def rachioHoseTimerReceiveHandler() {
         if(reqData?.deviceId) {
             def dev = getChildDevice(reqData?.deviceId)
             poll(dev, "hoseTimerDevice")
-        } else { poll() }
+        } else { poll(null, "hoseTimerDevice") }
     }
+}
+
+def delayedPoll(data) {
+    poll(data.child, data.type)
 }
 
 //Section4: polling device info methods
@@ -1422,7 +1475,7 @@ void poll(child=null, type=null) {
     def lastPollSec = getTimeSinceInSeconds(atomicState?.lastPollDt)
     LOG("${app.label} -- Polling API for Latest Data -- Last Update was ($lastPollSec seconds ago)${type ? " | Reason: [$type]" : ""}", 5, "trace")
     if(lastPollSec < 2) {
-        runIn(3, "poll", [overwrite: true])
+        runIn(3, "delayedPoll", [overwrite: true, data: [child:child, type:type]])
         LOG("Delaying poll... It's too soon to request new data", 3, "debug")
         return
     }
@@ -1451,6 +1504,43 @@ void poll(child=null, type=null) {
                     if(zDev) { pollChild(zDev, "hoseTimerDevice") }
                 }
             }
+        }
+    }
+    else if (type != null) {
+        if (type == "irrigationDevice") {
+            // poll all irrigation devices and all children
+            def ctrlCnt = 0
+            def zoneCnt = 0
+            selectedDevices?.controllers.each { cont->
+                def cDev = getChildDevice(cont?.key)
+                if(cDev) {
+                    ctrlCnt = ctrlCnt+1
+                    def controllerData = pollChild(cDev, "irrigationDevice")
+                    cont?.value?.zones?.each { zone->
+                        zoneCnt = zoneCnt+1
+                        def zDev = getChildDevice(zone?.key)
+                        if(zDev) { pollChild(zDev, "irrigationDevice", controllerData) }
+                    }
+                }
+            }
+            LOG("Updated (${ctrlCnt}) Controllers and (${zoneCnt}) Zone devices...", 4, "info")
+        }
+        else if (type == "hoseTimerDevice") {
+            def baseStationCnt = 0
+            def valveCnt = 0
+            selectedDevices?.baseStations.each { baseStation ->
+                def bDev = getChildDevice(baseStation?.key)
+                if(bDev) {
+                    baseStationCnt = baseStationCnt+1
+                    pollChild(bDev, "hoseTimerDevice")
+                    baseStation?.value?.valves?.each { valve->
+                        valveCnt = valveCnt+1
+                        def vDev = getChildDevice(valve?.key)
+                        if(vDev) { pollChild(vDev, "hoseTimerDevice")}
+                    }
+                }
+            }
+            LOG("Updated (${baseStationCnt}) Base Stations and (${valveCnt}) hose timer valve devices...", 4, "info")            
         }
     }
     else {
@@ -1490,6 +1580,10 @@ void poll(child=null, type=null) {
     atomicState?.lastPollDt = now()
 }
 
+def delayedPollChild(data) {
+    pollChild(data.childDev, data.type, data.parentData)
+}
+
 def pollChild(childDev, type, parentData = null) {
     LOG("updating child device ${childDev} of type ${type}", 3, "debug")
     def returnData = null
@@ -1517,8 +1611,9 @@ def pollChild(childDev, type, parentData = null) {
                         Boolean inStandby = devData?.on.toString() != "true" ? true : false
                         updateStandbyItem(dni, inStandby)
 
-                        Boolean schedRunning = (devData?.currentSchedule?.status == "PROCESSING") ? true : false
-                        if (isWatering() && !schedRunning) { handleWateringSched(dni, false) }
+                        // uncomment to poll instead of relying on webhooks for more often updates during watering
+                        // Boolean schedRunning = (devData?.currentSchedule?.status == "PROCESSING") ? true : false
+                        // if (isWatering() && !schedRunning) { handleWateringSched(dni, false) }
                         
                         def newLabel = getDeviceLabelStr(devData?.name).toString()
                         if(devLabel != newLabel) {
@@ -1621,6 +1716,7 @@ void setWateringDeviceState(devId, val) {
     updateWateringItem(devId, val)
 }
 
+/*
 void handleWateringSched(devId, val=false) {
     LOG("handleWateringSched($devId, $val)", 5, "trace")
     if(val == true) {
@@ -1633,6 +1729,7 @@ void handleWateringSched(devId, val=false) {
     }
     updateWateringItem(devId, val)
 }
+*/
 
 def findZoneData(devId, devData) {
     if(!devId || !devData) { return null }
@@ -1679,7 +1776,7 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", stan
             LOG("Skipping this command while controller is in 'Standby Mode'...", 3, "debug")
             return true
         }
-        updateAPICount()
+        updateAPICount(endpoint)
         httpPut(cmdParams) { resp ->
             returnStatus = resp
           //  LOG ("Send JSON Return Status: ${resp.status}")
@@ -1719,7 +1816,7 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
     ]
 
     try{
-        updateAPICount()
+        updateAPICount(endpoint)
         if(type == "post") {
             httpPost(cmdParams) { resp ->
                 response = resp
@@ -1754,8 +1851,11 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
 }
 
 def dailyAPINotification() {
-    if (state.dailyAPICount > 1500) LOG("Approaching daily API Limit of 1700. Averaging ${state.avgAPICallsPerDay} API calls per day.", 1, "warn")
-    else if (state.dailyAPICount >= 1700) LOG("Daily API Limit of 1700 reached.  Averaging ${state.avgAPICallsPerDay} API calls per day.", 1, "error")
+    if (state.dailyAPICount.open && state.dailyAPICount.open > 1500) LOG("Approaching daily API Limit of 1700 for Open endpoint. Averaging ${state.avgAPICallsPerDay.open} API calls per day.", 1, "warn")
+    else if (state.dailyAPICount.open && state.dailyAPICount.open >= 1700) LOG("Daily API Limit of 1700 reached for Open endpoint.  Averaging ${state.avgAPICallsPerDay.open} API calls per day.", 1, "error")
+    if (state.dailyAPICount.closed && state.dailyAPICount.closed > 1500) LOG("Approaching daily API Limit of 1700 for Open endpoint. Averaging ${state.avgAPICallsPerDay.closed} API calls per day.", 1, "warn")
+    else if (state.dailyAPICount.closed && state.dailyAPICount.closed >= 1700) LOG("Daily API Limit of 1700 reached for Open endpoint.  Averaging ${state.avgAPICallsPerDay.closed} API calls per day.", 1, "error")
+
 }
 
 //Section6: helper methods ---------------------------------------------------------------------------------------------
