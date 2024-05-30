@@ -41,6 +41,10 @@ metadata {
         attribute "controllerOn", "string"
 
         attribute "rainDelay","number"
+        attribute "rainDelayExpiration","string"
+        attribute "rainDelayExpirationStr","string"
+        attribute "rainDelayStr", "string"
+
         attribute "watering", "string"
 
         //current_schedule data
@@ -54,7 +58,6 @@ metadata {
         attribute "curZoneIsCycling", "string"
         attribute "curZoneCycleCount", "number"
         attribute "curZoneWaterTime", "number"
-        attribute "rainDelayStr", "string"
         attribute "standbyMode", "string"
 
         attribute "lastRunStr", "string"
@@ -282,6 +285,9 @@ def generateEvent(Map results) {
         scheduleDataEvent(results?.data?.currentSchedule, results?.data.zones, rainDelay)
         rainDelayValEvent(rainDelay)
 
+        def rainDelayExpiration = getRainDelayExpiration(results?.data)
+        rainDelayExpirationEvent(rainDelayExpiration)
+
         stateDataEvent(results?.stateData)
         wateringSummaryDataEvent(results?.wateringSummaryData)
         nextEventDataEvent(results?.nextEvent)
@@ -293,11 +299,24 @@ def generateEvent(Map results) {
 }
 
 def getCurrentRainDelay(res) {
-    LOG("getCurrentRainDelay with input ${res}", 5, "trace")
+    LOG("getCurrentRainDelay", 5, "trace")
     // convert to configured rain delay to days.
-    def ret =  (res?.rainDelayExpirationDate && res?.rainDelayStartDate) ? (res?.rainDelayExpirationDate - res?.rainDelayStartDate)/(26*60*60*1000) : 0
-    def value = (long) Math.floor(ret + 0.5d)
+    BigDecimal ret =  new BigDecimal(0)
+    if (res?.rainDelayExpirationDate) {
+        def now = new Date().getTime()
+        ret = (res?.rainDelayExpirationDate - now)/(26*60*60*1000)
+    }
+    LOG("Current Rain Delay is ${ret}", 3, "debug")
+    ret = ret.setScale(1, BigDecimal.ROUND_UP) // new code that returns partial days
+    LOG("Current Rain Delay rounded to ${ret}", 3, "debug")
+    Double value = ret.doubleValue()
+    // def value = (long) Math.floor(ret + 0.5d) // old code that returns integer days
     return value
+}
+
+def getRainDelayExpiration(res) {
+     LOG("getRainDelayExpiration", 5, "trace")
+    return res?.rainDelayExpirationDate ? res?.rainDelayExpirationDate : 0
 }
 
 def getDurationDesc(long secondsCnt) {
@@ -495,6 +514,23 @@ def rainDelayValEvent(val) {
     }
 }
 
+def rainDelayExpirationEvent(val) {
+    def curState = device?.currentState("rainDelayExpiration")?.value.toString()
+    def newState = val ? val : 0
+    if(isStateChange(device, "rainDelayExpiration", newState.toString())) {
+        LOG("UPDATED: Rain Delay Expires (${newState}) | Previous: (${curState})", 3, "debug")
+        sendEvent(name:'rainDelayExpiration', value: newState, displayed: true)
+        setRainDelayExpirationString(newState)
+    }
+}
+
+def setRainDelayExpirationString(val) {
+    def rainDelayExpirationStr = "No Rain Delay";
+    def rainDelayLeft = device?.currentState("rainDelay")?.value.toString()
+    if(val > 0) rainDelayExpirationStr = rainDelayLeft + " Day Rain Delay Remaining. Expires " + epochToDt(val)
+    sendEvent( name: "rainDelayExpirationStr", value: rainDelayExpirationStr, isStateChange: true)
+}
+
 def setZoneWaterTime(timeVal) {
     def curState = device?.currentState("curZoneWaterTime")?.value.toString()
     def newVal = timeVal ? timeVal.toInteger() : parent?.getZoneRunTimeDefaultSetting()
@@ -617,7 +653,7 @@ def setDashboard() {
     parent.setDashboard(state?.deviceId, "irrigation")
 }
 
-def setRainDelayString( rainDelay) {
+def setRainDelayString(rainDelay) {
     def rainDelayStr = "No Rain Delay";
     if( rainDelay > 0) {
         rainDelayStr = "Rain Delayed";
@@ -632,8 +668,7 @@ def doSetRainDelay() {
     if( !res) {
         markOffLine()
     }
-    setRainDelayString(value)
-    //parent?.pollChildren()
+    runIn(2, poll)
 }
 
 def updateRainDelay(value) {
@@ -781,7 +816,7 @@ def stopWatering() {
 def setRainDelay(rainDelay) {
     sendEvent("name":"rainDelay", "value": rainDelay)
     def res = parent?.setRainDelay(this, state?.deviceId, rainDelay);
-    //if (res) { parent?.pollChildren() }
+    runIn(2, poll)
 }
 
 def getDtNow() {

@@ -53,6 +53,7 @@
  * V3.0.4 Fix create base station bug in label value
  * V3.0.5 Bug fix API Count stats
  * V3.1.0 Rework polling to separate for irrigation and hose timers; more bug fixes for API count stats; Performance optimizations
+ * V3.1.1 Fix rain delay bugs
  */
 
 import groovy.json.*
@@ -2127,7 +2128,7 @@ def setRainDelay(child, deviceId, delayVal) {
     LOG("setRainDelay()...", 5, "trace")
     if (delayVal) {
         def secondsPerDay = 24*60*60;
-        def duration = delayVal * secondsPerDay;
+        Integer duration = (int) Math.floor(delayVal * secondsPerDay);
         def jsonData = new JsonBuilder("id":child?.device?.deviceNetworkId, "duration":duration)
         def res = sendJson("device/rain_delay", jsonData?.toString(), deviceId)
 
