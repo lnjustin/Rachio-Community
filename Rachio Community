@@ -54,6 +54,7 @@
  * V3.0.5 Bug fix API Count stats
  * V3.1.0 Rework polling to separate for irrigation and hose timers; more bug fixes for API count stats; Performance optimizations
  * V3.1.1 Fix rain delay bugs
+ * V3.1.2 Fix more rain delay bugs; made extra polling during watering configurable
  */
 
 import groovy.json.*
@@ -98,6 +99,7 @@ String appVer() { return "2.3.0" }
 
 @Field Integer zoneRunTimeDefault = 10
 @Field Integer pollingPeriodDefault = 15
+@Field Integer pollingPeriodExtraDefault = "No Extra Polling"
 @Field String deviceLabelPrefixDefault = "Rachio - "
 
 def getZoneRunTimeDefaultSetting() {
@@ -284,12 +286,14 @@ def devicePage() {
             section(getInterface("header","Preferences")) {
                 href "authPage", title: "Manage Login", description: ""
                 if(settings?.controllers) {
-                    input(name: "pollingPeriod", title:"Polling Period for Irrigation Controllers (Mins)", type: 'enum', required:false, multiple:false, defaultValue:"15", options:["1", "5", "10", "15", "30", "60", "No Polling"], width: 6)
-                    input(name: "defaultZoneTime", title: "Default Irrigation Zone Runtime (Mins)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true, width: 6)
+                    input(name: "pollingPeriod", title:"Polling Period for Irrigation Controllers (Mins)", type: 'enum', required:false, multiple:false, defaultValue:"15", options:["1", "5", "10", "15", "30", "60", "No Polling"], width: 4)
+                    input(name: "pollingPeriodExtra", title:"Extra Polling During a Run (Mins)", type: 'enum', required:false, multiple:false, defaultValue:"No Extra Polling", options:["1", "3", "5", "7", "10", "15", "20", "No Extra Polling"], width: 4)
+                    input(name: "defaultZoneTime", title: "Default Irrigation Zone Runtime (Mins)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true, width: 4)
                 }
                 if(settings?.baseStations) {
-                    input(name: "pollingPeriodHoseTimers", title:"Polling Period for Hose Timers (Mins)", type: 'enum', required:false, multiple:false, defaultValue:"15", options:["1", "5", "10", "15", "30", "60", "No Polling"], width: 6)
-                    input(name: "defaultHoseTimerRunTime", title: "Default Hose Timer Runtime (Mins)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true, width: 6)
+                    input(name: "pollingPeriodHoseTimers", title:"Polling Period for Hose Timers (Mins)", type: 'enum', required:false, multiple:false, defaultValue:"15", options:["1", "5", "10", "15", "30", "60", "No Polling"], width: 4)
+                    input(name: "pollingPeriodHoseTimersExtra", title:"Extra Polling During a Run (Mins)", type: 'enum', required:false, multiple:false, defaultValue:"No Extra Polling", options:["1", "3", "5", "7", "10", "15", "20", "No Extra Polling"], width: 4)
+                    input(name: "defaultHoseTimerRunTime", title: "Default Hose Timer Runtime (Mins)", type: "number", description: "Tap to Modify", required: false, defaultValue: 10, submitOnChange: true, width: 4)
                 }
                  input(name: "haveDeviceLabelPrefix", title: "Add Prefix to Device Labels?", type: "bool", required: true, defaultValue: true, submitOnChange: true)
                 if (getHaveDeviceLabelPrefixSetting() == true) input(name: "deviceLabelPrefix", title: "Device Label Prefix", type: "text", defaultValue: "Rachio - ", required: false, submitOnChange: true)
@@ -333,6 +337,13 @@ def getPollingPeriod(type) {
     if (type == 'irrigation') return settings.pollingPeriod ?: pollingPeriodDefault
     else if (type == 'hoseTimers') return settings.pollingPeriodHoseTimers ?: pollingPeriodDefault
     else return pollingPeriodDefault
+}
+
+def getExtraPollingPeriod(type) {
+    LOG("getExtraExtraPollingPeriod()", 5, "trace")
+    if (type == 'irrigation') return settings.pollingPeriodExtra ?: pollingPeriodExtraDefault
+    else if (type == 'hoseTimers') return settings.pollingPeriodHoseTimersExtra ?: pollingPeriodExtraDefault
+    else return pollingPeriodExtraDefault
 }
 
 @Field static numPastDaysDashboardDefault = 2
@@ -924,8 +935,18 @@ def irrigationHeartbeat() {
     poll(null, 'irrigationDevice')
 }
 
+def irrigationExtraPolling() {
+    LOG("Extra polling for irrigation...", 5, "trace")
+    poll(null, 'irrigationDevice')
+}
+
 def hoseTimerHeartbeat() {
     LOG("heartbeat keep alive for hose timer poll()...", 5, "trace")
+    poll(null, 'hoseTimerDevice')
+}
+
+def hoseTimerExtraPolling() {
+    LOG("Extra polling for hose timer...", 5, "trace")
     poll(null, 'hoseTimerDevice')
 }
 
@@ -1674,9 +1695,9 @@ def pollChild(childDev, type, parentData = null) {
                         Boolean inStandby = devData?.on.toString() != "true" ? true : false
                         updateStandbyItem(dni, inStandby)
 
-                        // uncomment to poll instead of relying on webhooks for more often updates during watering
-                        // Boolean schedRunning = (devData?.currentSchedule?.status == "PROCESSING") ? true : false
-                        // if (isWatering() && !schedRunning) { handleWateringSched(dni, false) }
+                        // allow extra polling for more often updates during watering
+                        Boolean schedRunning = (devData?.currentSchedule?.status == "PROCESSING") ? true : false
+                        if (isWatering() && !schedRunning) { handleWateringSched(dni, false) }
                         
                         def newLabel = getDeviceLabelStr(devData?.name).toString()
                         if(devLabel != newLabel) {
@@ -1727,10 +1748,6 @@ def pollChild(childDev, type, parentData = null) {
                 selectedDevices?.baseStations.each { baseStation ->
                     if(dni == baseStation?.key) {
                         def baseStationData = getDeviceData(baseStation?.key, "baseStation")
-                     //   def valvesData = getValveListData(baseStation?.key)
-
-                      //  Boolean programRunning = (devData?.currentSchedule?.status == "PROCESSING") ? true : false
-                     //   if (isWatering() && !schedRunning) { handleWateringSched(dni, false) }
 
                         if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
                         LOG("Polling Wifi Hub ${baseStation?.key}", 3, "debug")
@@ -1738,8 +1755,7 @@ def pollChild(childDev, type, parentData = null) {
                     } else {
                         baseStation?.value?.valves?.each { valve ->
                             if (dni == valve?.key) {
-                                LOG("Generating data for update to valve", 3, "debug")
-                              //  def baseStationData = getDeviceData(baseStation?.key, "baseStation")
+                                LOG("Polling Hose Timer ${newLabel}", 3, "debug")
                                 def valveData = getValveData(valve?.key)
                                 def programData = getValvePrograms(valve?.key)
 
@@ -1754,7 +1770,7 @@ def pollChild(childDev, type, parentData = null) {
                                     childDev?.label = newLabel
                                     LOG("Valve Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
                                 }
-                                LOG("Polling Hose Timer ${newLabel}", 3, "debug")
+                                
                                 data = [baseStationId: baseStation?.key, valveData: valveData, programData: programData, dayViewData: dayViewData]
                             }
                         }
@@ -1779,20 +1795,38 @@ void setWateringDeviceState(devId, val) {
     updateWateringItem(devId, val)
 }
 
-/*
 void handleWateringSched(devId, val=false) {
     LOG("handleWateringSched($devId, $val)", 5, "trace")
     if(val == true) {
-        LOG("Watering is Active... Scheduling poll for every 1 minute", 5, "trace")
-        runEvery1Minute("poll")
+        def minsExtraPollPeriod = getExtraPollingPeriod('irrigation')
+        if (minsExtraPollPeriod != null && minsExtraPollPeriod != "No Extra Polling") {
+            def chronStr = "01 */" + minsExtraPollPeriod + " * ? * *"
+            LOG("Scheduling extra polling for irrigation with chron string ${chronStr}", 3, "debug")
+            schedule(chronStr, irrigationExtraPolling)
+        }
     } else {
-        LOG("Watering has finished... 1 minute Poll has been unscheduled", 5, "trace")
-        unschedule("poll")
-        runIn(60, "poll") // This is here just to make sure that the schedule actually stopped and that the data is really current.
+        LOG("Watering has finished for irrigation... unscheduling extra polling", 5, "trace")
+        unschedule("irrigationExtraPolling")
+        runIn(60, "irrigationExtraPolling") // This is here just to make sure that the schedule actually stopped and that the data is really current.
     }
     updateWateringItem(devId, val)
 }
-*/
+
+void handleHoseTimerWateringEvent(val=false) {
+    LOG("handleHoseTimerWateringEvent($val)", 5, "trace")
+    if(val == true) {
+        def minsExtraPollPeriod = getExtraPollingPeriod('hoseTimers')
+        if (minsExtraPollPeriod != null && minsExtraPollPeriod != "No Extra Polling") {
+            def chronStr = "01 */" + minsExtraPollPeriod + " * ? * *"
+            LOG("Scheduling extra polling for hose timers with chron string ${chronStr}", 3, "debug")
+            schedule(chronStr, hoseTimerExtraPolling)
+        }
+    } else {
+        LOG("Watering has finished for hose timer... unscheduling any extra polling", 5, "trace")
+        unschedule("hoseTimerExtraPolling")
+        runIn(60, "hoseTimerExtraPolling") // This is here just to make sure that the schedule actually stopped and that the data is really current.
+    }
+}
 
 def findZoneData(devId, devData) {
     LOG("findZoneData()...", 5, "trace")
@@ -2701,7 +2735,7 @@ def buildDashboard() {
         }
     }
 
-    LOG("ContentMap = ${contentMap}", 3, "debug")
+    LOG("Dashboard ContentMap = ${contentMap}", 3, "debug")
     
     def numPastDaysDashboardSetting = (numPastDaysDashboard == null) ? numPastDaysDashboardDefault : numPastDaysDashboard
     def numFutureDaysDashboardSetting = (numFutureDaysDashboard == null) ? numFutureDaysDashboardDefault : numFutureDaysDashboard

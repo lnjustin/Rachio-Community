@@ -307,16 +307,18 @@ def getCurrentRainDelay(res) {
         ret = (res?.rainDelayExpirationDate - now)/(26*60*60*1000)
     }
     LOG("Current Rain Delay is ${ret}", 3, "debug")
-    ret = ret.setScale(1, BigDecimal.ROUND_UP) // new code that returns partial days
+    ret = ret.setScale(1, BigDecimal.ROUND_CEILING) // new code that returns partial days
     LOG("Current Rain Delay rounded to ${ret}", 3, "debug")
-    Double value = ret.doubleValue()
+    Double value = 0
+    if (ret > 0) value = ret.doubleValue()
     // def value = (long) Math.floor(ret + 0.5d) // old code that returns integer days
     return value
 }
 
 def getRainDelayExpiration(res) {
      LOG("getRainDelayExpiration", 5, "trace")
-    return res?.rainDelayExpirationDate ? res?.rainDelayExpirationDate : 0
+     def now = new Date().getTime()
+    return (res?.rainDelayExpirationDate && res?.rainDelayExpirationDate > now) ? res?.rainDelayExpirationDate : 0
 }
 
 def getDurationDesc(long secondsCnt) {
