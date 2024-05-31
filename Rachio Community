@@ -99,7 +99,7 @@ String appVer() { return "2.3.0" }
 
 @Field Integer zoneRunTimeDefault = 10
 @Field Integer pollingPeriodDefault = 15
-@Field Integer pollingPeriodExtraDefault = "No Extra Polling"
+@Field String pollingPeriodExtraDefault = "No Extra Polling"
 @Field String deviceLabelPrefixDefault = "Rachio - "
 
 def getZoneRunTimeDefaultSetting() {
