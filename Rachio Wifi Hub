@@ -112,7 +112,7 @@ def generateEvent(Map results) {
 
         state?.deviceId = device?.deviceNetworkId.toString()
 
-        stateDataEvent(results?.baseStationData.baseStation.reportedState)
+        if (results?.baseStationData.baseStation) stateDataEvent(results?.baseStationData.baseStation.reportedState)
 
         if(state.isOnline) { lastUpdatedEvent() }
     }

@@ -55,6 +55,7 @@
  * V3.1.0 Rework polling to separate for irrigation and hose timers; more bug fixes for API count stats; Performance optimizations
  * V3.1.1 Fix rain delay bugs
  * V3.1.2 Fix more rain delay bugs; made extra polling during watering configurable
+* V3.1.3 Fix poll bug for hose timers; Safeguard against device deletion when configure app when API limit exceeded (warning on device page); make dashboard image height dynamically adapt with content
  */
 
 import groovy.json.*
@@ -62,6 +63,8 @@ import java.text.SimpleDateFormat
 import groovy.json.JsonBuilder
 import groovy.transform.Field
 import java.math.*
+import java.time.ZoneId
+import java.time.ZoneOffset
 
 definition(
     name: "Rachio Community",
@@ -209,16 +212,43 @@ def devicePage() {
     // Step 1: get (list) of available devices associated with the login account.
 
     // Get Irrigation System Controllers
-    def controllers = getControllers()
-    def controllerList = getControllerInputEnum(controllers)
-    LOG("rachioControllerList(): ${controllers}", 3, "debug")
+    def controllerRetrievalError = false
+    state.apiCallError == false
+    def controllersRetrieved = getControllers()
+    if (state.apiCallError == true) {
+        state.apiCallError == false
+        controllerRetrievalError = true
+    }
+    def controllerList = getControllerInputEnum(controllersRetrieved)
+    LOG("rachioControllerList(): ${controllersRetrieved}", 3, "debug")
 
     // Get Smart Hose Timer Base Stations (wifi hubs)
-    def baseStations = getBaseStations(atomicState.userId)
-    LOG("rachioBaseStationList(): ${baseStations}", 3, "debug")
-    def baseStationList = getBaseStationInputEnum(baseStations)
+    def baseStationRetrievalError = false
+    state.apiCallError == false
+    def baseStationsRetrieved = getBaseStations(atomicState.userId)
+    if (state.apiCallError == true) {
+        state.apiCallError == false
+        baseStationRetrievalError = true
+    }
+    LOG("rachioBaseStationList(): ${baseStationsRetrieved}", 3, "debug")
+    def baseStationList = getBaseStationInputEnum(baseStationsRetrieved)
     def valveList = []
-    
+
+    def previouslySelectedDevices = atomicState?.selectedDevices
+    def orphanedDevices = [:]
+    if (previouslySelectedDevices) {
+        def previousControllerIDs = (previouslySelectedDevices && previouslySelectedDevices.controllers) ? previouslySelectedDevices.controllers.keySet() : []
+        def currentControllerIDs = (controllerRetrievalError && controllersRetrieved != null) ? controllersRetrieved.collect { it.id } : []
+        def orphanedControllerIDs = previousControllerIDs.findAll { !(it in currentControllerIDs) } // find any previous controller IDs that are not in current controller IDs
+       orphanedDevices.controllers = (previouslySelectedDevices && previouslySelectedDevices.controllers) ? previouslySelectedDevices.controllers.findAll { it.key in orphanedControllerIDs } : []
+        orphanedDevices.controllerNames = orphanedDevices.controllers.collect { it.value.name }
+
+        def previousBaseStationIDs = (previouslySelectedDevices && previouslySelectedDevices.baseStations) ? previouslySelectedDevices.baseStations.keySet() : []
+        def currentBaseStationIDs = (baseStationRetrievalError && baseStationsRetrieved != null) ? baseStationsRetrieved.collect { it.id } : []
+        def orphanedBaseStationIDs = previousBaseStationIDs.findAll { !(it in currentBaseStationIDs) } // find any previous base station IDs that are not in current base station IDs
+        orphanedDevices.baseStations = (previouslySelectedDevices && previouslySelectedDevices.baseStations) ? previouslySelectedDevices.baseStations.findAll { it.key in orphanedBaseStationIDs } : []
+        orphanedDevices.baseStationNames = orphanedDevices.baseStations.collect { it.value.serialNumber }
+    }
 
     //step2: render the page for user to select which controller
     dynamicPage(name: "devicePage", install: true, uninstall: true) {
@@ -231,12 +261,14 @@ def devicePage() {
             def isControllerRequired = (settings.baseStations) ? false : true    
 
             // TO DO: Fix images from modelInfo state
+            if (controllerRetrievalError) paragraph getInterface("error","WARNING: Error retrieving irrigation controllers from Rachio. API limit may have been exceeded. Check the Hubitat log.")
             input "controllers", "enum", title: "Select your irrigation system controllers", description: "Tap to Select", required: isControllerRequired, multiple: true, options: controllerList, submitOnChange: true
-        
+            if (orphanedDevices.controllerNames) paragraph getInterface("error","WARNING: Pressing DONE will delete existing Hubitat devices for the following irrigation controllers that were not retrieved from Rachio: ${orphanedDevices.controllerNames}.")
+
             if(settings?.controllers) {
                 controllerList?.sort { it?.value }?.each { cont->
                     if(cont?.key in settings?.controllers) {
-                        def zoneData = zoneSelections(controllers, cont?.key)
+                        def zoneData = zoneSelections(controllersRetrieved, cont?.key)
                         input "${cont?.key}_zones", "enum", title: "Select Zones for ${cont?.value}", description: "Tap to Select", required: isControllerRequired, multiple: true, options: zoneData, submitOnChange: true
                     }
                 }
@@ -246,7 +278,9 @@ def devicePage() {
             
             def isBaseStationRequired = (settings.controllers) ? false : true
             // TO DO: Fix images from model info state
+            if (baseStationRetrievalError) paragraph getInterface("error","WARNING: Error retrieving hose timer base stations from Rachio. API limit may have been exceeded. Check the Hubitat log.")
             input "baseStations", "enum", title: "Select your hose timer wifi hubs (by serial number)", description: "Tap to Select", required: isBaseStationRequired, multiple: true, options: baseStationList, submitOnChange: true
+            if (orphanedDevices.baseStationNames) paragraph getInterface("error","WARNING: Pressing DONE will delete existing Hubitat devices for the following hose timer base stations that were not retrieved from Rachio: ${orphanedDevices.baseStationNames}.")
             if(settings?.baseStations) {
                 baseStationList?.sort { it?.value }?.each { station ->
                     if(station?.key in settings?.baseStations) {
@@ -259,7 +293,7 @@ def devicePage() {
         }       
         if(settings?.controllers || settings?.baseStations) {
 
-            updateHwInfoMap(controllers, baseStations)
+            updateHwInfoMap(controllersRetrieved, baseStationsRetrieved)
             
             section(getInterface("header","Dashboard")) {
                 href "dashboardSettingsPage", title: "Dashboard Setup", description: ""
@@ -634,6 +668,11 @@ def getControllers() {
     }
     def userInfo = getUserInfo(atomicState?.userId)
 
+    if (!userInfo) {
+        LOG("No user info retrieved", 1, "warn")
+        // can happen if API limit exceeded
+        return
+    }
     if (!userInfo?.devices) {
         LOG("No controllers found exiting", 1, "warn")
         return
@@ -673,7 +712,7 @@ def getUserId() {
 def getBaseStations(userId) {
     LOG("getBaseStations ${userId}", 5, "trace")
     def baseStationData = _httpGet("valve/listBaseStations/${userId}", "closed")
-    if (baseStationData) {
+    if (baseStationData != null) {
         return baseStationData?.baseStations
     }
     else return null
@@ -823,6 +862,7 @@ def _httpGet(subUri, endpoint="open") {
         } else {
             LOG("_httpGet exception: ${ex.message}", 1, "error")
         }
+        state.apiCallError = true
         dailyAPINotification()
     }
 }
@@ -922,12 +962,14 @@ def scheduler() {
             schedule(chronStr, hoseTimerHeartbeat)
         }
     }
-    schedule("59 59 23 ? * *", tallyDailyAPICount)
+    
+    def utcOffset = getHourOffsetFromUTC()
+    schedule("59 59 " + (23+utcOffset) + " ? * *", tallyDailyAPICount)
     if (logToFile && stopFileLoggingMins) runIn(stopFileLoggingMins*60, "stopLoggingToFile", [overwrite: true])
 }
 
 def stopLoggingToFile() {
-
+    app.updateSetting('logToFile', false)
 }
 
 def irrigationHeartbeat() {
@@ -1329,7 +1371,7 @@ def getValveListData(baseStationId) {
     LOG("getValveListData($baseStationId)...", 3, "debug")
     def result = _httpGet("valve/listValves/${baseStationId}", "closed'")
     LOG("getValveListData: ${result}", 3, "debug")
-    return result    
+    return result  
 }
 
 def getValveData(valveId) {
@@ -1337,7 +1379,7 @@ def getValveData(valveId) {
     LOG("getValveData($valveId)...", 3, "debug")
     def result = _httpGet("valve/getValve/${valveId}", "closed")
     LOG("getValveData: ${result}", 3, "debug")
-    return result    
+    return result  
 }
 
 def getValvePrograms(valveId) {
@@ -1345,7 +1387,7 @@ def getValvePrograms(valveId) {
     LOG("getValvePrograms($valveId)...", 3, "debug")
     def result = _httpGet("program/listPrograms/${valveId}", "closed")?.programs
     LOG("getValvePrograms: ${result}", 3, "debug")
-    return result  
+    return result
 }
 
 def getBaseStationDayViews(baseStationId, Date start, Date end) {
@@ -1989,6 +2031,12 @@ def formatDt(dt) {
     return tf.format(dt)
 }
 
+def getHourOffsetFromUTC() {
+    def milliSecs = location.timeZone.getOffset(new Date().getTime()) // Timezone offset to UTC in milliseconds.
+    def hours = milliSecs / 1000 / 60 / 60
+    return hours
+} 
+
 def getDurationDesc(long secondsCnt) {
     LOG("getDurationDesc()...", 5, "trace")
     int seconds = secondsCnt %60
@@ -2180,7 +2228,8 @@ def isWatering(devId) {
 }
 
 def getDeviceStatus(devId) {
-    return _httpGet("device/${devId}")
+    def result = _httpGet("device/${devId}")
+    return result
 }
 
 def getChildNameById(id) {
@@ -2244,13 +2293,13 @@ def resumeZoneRun(child, devId) {
 def getZones(device) {
     LOG("getZones(${device.label})...", 5, "trace")
     def res = _httpGet("device/${device?.deviceNetworkId}")
-    return !res ? null : res?.zones
+    return (!res) ? null : res?.zones
 }
 
 def getScheduleRuleInfo(schedId) {
     LOG("getScheduleRuleInfo...", 5, "trace")
-    def res = _httpGet("schedulerule/${schedId}")
-    return res
+    def result = _httpGet("schedulerule/${schedId}")
+    return result
 }
 
 def getScheduleIdAndTypeByName(name, scheduleType) {
@@ -2562,6 +2611,10 @@ def buildDashboard() {
         contentMap[dateIndex].rachioIcons = []
     }
 
+    def anyPrecipAmount = false
+    def anyPrecipPercent = false
+    def anyRachioIcons = false
+
     def useExternalWeatherSource = false
     def weatherGeoPoint = null
     // set weather parameters for dashboard, from either controllers if configured or from external source if no controllers configured
@@ -2584,8 +2637,16 @@ def buildDashboard() {
                 def dateIndex = getDateIndex(date)
                 def dateMap = getDateMap(date)
                 def weather = weatherData?.find { it?.date == dateMap }
-                contentMap[dateIndex].precipPercent = (weather.precipProbability > 0) ? ((int) (weather.precipProbability * 100)).toString() + "%" : ""
-                contentMap[dateIndex].precipAmount = (weather.calculatedPrecip > 0) ? weather.calculatedPrecip + "\"" : ""
+                if (weather.precipProbability > 0) {
+                    contentMap[dateIndex].precipPercent = ((int) (weather.precipProbability * 100)).toString() + "%"
+                    anyPrecipPercent = true
+                }
+                else contentMap[dateIndex].precipPercent = ""
+                if (weather.calculatedPrecip > 0) {
+                    contentMap[dateIndex].precipAmount = weather.calculatedPrecip + "\""
+                    anyPrecipAmount = true
+                }
+                else contentMap[dateIndex].precipAmount = ""
                 contentMap[dateIndex].highTemp = weather.temperatureMax
                 contentMap[dateIndex].lowTemp = weather.temperatureMin
                 contentMap[dateIndex].weatherIcon = getWeatherIcon(weather.weatherType)
@@ -2644,8 +2705,16 @@ def buildDashboard() {
                         def dateIndex = getDateIndex(date)
                         def weather = [precipPercent: resp?.data.daily.precipitation_probability_max[weatherIndex], precipAmount: resp?.data.daily.precipitation_sum[weatherIndex], highTemp: resp?.data.daily.temperature_2m_max[weatherIndex], lowTemp: resp?.data.daily.temperature_2m_min[weatherIndex], code: resp?.data.daily.weathercode[weatherIndex]]
                         LOG("Got Open-Meteo Weather for day ${date}: ${weather}", 3, "debug")
-                        contentMap[dateIndex].precipPercent = (weather.precipPercent > 0) ? weather.precipPercent + "%" : ""
-                        contentMap[dateIndex].precipAmount = (weather.precipAmount > 0) ? weather.precipAmount.setScale(1, RoundingMode.HALF_UP) + "\"" : ""
+                        if (weather.precipPercent > 0) {
+                            contentMap[dateIndex].precipPercent = weather.precipPercent + "%"
+                            anyPrecipPercent = true
+                        }
+                        else contentMap[dateIndex].precipPercent = ""
+                        if (weather.precipAmount > 0) {
+                            contentMap[dateIndex].precipAmount = weather.precipAmount.setScale(1, RoundingMode.HALF_UP) + "\""
+                            anyPrecipAmount = true
+                        }
+                        else contentMap[dateIndex].precipAmount = ""
                         contentMap[dateIndex].highTemp = weather.highTemp.setScale(0, RoundingMode.HALF_UP)
                         contentMap[dateIndex].lowTemp = weather.lowTemp.setScale(0, RoundingMode.HALF_UP)
                         contentMap[dateIndex].weatherIcon = getWeatherIconFromOpenMeteo(weather.code)
@@ -2679,6 +2748,7 @@ def buildDashboard() {
             def futureEvents = futureEventsData?.findAll { getDateMap(getDateObjectFromUTCDt(it?.timestamp)) == dateMap }
             LOG("Future Events for ${date} are: ${futureEvents}", 4, "debug")
             contentMap[dateIndex].rachioIcons = getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules)
+            if (contentMap[dateIndex].rachioIcons != null && contentMap[dateIndex].rachioIcons != []) anyRachioIcons = true
         }
     }
     else if (params.hoseTimerValveID) {
@@ -2693,6 +2763,7 @@ def buildDashboard() {
             def dateIndex = getDateIndex(date)
             def dateMap = getDateMap(date)
             contentMap[dateIndex].rachioIcons = getHoseTimerIcons(baseStationDayViews, dateMap, hoseTimerValveID)
+            if (contentMap[dateIndex].rachioIcons != null && contentMap[dateIndex].rachioIcons != []) anyRachioIcons = true
         }
     }
     else {
@@ -2718,6 +2789,7 @@ def buildDashboard() {
                     def futureEvents = futureEventsData?.findAll { getDateMap(getDateObjectFromUTCDt(it?.timestamp)) == dateMap }
                     LOG("Future Events for ${date} are: ${futureEvents}", 4, "debug")
                     contentMap[dateIndex].rachioIcons.addAll(getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules))
+                    if (contentMap[dateIndex].rachioIcons != null && contentMap[dateIndex].rachioIcons != []) anyRachioIcons = true
                 }                
 
             }
@@ -2730,6 +2802,7 @@ def buildDashboard() {
                     def dateIndex = getDateIndex(date)
                     def dateMap = getDateMap(date)
                     contentMap[dateIndex].rachioIcons.addAll(getHoseTimerIcons(baseStationDayViews, dateMap))
+                    if (contentMap[dateIndex].rachioIcons != null && contentMap[dateIndex].rachioIcons != []) anyRachioIcons = true
                 }        
             }
         }
@@ -2751,11 +2824,26 @@ def buildDashboard() {
     def extraHorizontalSpaceSetting = 0
 
     colorScheme = getColorScheme(colorSchemeSelectionSetting)
+    def iconPack = getIconPreference()
+    def voffset = iconPack == "Outline" ? '-2' : '0'
+    def rachioIconLocation = getRachioIconLocation()
+
     Integer columnWidth = 64 + extraHorizontalSpaceSetting
     Integer numDays = 1 + numPastDaysDashboardSetting + numFutureDaysDashboardSetting
     Integer svgWidth = columnWidth * numDays
     LOG("Column Width = ${columnWidth}. numDays = ${numDays}. svgWidth = ${svgWidth}", 3, "debug")
-    svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="100%" viewBox="0 0 ' + Integer.toString(svgWidth) + ' 170"  xml:space="preserve">'
+
+    Integer baseSvgHeight = 70
+    // height for everything showing is 80
+    Integer svgHeight = baseSvgHeight
+    if (showTempSetting) svgHeight += 12
+    if (showPrecipPercentSetting && anyPrecipPercent) svgHeight += 12
+    if (showPrecipAmountSetting && anyPrecipAmount) svgHeight += 12
+    if (anyRachioIcons) {
+        if (settings.singleRachioIcon == false || (settings.singleRachioIcon == true && rachioIconLocation == "Top")) svgHeight += 18
+    }
+
+    svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="100%" viewBox="0 0 ' + Integer.toString(svgWidth) + ' ' + Integer.toString(svgHeight) + '"  xml:space="preserve">'
     
     svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:' + colorScheme.skipStrikethroughColor + '} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} . cloudPredicted:{fill:' + colorScheme.cloudPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip{fill:' + colorScheme.freezeSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:10px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style>'
 
@@ -2771,9 +2859,6 @@ def buildDashboard() {
 //    svg += '<g transform="scale(' + Double.toString((globalScaleSetting-40)/100) + ')">'
      svg += '<g>'
     
-    def iconPack = getIconPreference()
-    def voffset = iconPack == "Outline" ? '-2' : '0'
-    def rachioIconLocation = getRachioIconLocation()
     def i = 0
     for (date in startDate..endDate) {
         def dateIndex = getDateIndex(date)
@@ -2807,12 +2892,12 @@ def buildDashboard() {
                 def hOffset = getRachioIconOffset(numIcons, j, iconWidth)
                 Double middle = halfColumnWidth - 12
                 Double translateH = middle + hOffset
-                svg += '<g transform="translate(' + Double.toString(translateH) + ',-10) scale(.8)">'
+                svg += '<g transform="translate(' + Double.toString(translateH) + ',-13) scale(.8)">'
                 svg += it.svg
                 svg += '</g>'
                 j++
             }
-            svg += '<g transform="translate(0, 20)">'
+            svg += '<g transform="translate(0, 17)">'
         }
 
         svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="1.5" text-anchor="middle" class="dayText largeFontClass fontWeightClass">' + contentMap[dateIndex].parameters?.dayLabel + '</text>'

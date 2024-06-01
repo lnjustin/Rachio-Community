@@ -583,6 +583,7 @@ def sendWateringEvents(isWatering, poll = false) {
         sendEvent(name:'switch', value: "off", displayed: false, isStateChange: true)
         sendEvent(name:'valve', value: "closed", displayed: false, isStateChange: true)
         sendEvent(name:'watering', value: "off", displayed: true, isStateChange: true)
+        unschedule("poll")
     }
     parent?.handleHoseTimerWateringEvent(isWatering)
     if (state?.baseStationId != null) parent?.updateBaseStationWateringState(state?.baseStationId)
