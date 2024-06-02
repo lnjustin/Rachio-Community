@@ -56,6 +56,7 @@
  * V3.1.1 Fix rain delay bugs
  * V3.1.2 Fix more rain delay bugs; made extra polling during watering configurable
 * V3.1.3 Fix poll bug for hose timers; Safeguard against device deletion when configure app when API limit exceeded (warning on device page); make dashboard image height dynamically adapt with content
+ * V3.1.4 Bug fixes for device deletion warning; added apiCallLeft state variable
  */
 
 import groovy.json.*
@@ -213,10 +214,10 @@ def devicePage() {
 
     // Get Irrigation System Controllers
     def controllerRetrievalError = false
-    state.apiCallError == false
+    state.apiCallError = false
     def controllersRetrieved = getControllers()
     if (state.apiCallError == true) {
-        state.apiCallError == false
+        state.apiCallError = false
         controllerRetrievalError = true
     }
     def controllerList = getControllerInputEnum(controllersRetrieved)
@@ -224,10 +225,10 @@ def devicePage() {
 
     // Get Smart Hose Timer Base Stations (wifi hubs)
     def baseStationRetrievalError = false
-    state.apiCallError == false
+    state.apiCallError = false
     def baseStationsRetrieved = getBaseStations(atomicState.userId)
     if (state.apiCallError == true) {
-        state.apiCallError == false
+        state.apiCallError = false
         baseStationRetrievalError = true
     }
     LOG("rachioBaseStationList(): ${baseStationsRetrieved}", 3, "debug")
@@ -238,16 +239,18 @@ def devicePage() {
     def orphanedDevices = [:]
     if (previouslySelectedDevices) {
         def previousControllerIDs = (previouslySelectedDevices && previouslySelectedDevices.controllers) ? previouslySelectedDevices.controllers.keySet() : []
-        def currentControllerIDs = (controllerRetrievalError && controllersRetrieved != null) ? controllersRetrieved.collect { it.id } : []
+        def currentControllerIDs = (controllersRetrieved != null) ? controllersRetrieved.collect { it.id } : []
         def orphanedControllerIDs = previousControllerIDs.findAll { !(it in currentControllerIDs) } // find any previous controller IDs that are not in current controller IDs
-       orphanedDevices.controllers = (previouslySelectedDevices && previouslySelectedDevices.controllers) ? previouslySelectedDevices.controllers.findAll { it.key in orphanedControllerIDs } : []
+        orphanedDevices.controllers = (previouslySelectedDevices && previouslySelectedDevices.controllers) ? previouslySelectedDevices.controllers.findAll { it.key in orphanedControllerIDs } : []
         orphanedDevices.controllerNames = orphanedDevices.controllers.collect { it.value.name }
+        LOG("previousControllerIDs: ${previousControllerIDs}; currentControllerIDs: ${currentControllerIDs}; orphanedControllerIDs: ${orphanedControllerIDs}; orphanedDevices.controllers: ${orphanedDevices.controllers}; orphanedDevices.controllerNames: ${orphanedDevices.controllerNames}", 3, "debug")
 
         def previousBaseStationIDs = (previouslySelectedDevices && previouslySelectedDevices.baseStations) ? previouslySelectedDevices.baseStations.keySet() : []
-        def currentBaseStationIDs = (baseStationRetrievalError && baseStationsRetrieved != null) ? baseStationsRetrieved.collect { it.id } : []
+        def currentBaseStationIDs = (baseStationsRetrieved != null) ? baseStationsRetrieved.collect { it.id } : []
         def orphanedBaseStationIDs = previousBaseStationIDs.findAll { !(it in currentBaseStationIDs) } // find any previous base station IDs that are not in current base station IDs
         orphanedDevices.baseStations = (previouslySelectedDevices && previouslySelectedDevices.baseStations) ? previouslySelectedDevices.baseStations.findAll { it.key in orphanedBaseStationIDs } : []
         orphanedDevices.baseStationNames = orphanedDevices.baseStations.collect { it.value.serialNumber }
+        LOG("previousBaseStationIDs: ${previousBaseStationIDs}; currentBaseStationIDs: ${currentBaseStationIDs}; orphanedBaseStationIDs: ${orphanedBaseStationIDs}; orphanedDevices.baseStations: ${orphanedDevices.baseStations}; orphanedDevices.baseStationNames: ${orphanedDevices.baseStationNames}", 3, "debug")
     }
 
     //step2: render the page for user to select which controller
@@ -840,6 +843,12 @@ def _httpGet(subUri, endpoint="open") {
         httpGet(params) { resp ->
             LOG("HTTP GET Response: ${resp?.data} with status ${resp?.status}", 3, "debug")
             if(resp.status == 200) {
+                def headers = resp?.getAllHeaders()
+                def limitRemaining = headers?.find { it.getName() == 'X-RateLimit-Remaining' }
+                if (headers && limitRemaining) {
+                    if (!state.apiCallsLeft) state.apiCallsLeft = [closed: 1700, open: 1700]
+                    state.apiCallsLeft[endpoint] = limitRemaining.value
+                }
                 return resp?.data
             } else {
                 //refresh the auth token
@@ -1924,6 +1933,12 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", stan
             returnStatus = resp
           //  LOG ("Send JSON Return Status: ${resp.status}")
             if(resp.status == 200 || resp.status == 201 || resp.status == 204) {
+                def headers = resp?.getAllHeaders()
+                def limitRemaining = headers?.find { it.getName() == 'X-RateLimit-Remaining' }
+                if (headers && limitRemaining) {
+                    if (!state.apiCallsLeft) state.apiCallsLeft = [closed: 1700, open: 1700]
+                    state.apiCallsLeft[endpoint] = limitRemaining.value
+                }
                 returnStatus = true
                 //runIn(4, "poll", [overwrite: true])
             } else {
@@ -1974,6 +1989,12 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
         if(response) {
             returnData = response?.data
             if(response?.status in [200, 201, 204]) {
+                def headers = resp?.getAllHeaders()
+                def limitRemaining = headers?.find { it.getName() == 'X-RateLimit-Remaining' }
+                if (headers && limitRemaining) {
+                    if (!state.apiCallsLeft) state.apiCallsLeft = [closed: 1700, open: 1700]
+                    state.apiCallsLeft[endpoint] = limitRemaining.value
+                }
                 returnStatus = true
                 //runIn(4, "poll", [overwrite: true])
             } else {
@@ -3069,7 +3090,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
     def iconPack = getIconPreference()
 
     
-    if (!pastEvents.isEmpty()) {
+    if (pastEvents && !pastEvents.isEmpty()) {
         for (event in pastEvents) {
             def foundEvent = [:]
             def icon = [:]
@@ -3140,7 +3161,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
             }
         }
     }
-    if (!futureEvents?.isEmpty()) {
+    if (futureEvents && !futureEvents?.isEmpty()) {
         for (event in futureEvents) {
             def icon = [:]
             def foundEvent = [:]
@@ -3230,7 +3251,7 @@ def getHoseTimerIcons(baseStationDayViews, dateMap, valveIdFilter = null) {
     def hoseTimerIcons = []
     def iconPack = getIconPreference()
 
-    if (!baseStationDayViews.isEmpty()) {
+    if (!baseStationDayViews?.isEmpty()) {
         baseStationDayViews.each { day ->
             if (day.date == dateMap) {
                 day.valveProgramRunSummaries?.each { programAction ->
