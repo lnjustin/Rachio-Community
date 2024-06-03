@@ -57,6 +57,7 @@
  * V3.1.2 Fix more rain delay bugs; made extra polling during watering configurable
 * V3.1.3 Fix poll bug for hose timers; Safeguard against device deletion when configure app when API limit exceeded (warning on device page); make dashboard image height dynamically adapt with content
  * V3.1.4 Bug fixes for device deletion warning; added apiCallLeft state variable
+* V3.1.5 Optimize hose timer API calls
  */
 
 import groovy.json.*
@@ -226,7 +227,7 @@ def devicePage() {
     // Get Smart Hose Timer Base Stations (wifi hubs)
     def baseStationRetrievalError = false
     state.apiCallError = false
-    def baseStationsRetrieved = getBaseStations(atomicState.userId)
+    def baseStationsRetrieved = getBaseStations()
     if (state.apiCallError == true) {
         state.apiCallError = false
         baseStationRetrievalError = true
@@ -264,9 +265,9 @@ def devicePage() {
             def isControllerRequired = (settings.baseStations) ? false : true    
 
             // TO DO: Fix images from modelInfo state
-            if (controllerRetrievalError) paragraph getInterface("error","WARNING: Error retrieving irrigation controllers from Rachio. API limit may have been exceeded. Check the Hubitat log.")
+            if (controllerRetrievalError) paragraph getInterface("error","WARNING: Error retrieving irrigation controllers from Rachio. Check the Hubitat log.")
             input "controllers", "enum", title: "Select your irrigation system controllers", description: "Tap to Select", required: isControllerRequired, multiple: true, options: controllerList, submitOnChange: true
-            if (orphanedDevices.controllerNames) paragraph getInterface("error","WARNING: Pressing DONE will delete existing Hubitat devices for the following irrigation controllers that were not retrieved from Rachio: ${orphanedDevices.controllerNames}.")
+            if (orphanedDevices.controllerNames) paragraph getInterface("error","WARNING: Existing Hubitat devices for the following irrigation controllers were not retrieved from Rachio: ${orphanedDevices.controllerNames}.")
 
             if(settings?.controllers) {
                 controllerList?.sort { it?.value }?.each { cont->
@@ -281,9 +282,9 @@ def devicePage() {
             
             def isBaseStationRequired = (settings.controllers) ? false : true
             // TO DO: Fix images from model info state
-            if (baseStationRetrievalError) paragraph getInterface("error","WARNING: Error retrieving hose timer base stations from Rachio. API limit may have been exceeded. Check the Hubitat log.")
+            if (baseStationRetrievalError) paragraph getInterface("error","WARNING: Error retrieving hose timer base stations from Rachio. Check the Hubitat log.")
             input "baseStations", "enum", title: "Select your hose timer wifi hubs (by serial number)", description: "Tap to Select", required: isBaseStationRequired, multiple: true, options: baseStationList, submitOnChange: true
-            if (orphanedDevices.baseStationNames) paragraph getInterface("error","WARNING: Pressing DONE will delete existing Hubitat devices for the following hose timer base stations that were not retrieved from Rachio: ${orphanedDevices.baseStationNames}.")
+            if (orphanedDevices.baseStationNames) paragraph getInterface("error","WARNING: Existing Hubitat devices for the following hose timer base stations were not retrieved from Rachio: ${orphanedDevices.baseStationNames}.")
             if(settings?.baseStations) {
                 baseStationList?.sort { it?.value }?.each { station ->
                     if(station?.key in settings?.baseStations) {
@@ -338,7 +339,7 @@ def devicePage() {
              }
 
             section(getInterface("header","Logging")) {
-                input(name: "debugLevel", title:"Debug Log Level", type: 'enum', required:false, multiple:false, defaultValue:"2", description: "2", options:["5", "4", "3", "2", "1", "0"], width: 4)
+                input(name: "debugLevel", title:"Debug Log Level", type: 'enum', required:false, multiple:false, defaultValue:"2", description: "2", options:["5", "4", "3", "2", "1", "0"], width: 4, submitOnChange: true)
                 paragraph getInterface("note", "Higher levels send more information to IDE Live Logging. Level 2 or less is recommended for normal operations")
 			    if(settings.debugLevel == null){ app.updateSetting('debugLevel', "2") }
                 input(name: "logToFile", title: "Write Log to file?", type: "bool", required: true, defaultValue: false, submitOnChange: true)
@@ -350,17 +351,27 @@ def devicePage() {
                         def fileList = fileManagerDevice.currentValue("fileList")
                         def fileOptions = fileList.replaceAll("\\[","").replaceAll("]","").split(",")
                         input(name: "fName", type: "enum", title: "Select a File", options: fileOptions, multiple:false, submitOnChange:true, required: true, width: 4)
-			            input(name: "logTypesToFile", title:"Types of Logs to Write to File", type: 'enum', required:false, multiple:true, options:["error", "warn", "debug", "info", "trace"], width: 4)
+			            input(name: "logTypesToFile", title:"Types of Logs to Write to File", type: 'enum', required:false, multiple:true, options:["error", "warn", "debug", "info", "trace", "API Calls"], width: 4)
                         input(name: "stopFileLoggingMins", title: "Minutes for which to log to file", type: "number", description: "Tap to Modify", required: false, defaultValue: 60, submitOnChange: false)
                         input(name: "purgeFile", title: "Purge existing file?", type: "bool", required: true, defaultValue: false, submitOnChange: false)
                     }
+                }
+                input(name: "logAPICallCountToState", title: "Log API Call Types Count To State?", type: "bool", required: true, defaultValue: false, submitOnChange: true)
+                if (logAPICallCountToState) {
+                    input(name: "purgeAPICallCountInState", title: "Purge existing API Call Type Count in State?", type: "bool", required: true, defaultValue: false, submitOnChange: false)
                 }
             }
             section(getInterface("header","Re-Initialization")) {
                 input(name: "resetAllAPICountStats", title: "Reset all API Count Stats?", type: "bool", defaultValue: false)
 		    }
             
-
+            if (orphanedDevices.controllerNames || orphanedDevices.baseStationNames) {
+                section(getInterface("redHeader","Delete Devices")) {
+                    input(name: "confirmDeleteDevices", title: "Confirm Deletion of the Following Hubitat Devices?", type: "bool", required: true, defaultValue: false, submitOnChange: false)
+                    if (orphanedDevices.controllerNames) getInterface("error","Irrigation Controllers to be Deleted: ${orphanedDevices.controllerNames}")
+                    if (orphanedDevices.baseStationName) getInterface("error","Hose Timer Base Stations to be Deleted: ${orphanedDevices.baseStationNames}")
+                }
+            }
         }
         section("") {
             footer()
@@ -699,12 +710,12 @@ def getControllerInputEnum(controllers) {
 
 def getUserInfo(userId) {
     LOG("getUserInfo ${userId}", 5, "trace")
-    return _httpGet("person/${userId}");
+    return _httpGet("person/${userId}", "open", "person");
 }
 
 def getUserId() {
     LOG("getUserId()", 5, "trace")
-    def res = _httpGet("person/info");
+    def res = _httpGet("person/info", "open", "person/info");
     LOG("person Info: ${res}", 3, "debug")
     if (res) {
         return res?.id;
@@ -712,9 +723,16 @@ def getUserId() {
     return null
 }
 
-def getBaseStations(userId) {
-    LOG("getBaseStations ${userId}", 5, "trace")
-    def baseStationData = _httpGet("valve/listBaseStations/${userId}", "closed")
+def getBaseStations() {
+    LOG("getBaseStations...", 5, "trace")
+
+    if (!atomicState?.userId) {
+        LOG("No user Id found exiting", 1, "warn")
+        return
+    }
+    def userId = atomicState?.userId
+
+    def baseStationData = _httpGet("valve/listBaseStations/${userId}", "closed", "valve/listBaseStations/")
     if (baseStationData != null) {
         return baseStationData?.baseStations
     }
@@ -723,7 +741,7 @@ def getBaseStations(userId) {
 
 def getHoseTimerValves(baseStationId) {
     LOG("getHoseTimerValves())", 5, "trace")
-    def valveData = _httpGet("valve/listValves/${baseStationId}", "closed")
+    def valveData = _httpGet("valve/listValves/${baseStationId}", "closed", "valve/listValves/")
     LOG("Retrieved valve data for ${baseStationId}: ${valveData}", 3, "debug")
     if (valveData) {
         return valveData.valves
@@ -829,17 +847,20 @@ def updateAPICount(endpoint) {
     state.dailyAPICount[endpoint]++
 }
 
-def _httpGet(subUri, endpoint="open") {
+def _httpGet(subUri, endpoint="open", stringToLog = null) {
     LOG("_httpGet()", 5, "trace")
     LOG("_httpGet($subUri)", 3, "debug")
+
+    logAPICall(stringToLog, endpoint)
+    updateAPICount(endpoint)
     try {
         def baseURI = (endpoint == "open") ? getApiEndpoint() + "/1/public" : getClosedApiEndpoint()
         LOG("URL: ${baseURI}/${subUri}", 3, "debug")
+        
         def params = [
             uri: "${baseURI}/${subUri}",
             headers: ["Authorization": "Bearer ${atomicState.authToken}"]
         ]
-        updateAPICount(endpoint)
         httpGet(params) { resp ->
             LOG("HTTP GET Response: ${resp?.data} with status ${resp?.status}", 3, "debug")
             if(resp.status == 200) {
@@ -1015,6 +1036,7 @@ def initializeAPICountState() {
         LOG("Initializing maxAPICallsPerDay.", 2, "warn")
         state.maxAPICallsPerDay = [open:0, closed:0]
     }
+    state.dailyAPICountResetDate = new Date().getTime()
 }
 
 def tallyDailyAPICount() {
@@ -1022,11 +1044,12 @@ def tallyDailyAPICount() {
     initializeAPICountState()
     if (!state.numDaysInstalled) state.numDaysInstalled = 1
     else state.numDaysInstalled++
-    state.avgAPICallsPerDay.open = state.avgAPICallsPerDay.open + ((state.dailyAPICount.open - state.avgAPICallsPerDay.open) / state.numDaysInstalled)
-    state.avgAPICallsPerDay.closed = state.avgAPICallsPerDay.closed + ((state.dailyAPICount.closed - state.avgAPICallsPerDay.closed) / state.numDaysInstalled)
+    state.avgAPICallsPerDay.open = (state.avgAPICallsPerDay.open + ((state.dailyAPICount.open - state.avgAPICallsPerDay.open) / state.numDaysInstalled)).round()
+    state.avgAPICallsPerDay.closed = (state.avgAPICallsPerDay.closed + ((state.dailyAPICount.closed - state.avgAPICallsPerDay.closed) / state.numDaysInstalled)).round()
     if (state.dailyAPICount.open > state.maxAPICallsPerDay.open) state.maxAPICallsPerDay.open = state.dailyAPICount.open
     if (state.dailyAPICount.closed > state.maxAPICallsPerDay.closed) state.maxAPICallsPerDay.closed = state.dailyAPICount.closed
     state.dailyAPICount = [open:0, closed:0]
+    state.dailyAPICountResetDate = new Date().getTime()
     LOG("Tallied avg = ${state.avgAPICallsPerDay.open}, ${state.avgAPICallsPerDay.closed}, tallied max = ${state.maxAPICallsPerDay.open}, ${state.maxAPICallsPerDay.closed}.", 4, "info")
 }
 
@@ -1036,6 +1059,7 @@ def resetAllAPICountStats() {
     state.avgAPICallsPerDay = [open:0, closed:0]
     state.maxAPICallsPerDay = [open:0, closed:0]
     state.dailyAPICount = [open:0, closed:0]
+    state.dailyAPICountResetDate = new Date().getTime()
     state.numDaysInstalled = null
 
     state.methodTrace = null
@@ -1080,7 +1104,7 @@ def initWebhook(controlId) {
 def getWebhookIdsForDev(devId) {
     LOG("getWebhooksIdsForDev()", 5, "trace")
     if(!devId) { return null }
-    def data = _httpGet("notification/${devId}/webhook")
+    def data = _httpGet("notification/${devId}/webhook", "open", "notification/deviceID/webhook/")
     def res = null
     if(data) { res = data?.findAll { it?.externalId == app?.name }?.collect { it?.id } }
     LOG("Get webhookIdsForDevice received data: ${data}. Webhook IDs for Device ${devId} for ${app?.name} include: ${res}", 3, "debug")
@@ -1118,7 +1142,7 @@ def webhookEvtTypes() {
     def typeIds = []
     //  def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT", "RAIN_DELAY_EVENT", "WEATHER_INTELLIGENCE_EVENT"] 
     def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT"] 
-    def data = _httpGet("notification/webhook_event_type")
+    def data = _httpGet("notification/webhook_event_type", "open", "notification/webhook_event_type/")
     if(data) {
         typeIds = data?.findAll { it?.name in okTypes }.collect { ["id":it?.id?.toString()] }
     }
@@ -1206,7 +1230,7 @@ void updateDeviceStates() {
         }
     }
 
-    def baseStations = getBaseStations(atomicState.userId)
+    def baseStations = getBaseStations()
     LOG ("Base Stations: ${baseStations}", 3, "debug")
     LOG("Settings Base Stations: ${settings.baseStations}", 3, "debug")
     if(baseStations && settings?.baseStations) {
@@ -1254,17 +1278,17 @@ def getBaseStationFromValve(valveId) {
 
 def getCurSchedule(controllerId) {
     LOG("getCurSchedule...", 5, "trace")
-    return _httpGet("device/${controllerId}/current_schedule")
+    return _httpGet("device/${controllerId}/current_schedule", "open", "device/controllerID/current_schedule/")
 }
 
 def getDeviceData(devId, type="controller") {
     LOG("getDeviceData()...", 5, "trace")
     def result = null
     if (type == "controller") {
-        result = _httpGet("device_with_current_schedule/${devId}")
+        result = _httpGet("device_with_current_schedule/${devId}", "open", "device_with_current_schedule/deviceID")
     }
     else if (type == "baseStation") {
-        result = _httpGet("valve/getBaseStation/${devId}", "closed")
+        result = _httpGet("valve/getBaseStation/${devId}", "closed", "valve/getBaseStation/deviceID")
     }
     LOG("getDeviceData: ${result}", 3, "debug")
     return result
@@ -1272,7 +1296,7 @@ def getDeviceData(devId, type="controller") {
 
 def getDeviceState(devId) {
     LOG("getDeviceState()...", 5, "trace")
-    def result = _httpGet("device/getDeviceState/${devId}", "closed")
+    def result = _httpGet("device/getDeviceState/${devId}", "closed", "device/getDeviceState/deviceID")
     LOG("getDeviceState: ${result}", 3, "debug")
     return result
 }
@@ -1280,14 +1304,14 @@ def getDeviceState(devId) {
 // Gets location id for device
 def getDeviceDetails(devId) {
     LOG("getDeviceDetails()...", 5, "trace")
-    def result = _httpGet("device/getDeviceDetails/${devId}", "closed")
+    def result = _httpGet("device/getDeviceDetails/${devId}", "closed", "device/getDeviceDetails/deviceID")
     LOG("getDeviceDetails: ${result}", 3, "debug")
     return result
 }
 
 def getZoneDetails(devId) {
     LOG("getZoneDetails()...", 5, "trace")
-    def result = _httpGet("device/listZones/${devId}", "closed")
+    def result = _httpGet("device/listZones/${devId}", "closed", "device/listZones/deviceID")
     LOG("getZoneDetails: ${result}", 3, "debug")
     return result
 }
@@ -1295,7 +1319,7 @@ def getZoneDetails(devId) {
 def getDevicePastEvents(devId, start_time, end_time) {
     // start_time and end_time are Date objects
     LOG("getDevicePastEvents()...", 5, "trace")
-    def result = _httpGet("device/${devId}/event?startTime=${start_time.getTime()}&endTime=${end_time.getTime()}", "open")
+    def result = _httpGet("device/${devId}/event?startTime=${start_time.getTime()}&endTime=${end_time.getTime()}", "open", "getDevicePastEvents")
     LOG("getDeviceEvents: ${result}", 3, "debug")
     return result
 }
@@ -1378,7 +1402,7 @@ def getGeopoint(devId, detailsData) {
 def getValveListData(baseStationId) {
     LOG("getValveListData()...", 5, "trace")
     LOG("getValveListData($baseStationId)...", 3, "debug")
-    def result = _httpGet("valve/listValves/${baseStationId}", "closed'")
+    def result = _httpGet("valve/listValves/${baseStationId}", "closed", "valve/listValves/baseStationID")
     LOG("getValveListData: ${result}", 3, "debug")
     return result  
 }
@@ -1386,15 +1410,23 @@ def getValveListData(baseStationId) {
 def getValveData(valveId) {
     LOG("getValveData()...", 5, "trace")
     LOG("getValveData($valveId)...", 3, "debug")
-    def result = _httpGet("valve/getValve/${valveId}", "closed")
+    def result = _httpGet("valve/getValve/${valveId}", "closed", "valve/getValve/valveID")
     LOG("getValveData: ${result}", 3, "debug")
     return result  
+}
+
+def getBaseStationValves(baseStationId) {
+    LOG("getBaseStationValves()...", 5, "trace")
+    LOG("getBaseStationValves($baseStationId)...", 3, "debug")
+    def result = _httpGet("valve/listValves/${baseStationId}", "closed", "valve/listValves/baseStationID")
+    LOG("getBaseStationValves: ${result}", 3, "debug")
+    return result      
 }
 
 def getValvePrograms(valveId) {
     LOG("getValvePrograms()...", 5, "trace")
     LOG("getValvePrograms($valveId)...", 3, "debug")
-    def result = _httpGet("program/listPrograms/${valveId}", "closed")?.programs
+    def result = _httpGet("program/listPrograms/${valveId}", "closed", "program/listPrograms/valveID")?.programs
     LOG("getValvePrograms: ${result}", 3, "debug")
     return result
 }
@@ -1531,7 +1563,10 @@ def addRemoveDevices(uninst=false) {
                 }
             }
             LOG("devicesInUse: ${devsInUse}", 3, "debug")
-            delete = app.getChildDevices().findAll { !(it?.deviceNetworkId in devsInUse) }
+            if (confirmDeleteDevices) {
+                app.updateSetting('confirmDeleteDevices', false)
+                delete = app.getChildDevices().findAll { !(it?.deviceNetworkId in devsInUse) }
+            }
         } else {
             atomicState?.selectedDevices = []
             delete = app.getChildDevices()
@@ -1665,11 +1700,11 @@ void poll(child=null, type=null) {
                 def bDev = getChildDevice(baseStation?.key)
                 if(bDev) {
                     baseStationCnt = baseStationCnt+1
-                    pollChild(bDev, "hoseTimerDevice")
+                    def baseStationData = pollChild(bDev, "hoseTimerDevice")
                     baseStation?.value?.valves?.each { valve->
                         valveCnt = valveCnt+1
                         def vDev = getChildDevice(valve?.key)
-                        if(vDev) { pollChild(vDev, "hoseTimerDevice")}
+                        if(vDev) { pollChild(vDev, "hoseTimerDevice", baseStationData)}
                     }
                 }
             }
@@ -1700,11 +1735,11 @@ void poll(child=null, type=null) {
             def bDev = getChildDevice(baseStation?.key)
             if(bDev) {
                 baseStationCnt = baseStationCnt+1
-                pollChild(bDev, "hoseTimerDevice")
+                def baseStationData = pollChild(bDev, "hoseTimerDevice")
                 baseStation?.value?.valves?.each { valve->
                     valveCnt = valveCnt+1
                     def vDev = getChildDevice(valve?.key)
-                    if(vDev) { pollChild(vDev, "hoseTimerDevice")}
+                    if(vDev) { pollChild(vDev, "hoseTimerDevice", baseStationData)}
                 }
             }
         }
@@ -1796,30 +1831,44 @@ def pollChild(childDev, type, parentData = null) {
                 }
             }
             else if (type == "hoseTimerDevice") {
+                def today = new Date()
+                def startDate = offsetDateByNumDays(today, -10)
+                def endDate = offsetDateByNumDays(today, 10)
                 selectedDevices?.baseStations.each { baseStation ->
                     if(dni == baseStation?.key) {
+                        LOG("Polling Wifi Hub ${baseStation?.key}", 3, "debug")
                         def baseStationData = getDeviceData(baseStation?.key, "baseStation")
+                        def baseStationValves = getBaseStationValves(baseStation?.key)
+
+                        // retrieve dayView data for the last 10 days and the next 10 days in order to get last action and next action data for hose timers
+                        def dayViewData = getBaseStationDayViews(baseStation?.key, startDate, endDate)
+
+                        // pass base station data to child hose timers to reduce API calls
+                        returnData = [baseStationValves: baseStationValves?.valves, dayViewData: dayViewData]
 
                         if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
-                        LOG("Polling Wifi Hub ${baseStation?.key}", 3, "debug")
                         data = [baseStationData: baseStationData]
                     } else {
                         baseStation?.value?.valves?.each { valve ->
                             if (dni == valve?.key) {
-                                LOG("Polling Hose Timer ${newLabel}", 3, "debug")
-                                def valveData = getValveData(valve?.key)
+                                LOG("Polling Hose Timer ${valve?.key}", 3, "debug")
                                 def programData = getValvePrograms(valve?.key)
 
-                                // retrieve dayView data for the last 10 days and the next 10 days in order to get last action and next action data
-                                def today = new Date()
-                                def startDate = offsetDateByNumDays(today, -10)
-                                def endDate = offsetDateByNumDays(today, 10)
-                                def dayViewData = getBaseStationDayViews(baseStation?.key, startDate, endDate)
+                                dayViewData = null
+                                valveData = null
+
+                                if (parentData) {
+                                    valveData = parentData.baseStationValves.find { it?.id == valve?.key }
+                                    dayViewData = parentData.dayViewData
+                                }
+                                else {
+                                    valveData = getValveData(valve?.key)
+                                    dayViewData = getBaseStationDayViews(baseStation?.key, startDate, endDate)                                   
+                                }
 
                                 def newLabel = getDeviceLabelStr(valve?.value).toString()
                                 if(devLabel != newLabel) {
                                     childDev?.label = newLabel
-                                    LOG("Valve Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
                                 }
                                 
                                 data = [baseStationId: baseStation?.key, valveData: valveData, programData: programData, dayViewData: dayViewData]
@@ -1923,12 +1972,14 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", stan
         body: jsonBody
     ]
 
+    updateAPICount(endpoint)
+    logAPICall(subUri, endpoint)
+
     try{
         if(standyByDevice && !standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
             LOG("Skipping this command while controller is in 'Standby Mode'...", 3, "debug")
             return true
         }
-        updateAPICount(endpoint)
         httpPut(cmdParams) { resp ->
             returnStatus = resp
           //  LOG ("Send JSON Return Status: ${resp.status}")
@@ -1974,8 +2025,10 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
         timeout: 30
     ]
 
+    updateAPICount(endpoint)
+    logAPICall(subUri, endpoint)
+
     try{
-        updateAPICount(endpoint)
         if(type == "post") {
             httpPost(cmdParams) { resp ->
                 response = resp
@@ -2017,11 +2070,15 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
 
 def dailyAPINotification() {
     LOG("dailyAPINotification...", 5, "trace")
-    if (state.dailyAPICount.open && state.dailyAPICount.open > 1500) LOG("Approaching daily API Limit of 1700 for Open endpoint. Averaging ${state.avgAPICallsPerDay.open} API calls per day.", 1, "warn")
-    else if (state.dailyAPICount.open && state.dailyAPICount.open >= 1700) LOG("Daily API Limit of 1700 reached for Open endpoint.  Averaging ${state.avgAPICallsPerDay.open} API calls per day.", 1, "error")
-    if (state.dailyAPICount.closed && state.dailyAPICount.closed > 1500) LOG("Approaching daily API Limit of 1700 for Open endpoint. Averaging ${state.avgAPICallsPerDay.closed} API calls per day.", 1, "warn")
-    else if (state.dailyAPICount.closed && state.dailyAPICount.closed >= 1700) LOG("Daily API Limit of 1700 reached for Open endpoint.  Averaging ${state.avgAPICallsPerDay.closed} API calls per day.", 1, "error")
-
+    def yesterday = new Date() - 1
+    def lastResetDate = null
+    if (state.dailyAPICountResetDate) lastResetDate = new Date(state.dailyAPICountResetDate)
+    if (lastResetDate && lastResetDate.after(yesterday)) {   // if reset within the last 24 hours    
+        if (state.dailyAPICount.open && state.dailyAPICount.open > 1600) LOG("Approaching daily API Limit of 1700 for Open endpoint. Averaging ${state.avgAPICallsPerDay.open} API calls per day.", 1, "warn")
+        else if (state.dailyAPICount.open && state.dailyAPICount.open >= 1700) LOG("Daily API Limit of 1700 reached for Open endpoint.  Averaging ${state.avgAPICallsPerDay.open} API calls per day.", 1, "error")
+        if (state.dailyAPICount.closed && state.dailyAPICount.closed > 1600) LOG("Approaching daily API Limit of 1700 for Open endpoint. Averaging ${state.avgAPICallsPerDay.closed} API calls per day.", 1, "warn")
+        else if (state.dailyAPICount.closed && state.dailyAPICount.closed >= 1700) LOG("Daily API Limit of 1700 reached for Open endpoint.  Averaging ${state.avgAPICallsPerDay.closed} API calls per day.", 1, "error")
+    }
 }
 
 //Section6: helper methods ---------------------------------------------------------------------------------------------
@@ -2243,13 +2300,13 @@ def setRainDelay(child, deviceId, delayVal) {
 
 def isWatering(devId) {
     LOG("isWatering()...", 5, "trace")
-    def res = _httpGet("device/${devId}/current_schedule");
+    def res = _httpGet("device/${devId}/current_schedule", "open", "device/deviceID/current_schedule");
     def result = (res && res?.status) ? true : false
     return result
 }
 
 def getDeviceStatus(devId) {
-    def result = _httpGet("device/${devId}")
+    def result = _httpGet("device/${devId}", "open", "device/deviceID")
     return result
 }
 
@@ -2313,13 +2370,13 @@ def resumeZoneRun(child, devId) {
 //Required by child devices
 def getZones(device) {
     LOG("getZones(${device.label})...", 5, "trace")
-    def res = _httpGet("device/${device?.deviceNetworkId}")
+    def res = _httpGet("device/${device?.deviceNetworkId}", "open", "device/deviceID")
     return (!res) ? null : res?.zones
 }
 
 def getScheduleRuleInfo(schedId) {
     LOG("getScheduleRuleInfo...", 5, "trace")
-    def result = _httpGet("schedulerule/${schedId}")
+    def result = _httpGet("schedulerule/${schedId}", "open", "schedulerule/scheduleID")
     return result
 }
 
@@ -3406,6 +3463,9 @@ def getInterface(type, txt="", link="") {
         case "header": 
             return "<div style='color:#ffffff;font-weight: bold;background-color:#555555;border: 1px solid;box-shadow: 2px 3px #A9A9A9'> ${txt}</div>"
             break
+        case "redHeader": 
+            return "<div style='color:#000000;font-weight: bold;background-color:#FF0000;border: 1px solid;box-shadow: 2px 3px #A9A9A9'> ${txt}</div>"
+            break
         case "error": 
             return "<div style='color:#ff0000;font-weight: bold;'>${txt}</div>"
             break
@@ -3483,6 +3543,37 @@ void LOG(String message, Integer level=3, String logType="debug") {
             app.updateSetting('purgeFile', false)
         }
         else fileManagerDevice.appendFile(fName, a + ": " + message)
+    }
+}
+
+def logAPICall(apiCall, endpoint) {
+    if (logToFile && logTypesToFile && logTypesToFile.contains("API Calls")) {
+        String a=getTimestamp()
+
+        def apiCountStr = ""
+        if (state.apiCallsLeft && state.apiCallsLeft[endpoint]) {
+            String leftStr = state.apiCallsLeft[endpoint].toString()
+           def formattedCount = leftStr.padLeft(4,"0")
+            apiCountStr = " (" + formattedCount + " calls left) "
+        }
+        def logMsg = a + ": " + "[" + (endpoint == 'closed' ? 'closed' : 'open  ') + "]" + apiCountStr + apiCall
+        if (purgeFile) {
+            fileManagerDevice.writeFile(fName, logMsg)
+            app.updateSetting('purgeFile', false)
+        }
+        else fileManagerDevice.appendFile(fName, logMsg)
+    }    
+    if (logAPICallCountToState) {
+        if (purgeAPICallCountInState) {
+            state.apiCalls = null
+            app.updateSetting('purgeAPICallCountInState', false)
+        }
+        if (!state.apiCalls) state.apiCalls = [closed: null, open: null]
+        if (!state.apiCalls[endpoint]) state.apiCalls[endpoint] = [:]
+        if (apiCall) {
+            if (!state.apiCalls[endpoint][apiCall]) state.apiCalls[endpoint][apiCall] = 1
+            else state.apiCalls[endpoint][apiCall]++
+        }
     }
 }
 

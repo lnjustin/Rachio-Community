@@ -111,18 +111,18 @@ void updated() {
 def generateEvent(Map results) {
     if(results) {
         LOG("generate Event for Valve. Results:" + results, 3, "debug")
-        if (results.valveData && results.valveData.valve)  state?.valveId = results?.valveData?.valve.id
+        if (results.valveData)  state?.valveId = results?.valveData?.id
         state?.baseStationId = results?.baseStationId
       //  if (results.baseStationData && results.baseStationData.baseStation) state?.baseStationId = results?.baseStationData?.baseStation.id
 
         // process programs before state, so that program names will be available
         valveProgramEvent(results?.programData)
 
-        if (results.valveData && results.valveData.valve) {
-            valveNameEvent(results?.valveData?.valve.name)
+        if (results.valveData) {
+            valveNameEvent(results?.valveData?.name)
         //    valveColorEvent(results?.valveData?.valve.color)
         //  valvePhotoEvent(results?.valveData?.photo.id)
-            valveStateEvent(results?.valveData?.valve.state)
+            valveStateEvent(results?.valveData?.state)
         }
         if(state?.isOnline == false) {
             LOG("Rachio serves report the hose timer valve is offline. Marking valve as offline: ${res}", 3, "debug")
