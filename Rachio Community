@@ -58,6 +58,7 @@
 * V3.1.3 Fix poll bug for hose timers; Safeguard against device deletion when configure app when API limit exceeded (warning on device page); make dashboard image height dynamically adapt with content
  * V3.1.4 Bug fixes for device deletion warning; added apiCallLeft state variable
 * V3.1.5 Optimize hose timer API calls
+* V3.1.6 Bug fix
  */
 
 import groovy.json.*
@@ -367,9 +368,9 @@ def devicePage() {
             
             if (orphanedDevices.controllerNames || orphanedDevices.baseStationNames) {
                 section(getInterface("redHeader","Delete Devices")) {
-                    input(name: "confirmDeleteDevices", title: "Confirm Deletion of the Following Hubitat Devices?", type: "bool", required: true, defaultValue: false, submitOnChange: false)
-                    if (orphanedDevices.controllerNames) getInterface("error","Irrigation Controllers to be Deleted: ${orphanedDevices.controllerNames}")
-                    if (orphanedDevices.baseStationName) getInterface("error","Hose Timer Base Stations to be Deleted: ${orphanedDevices.baseStationNames}")
+                    input(name: "confirmDeleteDevices", title: "Delete the Following Hubitat Devices?", type: "bool", required: true, defaultValue: false, submitOnChange: false)
+                    if (orphanedDevices.controllerNames) paragraph getInterface("error","Irrigation Controllers to be Deleted: ${orphanedDevices.controllerNames}")
+                    if (orphanedDevices.baseStationNames) paragraph getInterface("error","Hose Timer Base Stations to be Deleted: ${orphanedDevices.baseStationNames}")
                 }
             }
         }
@@ -1572,7 +1573,7 @@ def addRemoveDevices(uninst=false) {
             delete = app.getChildDevices()
         }
         if(delete?.size() > 0) {
-            LOG("Device Delete: ${delete} | Removing (${delete?.size()}) Devices...", 1, "warn")
+            LOG("Delete Devices: ${delete} | Removing (${delete?.size()}) Devices...", 1, "warn")
             delete?.each {
                 cleanupObjects(it?.deviceNetworkId)
                 deleteChildDevice(it?.deviceNetworkId)
@@ -1907,8 +1908,7 @@ void handleWateringSched(devId, val=false) {
     } else {
         LOG("Watering has finished for irrigation... unscheduling extra polling", 5, "trace")
         unschedule("irrigationExtraPolling")
-        runIn(60, "irrigationExtraPolling") // This is here just to make sure that the schedule actually stopped and that the data is really current.
-    }
+   }
     updateWateringItem(devId, val)
 }
 
@@ -1924,7 +1924,6 @@ void handleHoseTimerWateringEvent(val=false) {
     } else {
         LOG("Watering has finished for hose timer... unscheduling any extra polling", 5, "trace")
         unschedule("hoseTimerExtraPolling")
-        runIn(60, "hoseTimerExtraPolling") // This is here just to make sure that the schedule actually stopped and that the data is really current.
     }
 }
 
