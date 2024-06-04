@@ -59,6 +59,7 @@
  * V3.1.4 Bug fixes for device deletion warning; added apiCallLeft state variable
 * V3.1.5 Optimize hose timer API calls
 * V3.1.6 Bug fix
+* V3.1.7 API call count bug fix; device deletion bug fix
  */
 
 import groovy.json.*
@@ -237,22 +238,34 @@ def devicePage() {
     def baseStationList = getBaseStationInputEnum(baseStationsRetrieved)
     def valveList = []
 
+    // prepare to guard against both (1) accidental deletion of devices that do not show up in the device dropdowns (for example when there are errors retrieving the possible devices); and (2) accidental deletion of devices that do appear in dropdowns but are left unchecked despite having been previously checked
     def previouslySelectedDevices = atomicState?.selectedDevices
     def orphanedDevices = [:]
+    def unselectedDevices = [:]
     if (previouslySelectedDevices) {
-        def previousControllerIDs = (previouslySelectedDevices && previouslySelectedDevices.controllers) ? previouslySelectedDevices.controllers.keySet() : []
+        def previousControllerIDs = (previouslySelectedDevices.controllers) ? previouslySelectedDevices.controllers.keySet() : []
         def currentControllerIDs = (controllersRetrieved != null) ? controllersRetrieved.collect { it.id } : []
         def orphanedControllerIDs = previousControllerIDs.findAll { !(it in currentControllerIDs) } // find any previous controller IDs that are not in current controller IDs
-        orphanedDevices.controllers = (previouslySelectedDevices && previouslySelectedDevices.controllers) ? previouslySelectedDevices.controllers.findAll { it.key in orphanedControllerIDs } : []
+        orphanedDevices.controllers = (previouslySelectedDevices.controllers) ? previouslySelectedDevices.controllers.findAll { it.key in orphanedControllerIDs } : []
         orphanedDevices.controllerNames = orphanedDevices.controllers.collect { it.value.name }
-        LOG("previousControllerIDs: ${previousControllerIDs}; currentControllerIDs: ${currentControllerIDs}; orphanedControllerIDs: ${orphanedControllerIDs}; orphanedDevices.controllers: ${orphanedDevices.controllers}; orphanedDevices.controllerNames: ${orphanedDevices.controllerNames}", 3, "debug")
+        if(previouslySelectedDevices.controllers) {
+            def unselectedControllerIDs = previousControllerIDs.findAll { !(it in settings?.controllers) }
+            unselectedDevices.controllers = previouslySelectedDevices.controllers.findAll { it.key in unselectedControllerIDs }
+            unselectedDevices.controllerNames = unselectedDevices.controllers.collect { it.value.name }
+        }
+        LOG("previousControllerIDs: ${previousControllerIDs}; currentControllerIDs: ${currentControllerIDs}; orphanedControllerIDs: ${orphanedControllerIDs}; orphanedDevices.controllerNames: ${orphanedDevices.controllerNames}; unselectedDevices.controllerNames: ${unselectedDevices.controllerNames}", 2, "debug") 
 
-        def previousBaseStationIDs = (previouslySelectedDevices && previouslySelectedDevices.baseStations) ? previouslySelectedDevices.baseStations.keySet() : []
+        def previousBaseStationIDs = (previouslySelectedDevices.baseStations) ? previouslySelectedDevices.baseStations.keySet() : []
         def currentBaseStationIDs = (baseStationsRetrieved != null) ? baseStationsRetrieved.collect { it.id } : []
         def orphanedBaseStationIDs = previousBaseStationIDs.findAll { !(it in currentBaseStationIDs) } // find any previous base station IDs that are not in current base station IDs
-        orphanedDevices.baseStations = (previouslySelectedDevices && previouslySelectedDevices.baseStations) ? previouslySelectedDevices.baseStations.findAll { it.key in orphanedBaseStationIDs } : []
+        orphanedDevices.baseStations = (previouslySelectedDevices.baseStations) ? previouslySelectedDevices.baseStations.findAll { it.key in orphanedBaseStationIDs } : []
         orphanedDevices.baseStationNames = orphanedDevices.baseStations.collect { it.value.serialNumber }
-        LOG("previousBaseStationIDs: ${previousBaseStationIDs}; currentBaseStationIDs: ${currentBaseStationIDs}; orphanedBaseStationIDs: ${orphanedBaseStationIDs}; orphanedDevices.baseStations: ${orphanedDevices.baseStations}; orphanedDevices.baseStationNames: ${orphanedDevices.baseStationNames}", 3, "debug")
+        if(previouslySelectedDevices.baseStations) {
+            def unselectedBaseStationIDs = previousBaseStationIDs.findAll { !(it in settings?.baseStations) }
+            unselectedDevices.baseStations = previouslySelectedDevices.baseStations.findAll { it.key in unselectedBaseStationIDs }
+            unselectedDevices.baseStationsNames = unselectedDevices.baseStations.collect { it.value.serialNumber }
+        }        
+        LOG("previousBaseStationIDs: ${previousBaseStationIDs}; currentBaseStationIDs: ${currentBaseStationIDs}; orphanedBaseStationIDs: ${orphanedBaseStationIDs}; orphanedDevices.baseStations: ${orphanedDevices.baseStations}; orphanedDevices.baseStationNames: ${orphanedDevices.baseStationNames}; unselectedDevices.baseStationsNames: ${unselectedDevices.baseStationsNames}", 2, "debug")
     }
 
     //step2: render the page for user to select which controller
@@ -367,12 +380,14 @@ def devicePage() {
 		    }
             
             if (orphanedDevices.controllerNames || orphanedDevices.baseStationNames) {
+                state.requireDeleteConfirmation = true
                 section(getInterface("redHeader","Delete Devices")) {
                     input(name: "confirmDeleteDevices", title: "Delete the Following Hubitat Devices?", type: "bool", required: true, defaultValue: false, submitOnChange: false)
                     if (orphanedDevices.controllerNames) paragraph getInterface("error","Irrigation Controllers to be Deleted: ${orphanedDevices.controllerNames}")
                     if (orphanedDevices.baseStationNames) paragraph getInterface("error","Hose Timer Base Stations to be Deleted: ${orphanedDevices.baseStationNames}")
                 }
             }
+            else state.requireDeleteConfirmation = false
         }
         section("") {
             footer()
@@ -1045,8 +1060,8 @@ def tallyDailyAPICount() {
     initializeAPICountState()
     if (!state.numDaysInstalled) state.numDaysInstalled = 1
     else state.numDaysInstalled++
-    state.avgAPICallsPerDay.open = (state.avgAPICallsPerDay.open + ((state.dailyAPICount.open - state.avgAPICallsPerDay.open) / state.numDaysInstalled)).round()
-    state.avgAPICallsPerDay.closed = (state.avgAPICallsPerDay.closed + ((state.dailyAPICount.closed - state.avgAPICallsPerDay.closed) / state.numDaysInstalled)).round()
+    state.avgAPICallsPerDay.open = ( (double) state.avgAPICallsPerDay.open + ((state.dailyAPICount.open - state.avgAPICallsPerDay.open) / state.numDaysInstalled)).round()
+    state.avgAPICallsPerDay.closed = ( (double) state.avgAPICallsPerDay.closed + ((state.dailyAPICount.closed - state.avgAPICallsPerDay.closed) / state.numDaysInstalled)).round()
     if (state.dailyAPICount.open > state.maxAPICallsPerDay.open) state.maxAPICallsPerDay.open = state.dailyAPICount.open
     if (state.dailyAPICount.closed > state.maxAPICallsPerDay.closed) state.maxAPICallsPerDay.closed = state.dailyAPICount.closed
     state.dailyAPICount = [open:0, closed:0]
@@ -1064,6 +1079,7 @@ def resetAllAPICountStats() {
     state.numDaysInstalled = null
 
     state.methodTrace = null
+    state.apiCalls = null
     state.sortedMethodTrace = null
 }
 
@@ -1564,10 +1580,11 @@ def addRemoveDevices(uninst=false) {
                 }
             }
             LOG("devicesInUse: ${devsInUse}", 3, "debug")
-            if (confirmDeleteDevices) {
+            if (state.requireDeleteConfirmation && confirmDeleteDevices) {
                 app.updateSetting('confirmDeleteDevices', false)
                 delete = app.getChildDevices().findAll { !(it?.deviceNetworkId in devsInUse) }
             }
+            else if (!state.requireDeleteConfirmation) delete = app.getChildDevices().findAll { !(it?.deviceNetworkId in devsInUse) }
         } else {
             atomicState?.selectedDevices = []
             delete = app.getChildDevices()
