@@ -254,7 +254,7 @@ def devicePage() {
             unselectedDevices.controllers = previouslySelectedDevices.controllers.findAll { it.key in unselectedControllerIDs }
             unselectedDevices.controllerNames = unselectedDevices.controllers.collect { it.value.name }
         }
-        LOG("previousControllerIDs: ${previousControllerIDs}; currentControllerIDs: ${currentControllerIDs}; orphanedControllerIDs: ${orphanedControllerIDs}; orphanedDevices.controllerNames: ${orphanedDevices.controllerNames}; unselectedDevices.controllerNames: ${unselectedDevices.controllerNames}", 2, "debug") 
+        LOG("previousControllerIDs: ${previousControllerIDs}; currentControllerIDs: ${currentControllerIDs}; orphanedControllerIDs: ${orphanedControllerIDs}; orphanedDevices.controllerNames: ${orphanedDevices.controllerNames}; unselectedDevices.controllerNames: ${unselectedDevices.controllerNames}", 3, "debug") 
 
         def previousBaseStationIDs = (previouslySelectedDevices.baseStations) ? previouslySelectedDevices.baseStations.keySet() : []
         def currentBaseStationIDs = (baseStationsRetrieved != null) ? baseStationsRetrieved.collect { it.id } : []
@@ -266,7 +266,7 @@ def devicePage() {
             unselectedDevices.baseStations = previouslySelectedDevices.baseStations.findAll { it.key in unselectedBaseStationIDs }
             unselectedDevices.baseStationsNames = unselectedDevices.baseStations.collect { it.value.serialNumber }
         }        
-        LOG("previousBaseStationIDs: ${previousBaseStationIDs}; currentBaseStationIDs: ${currentBaseStationIDs}; orphanedBaseStationIDs: ${orphanedBaseStationIDs}; orphanedDevices.baseStations: ${orphanedDevices.baseStations}; orphanedDevices.baseStationNames: ${orphanedDevices.baseStationNames}; unselectedDevices.baseStationsNames: ${unselectedDevices.baseStationsNames}", 2, "debug")
+        LOG("previousBaseStationIDs: ${previousBaseStationIDs}; currentBaseStationIDs: ${currentBaseStationIDs}; orphanedBaseStationIDs: ${orphanedBaseStationIDs}; orphanedDevices.baseStations: ${orphanedDevices.baseStations}; orphanedDevices.baseStationNames: ${orphanedDevices.baseStationNames}; unselectedDevices.baseStationsNames: ${unselectedDevices.baseStationsNames}", 3, "debug")
     
         // NOTE: decided not to require delete confirmation for devices that show up in the dropdown but remain unselected. Kept code to leave option for that in the future though.
     }
