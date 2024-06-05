@@ -1,7 +1,7 @@
 /**
  *  Rachio Hose Timer Valve Device Handler
  *
- *  Copyright\u00A9 2023 Justin Leonard
+ *  Copyright\u00A9 2024 JustinL
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -110,8 +110,8 @@ void updated() {
 
 def generateEvent(Map results) {
     if(results) {
-        LOG("generate Event for Valve. Results:" + results, 3, "debug")
-        if (results.valveData)  state?.valveId = results?.valveData?.id
+        LOG("generate Event for Valve. Results: " + results, 3, "debug")
+        if (results.valveData && !state?.valveId)  state?.valveId = results?.valveData?.id
         state?.baseStationId = results?.baseStationId
       //  if (results.baseStationData && results.baseStationData.baseStation) state?.baseStationId = results?.baseStationData?.baseStation.id
 
@@ -119,10 +119,10 @@ def generateEvent(Map results) {
         valveProgramEvent(results?.programData)
 
         if (results.valveData) {
-            valveNameEvent(results?.valveData?.name)
+            if (results?.valveData?.name) valveNameEvent(results?.valveData?.name)
         //    valveColorEvent(results?.valveData?.valve.color)
         //  valvePhotoEvent(results?.valveData?.photo.id)
-            valveStateEvent(results?.valveData?.state)
+            if (results?.valveData?.state) valveStateEvent(results?.valveData?.state)
         }
         if(state?.isOnline == false) {
             LOG("Rachio serves report the hose timer valve is offline. Marking valve as offline: ${res}", 3, "debug")
@@ -133,7 +133,7 @@ def generateEvent(Map results) {
 
         if(isOnline) { lastUpdatedEvent() }
 
-        parent?.setDashboard(state?.valveId, "hoseTimer")
+        if (state?.valveId) parent?.setDashboard(state?.valveId, "hoseTimer")
     }
     return "hello from zone"
 }
@@ -223,19 +223,19 @@ def valveStateEvent(stateData) {
     state?.stateData = stateData
 
     def reportedState = stateData?.reportedState
-    if (reportedState.connected != null) sendEvent(name:'connected', value: reportedState?.connected)
-    state?.isOnline = (reportedState.connected == "true" || reportedState.connected == true) ? true : false
+    if (reportedState?.connected != null) sendEvent(name:'connected', value: reportedState?.connected)
+    state?.isOnline = (reportedState?.connected == "true" || reportedState?.connected == true) ? true : false
     if(state?.isOnline == false) {
-        LOG("Rachio reports the hose timer valve as being offline. Marking valve as offline: reportedState = ${reportedState.connected} of type ${reportedState.connected.class}", 3, "debug")
+        LOG("Rachio reports the hose timer valve as being offline. Marking valve as offline: reportedState = ${reportedState?.connected} of type ${reportedState?.connected.class}", 3, "debug")
         markOffLine()
     }
     setWatchDogStatus()
 
-    if (reportedState.lastSeen) sendEvent(name:'lastSeen', value: formatUtcDt(reportedState.lastSeen))
-    if (reportedState.batteryStatus) sendEvent(name:'batteryStatus', value: reportedState.batteryStatus)
-    if (reportedState.firmwareVersion) sendEvent(name:'firmwareVersion', value: reportedState.firmwareVersion)
+    if (reportedState?.lastSeen) sendEvent(name:'lastSeen', value: formatUtcDt(reportedState?.lastSeen))
+    if (reportedState?.batteryStatus) sendEvent(name:'batteryStatus', value: reportedState?.batteryStatus)
+    if (reportedState?.firmwareVersion) sendEvent(name:'firmwareVersion', value: reportedState?.firmwareVersion)
 
-    if (reportedState.defaultRuntimeSeconds) sendEvent(name:'defaultWaterDurationSecs', value: reportedState.defaultRuntimeSeconds)
+    if (reportedState?.defaultRuntimeSeconds) sendEvent(name:'defaultWaterDurationSecs', value: reportedState?.defaultRuntimeSeconds)
     
     if (stateData.matches != null) {
         def changesPendingVal = (stateData.matches == "false" || stateData.matches == false) ? true : false
@@ -243,8 +243,8 @@ def valveStateEvent(stateData) {
         if (changesPendingVal == true) handleChangesPending()
     }
 
-    // reportedState.lastWateringAction is only present if the watering action is actually ongoing, so lastWateringAction represents the current watering action (as of the valve's last report)
-    def currentAction = reportedState.lastWateringAction
+    // reportedState?.lastWateringAction is only present if the watering action is actually ongoing, so lastWateringAction represents the current watering action (as of the valve's last report)
+    def currentAction = reportedState?.lastWateringAction
     if (currentAction) {
 
         def actionStr = ""
@@ -374,7 +374,11 @@ def dayViewEvent(dayViewData) {
         }
         if (nextAction.time) {
             sendEvent(name:'nextActionTimeStr', value: formatUtcDt(nextAction.time))
-            sendEvent(name:'nextActionTime', value: getUnixDtFromUTCDt(nextAction.time) )
+            def nextActionTime = getUnixDtFromUTCDt(nextAction.time) // unix date of next action (in milliseconds)
+            sendEvent(name:'nextActionTime', value: nextActionTime)
+            def nextActionPollTime = nextActionTime + 60000 // set poll time for 1 minute (60,000 milliseconds) after the next action
+            def nextActionPollDate = new Date(nextActionPollTime)
+            runOnce(nextActionPollDate, poll)
         }
         if (nextAction.durationSeconds) {
             LOG("next action duration seconds = ${nextAction.durationSeconds}")

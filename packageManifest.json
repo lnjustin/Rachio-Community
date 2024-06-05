@@ -1,9 +1,9 @@
 {
   "packageName": "Rachio Community Package",
   "author": "Justin Leonard",
-  "version": "3.1.7",
+  "version": "3.1.8",
   "minimumHEVersion": "2.1.4",
-  "dateReleased": "2024-06-03",
+  "dateReleased": "2024-06-04",
   "apps": [
     {
       "id": "2f59ef09-2381-48e8-81ea-e9eca85bbc3d",

@@ -2,7 +2,7 @@
  *  Rachio Community
  *
  *  Copyright\u00A9 2018 Anthony Santilli
- *  Copyright\u00A9 2024 lnjustin
+ *  Copyright\u00A9 2024 JustinL
  *
  *  V1.1.1 written by Anthony Santilli (@tonesto7)
  *  Ported to Hubitat and Enhanced to V2.0+ by @lnjustin
@@ -60,6 +60,7 @@
 * V3.1.5 Optimize hose timer API calls
 * V3.1.6 Bug fix
 * V3.1.7 API call count bug fix; device deletion bug fix
+* V3.1.8 More bug fixes; Error protection
  */
 
 import groovy.json.*
@@ -266,6 +267,8 @@ def devicePage() {
             unselectedDevices.baseStationsNames = unselectedDevices.baseStations.collect { it.value.serialNumber }
         }        
         LOG("previousBaseStationIDs: ${previousBaseStationIDs}; currentBaseStationIDs: ${currentBaseStationIDs}; orphanedBaseStationIDs: ${orphanedBaseStationIDs}; orphanedDevices.baseStations: ${orphanedDevices.baseStations}; orphanedDevices.baseStationNames: ${orphanedDevices.baseStationNames}; unselectedDevices.baseStationsNames: ${unselectedDevices.baseStationsNames}", 2, "debug")
+    
+        // NOTE: decided not to require delete confirmation for devices that show up in the dropdown but remain unselected. Kept code to leave option for that in the future though.
     }
 
     //step2: render the page for user to select which controller
@@ -1507,6 +1510,7 @@ def updateStandbyItem(String id, Boolean val) {
 def setDashboard(deviceId, type) {
     // possible types: "irrigation" or "hoseTimer"
     LOG("setDasboard(${deviceId}, ${type})...", 5, "trace")
+    if (!deviceId) return
     if (!state.refreshNum) state.refreshNum = 0
     state.refreshNum++
     def cloudUri = getFullApiServerUrl() + "/rachioDashboard/${type}/${deviceId}?access_token=${state.accessToken}&refreshNum=${state.refreshNum}"  // refreshNum forces the browser to retrieve the image instead of caching it
@@ -1659,7 +1663,7 @@ def delayedPoll(data) {
 void poll(child=null, type=null) {
     LOG("poll()...", 5, "trace")
     def lastPollSec = getTimeSinceInSeconds(atomicState?.lastPollDt)
-    LOG("${app.label} -- Polling API for Latest Data -- Last Update was ($lastPollSec seconds ago)${type ? " | Reason: [$type]" : ""}", 4, "info")
+    LOG("${app.label} -- Polling API for Latest Data -- Last Update was ($lastPollSec seconds ago)${type ? " | Reason: [$type]" : ""}${state.apiCallsLeft ? " | API Calls Left Last Reported by Rachio: api.rach.io (" + state.apiCallsLeft.open + ") cloud-rest.rach.io (" + state.apiCallsLeft.closed + ")" : ""}", 4, "info")
     if(lastPollSec < 2) {
         runIn(3, "delayedPoll", [overwrite: true, data: [child:child, type:type]])
         LOG("Delaying poll... It's too soon to request new data", 3, "debug")
