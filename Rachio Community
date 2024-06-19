@@ -61,6 +61,7 @@
 * V3.1.6 Bug fix
 * V3.1.7 API call count bug fix; device deletion bug fix
 * V3.1.8 More bug fixes; Error protection
+* V3.1.9 Hose Timer Polling Improvements and Fixes
  */
 
 import groovy.json.*
@@ -995,8 +996,8 @@ def scheduler() {
         def minsPollPeriod = getPollingPeriod('irrigation')
         if (minsPollPeriod != null && minsPollPeriod != "No Polling") {
             def chronStr = ""
-            if (minsPollPeriod == "60") chronStr = "01 0 * ? * *"
-            else chronStr = "01 */" + minsPollPeriod + " * ? * *"
+            if (minsPollPeriod == "60") chronStr = "59 0 * ? * *"
+            else chronStr = "59 */" + minsPollPeriod + " * ? * *"
             LOG("Scheduling irrigation heartbeat with chron string ${chronStr}", 3, "debug")
             schedule(chronStr, irrigationHeartbeat)
         }
@@ -1005,8 +1006,8 @@ def scheduler() {
         def minsPollPeriod = getPollingPeriod('hoseTimers')
         if (minsPollPeriod != null && minsPollPeriod != "No Polling") {
             def chronStr = ""
-            if (minsPollPeriod == "60") chronStr = "01 0 * ? * *"
-            else chronStr = "01 */" + minsPollPeriod + " * ? * *"
+            if (minsPollPeriod == "60") chronStr = "59 0 * ? * *"
+            else chronStr = "59 */" + minsPollPeriod + " * ? * *"
             LOG("Scheduling hose timer heartbeat with chron string ${chronStr}", 3, "debug")
             schedule(chronStr, hoseTimerHeartbeat)
         }
@@ -1432,7 +1433,7 @@ def getValveData(valveId) {
     LOG("getValveData($valveId)...", 3, "debug")
     def result = _httpGet("valve/getValve/${valveId}", "closed", "valve/getValve/valveID")
     LOG("getValveData: ${result}", 3, "debug")
-    return result  
+    return result?.valve
 }
 
 def getBaseStationValves(baseStationId) {

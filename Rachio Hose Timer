@@ -56,6 +56,7 @@ metadata {
         attribute "currentActionTime", "string"
         attribute "currentActionTimeStr", "string"
         attribute "currentActionSecsDuration", "string"
+        attribute "currentActionSecsElapsed", "string"
         attribute "currentActionProgramName", "string"
         attribute "currentActionFlowDetected", "string"
 
@@ -245,16 +246,22 @@ def valveStateEvent(stateData) {
 
     // reportedState?.lastWateringAction is only present if the watering action is actually ongoing, so lastWateringAction represents the current watering action (as of the valve's last report)
     def currentAction = reportedState?.lastWateringAction
+    LOG("currentAction = ${currentAction}", 3, "debug")
     if (currentAction) {
-
         def actionStr = ""
         if (currentAction?.containsKey("skip")) {
             if (currentAction.skip?.containsKey("manualOverrideTrigger")) actionStr = "Manual Skip"
             else if (currentAction.skip?.containsKey("rainOverrideTrigger")) actionStr = "Rain Skip"
-            sendWateringEvents(false, false) // deduce that valve is off if the current action was a skip (as opposed to any sort of run)
+            LOG("Detected Skip. Sending Water Event = false, unschedule poll", 3, "debug")
+            sendWateringEvents(false) // deduce that valve is off if the current action was a skip (as opposed to any sort of run)
+            unschedule(currentActionStopPoll)
+            sendEvent(name:'currentActionSecsElapsed', value: "None")
         }
         else if (currentAction.reason != null) {
-            actionStr = currentAction.reason
+            actionStr = "Watering"
+            if (currentAction.reason == "PROGRAM") actionStr = "Program Run"
+            else if (currentAction.reason == "QUICK_RUN") actionStr = "Quick Run"
+            else if (currentAction.reason == "MANUAL_RUN") actionStr = "Manual Run"
 
             // current action is a watering event
             LOG("Current Action is a watering event. Double check valve state from current action starting at ${currentAction.start} for a duration of ${currentAction.durationSeconds} seconds)", 3, "debug")
@@ -263,19 +270,34 @@ def valveStateEvent(stateData) {
                 Date currentActionEnd = adjustDateBySecs(currentActionStart, currentAction.durationSeconds.toInteger())
                 def now = new Date()
                 if (currentActionEnd.after(now)) {
-                    LOG("Deduced valve is in fact on.)", 3, "debug")
-                    sendWateringEvents(true, false) // deduce that valve is on if the current action is a watering event and its end has not occurred yet
+                    LOG("Deduced valve is in fact on.) Sending water event = true", 3, "debug")
+                    sendWateringEvents(true) // deduce that valve is on if the current action is a watering event and its end has not occurred yet
+                    Date endPollDate = adjustDateBySecs(currentActionEnd, 60) // poll 1 minute after current action ends
+                    runOnce(endPollDate, currentActionStopPoll)
+
+                    def timeDiff = GetTimeValDiff(currentActionStart.getTime())
+                    sendEvent(name:'currentActionSecsElapsed', value: Math.round(timeDiff))
+
                 }
                 else if (now.after(currentActionEnd)) {
-                    LOG("Deduced valve must be off.)", 3, "debug")
-                    sendWateringEvents(false, false) // deduce that valve is off if the current action is a watering event and its end has already occurred
+                    LOG("Deduced valve must be off.) Sending water event = false", 3, "debug")
+                    sendWateringEvents(false) // deduce that valve is off if the current action is a watering event and its end has already occurred
+                    unschedule(currentActionStopPoll)
+                    sendEvent(name:'currentActionSecsElapsed', value: "None")
                 }
             }
             else {
                 LOG("Unexpected: lastWateringAction present suggests watering action ongoing, but there is no start time or no duration. Setting valve to on given presence of lastWateringAction, but further investigation warranted.", 2, "warn")
-                sendWateringEvents(true, false)
+                sendWateringEvents(true)
+                sendEvent(name:'currentActionSecsElapsed', value: "None")
             }
         }
+        else {
+            LOG("Unexpected: lastWateringAction present suggests watering action ongoing, but there is no reason given for the action. Setting valve to on given presence of lastWateringAction, but further investigation warranted.", 2, "warn")
+            sendWateringEvents(true)
+            sendEvent(name:'currentActionSecsElapsed', value: "None")
+        }
+
         sendEvent(name:'currentAction', value: actionStr ?: "None")
 
         if (currentAction.start) {
@@ -295,7 +317,10 @@ def valveStateEvent(stateData) {
         sendEvent(name:'currentActionSecsDuration', value: "None")
         sendEvent(name:'currentActionFlowDetected', value: "None")
         sendEvent(name:'currentActionProgramName', value: "None")
-        sendWateringEvents(false, false) // deduce that valve is off if there was no last action
+        sendEvent(name:'currentActionSecsElapsed', value: "None")
+        LOG("Deduce valve is off. Sending Water Event = false, unschedule poll", 3, "debug")
+        sendWateringEvents(false) // deduce that valve is off if there was no last action
+        unschedule(currentActionStopPoll)
     }
 }
 
@@ -378,11 +403,22 @@ def dayViewEvent(dayViewData) {
             sendEvent(name:'nextActionTime', value: nextActionTime)
             def nextActionPollTime = nextActionTime + 60000 // set poll time for 1 minute (60,000 milliseconds) after the next action
             def nextActionPollDate = new Date(nextActionPollTime)
-            runOnce(nextActionPollDate, poll)
+            runOnce(nextActionPollDate, nextActionStartPoll)
         }
+        else unschedule(nextActionStartPoll)
         if (nextAction.durationSeconds) {
             LOG("next action duration seconds = ${nextAction.durationSeconds}")
             sendEvent(name:'nextActionSecsDuration', value: nextAction.durationSeconds.toInteger())
+
+            /*
+            if (nextAction.time) {
+                def nextActionTime = getUnixDtFromUTCDt(nextAction.time) // unix date of next action (in milliseconds)
+                Date nextActionStart = new Date(getUnixDtFromUTCDt(nextActionTime))
+                Date nextActionEnd = adjustDateBySecs(nextActionStart, nextAction.durationSeconds.toInteger())
+                runOnce(nextActionEnd, nextActionStopPoll)
+            }
+            else unschedule(nextActionStopPoll)
+            */
         }
         sendEvent(name:'nextActionProgramName', value: nextAction.programName ?: "None")
 
@@ -404,7 +440,39 @@ def dayViewEvent(dayViewData) {
         sendEvent(name:'nextActionTime', value: "None")    
         sendEvent(name:'nextActionSecsDuration', value: "None")  
         sendEvent(name:'nextActionProgramName', value: "None") 
+        unschedule(nextActionStartPoll)
+    //    unschedule(nextActionStopPoll)
     }
+}
+
+def nextActionStartPoll() {
+    LOG("nextActionStartPoll...", 5, "trace");
+    poll()  
+}
+
+def nextActionStopPoll() {
+    LOG("nextActionEndPoll...", 5, "trace");
+    poll()  
+}
+
+def currentActionStartPoll() {
+    LOG("currentActionStartPoll...", 5, "trace");
+    poll()  
+}
+
+def currentActionStopPoll() {
+    LOG("currentActionEndPoll...", 5, "trace");
+    poll()  
+}
+
+def hubitatStartPoll() {
+    LOG("hubitatStartPoll...", 5, "trace");
+    poll()  
+}
+
+def hubitatStopPoll() {
+    LOG("hubitatStopPoll...", 5, "trace");
+    poll()  
 }
 
 def processValveRunForNextAction(runType, valveRun, nextAction, programAction = null) {
@@ -514,8 +582,9 @@ def startWatering(secs=null) {
     def res = parent?.startValve(this, waterTime)
     if (res) {
         LOG("startWatering was Sent Successfully: ${res}", 3, "debug")
-        sendWateringEvents(true, true)
-        runIn(waterTime.toInteger() + 10, "poll", [overwrite: false]) // resynch 10 seconds after the watering is scheduled to stop
+        sendWateringEvents(true)
+        runIn(10,hubitatStartPoll)
+        runIn(waterTime.toInteger() + 10, "hubitatStopPoll") // resynch 10 seconds after the watering is scheduled to stop
     }
     else {
         LOG("Rachio reports startWatering was unsuccessful. Marking valve as offline: ${res}", 3, "debug")
@@ -532,7 +601,9 @@ def stopWatering() {
         def res = parent?.stopValve(this)
         if (res) {
             LOG("Valve was Stopped Successfully...", 4, "info")
-            sendWateringEvents(false, true)
+            sendWateringEvents(false)
+            unschedule(hubitatStopPoll)
+            runIn(10,hubitatStopPoll)
         }
         else {
             LOG("Rachio reports stopWatering was unsuccessful. Marking valve as offline: ${res}", 3, "debug")
@@ -576,7 +647,7 @@ def close() {
     } else { LOG("Valve is Already Closed... Ignoring...", 4, "info") }
 }
 
-def sendWateringEvents(isWatering, poll = false) {
+def sendWateringEvents(isWatering) {
     LOG("sendWateringEvents(${isWatering}, ${poll})...", 5, "trace")
     if (isWatering == true) {
         sendEvent(name:'switch', value: "on", displayed: false, isStateChange: true)
@@ -587,14 +658,9 @@ def sendWateringEvents(isWatering, poll = false) {
         sendEvent(name:'switch', value: "off", displayed: false, isStateChange: true)
         sendEvent(name:'valve', value: "closed", displayed: false, isStateChange: true)
         sendEvent(name:'watering', value: "off", displayed: true, isStateChange: true)
-        unschedule("poll")
     }
     parent?.handleHoseTimerWateringEvent(isWatering)
     if (state?.baseStationId != null) parent?.updateBaseStationWateringState(state?.baseStationId)
-    if (poll) {
-        LOG("scheduling poll to run in 10 seconds...", 5, "trace")
-        runIn(10, "poll", [overwrite: false]) // resynch 
-    }
 }
 
 def isWatering() {
@@ -619,7 +685,7 @@ def skipNextProgramRun() {
     if (device.latestValue('nextAction') == "Program Run" && state.nextActionProgramId && state.nextActionProgramTimestamp) {
         def res = parent?.createHoseTimerProgramSkip(state.nextActionProgramId, state.nextActionProgramTimestamp)
         if (res) {
-            runIn(5, "poll") // resynch 
+            runIn(15, "poll") // resynch 
         }
         else LOG("Error skipping next run", 1, "warn")
     }
@@ -632,7 +698,7 @@ def cancelPendingSkip() {
     LOG("cancelPendingSkip()...", 5, "trace")
     if ((device.latestValue('nextAction') == "Manual Skip" || device.latestValue('nextAction') == "Rain Skip") && state.nextActionProgramId && state.nextActionProgramTimestamp) {
         def resp = parent?.deleteHoseTimerProgramSkip(state.nextActionProgramId, state.nextActionProgramTimestamp)
-        runIn(5, "poll") // resynch 
+        runIn(15, "poll") // resynch 
     }
     else {
         LOG("No Pending Skip to Cancel", 1, "warn")
@@ -655,7 +721,7 @@ def formatDt(dt, mdy = true) {
 	return tf.format(dt)
 }
 
-//Returns time differences is seconds
+//Returns time differences in seconds
 def GetTimeValDiff(timeVal) {
     try {
         def start = new Date(timeVal).getTime()

@@ -559,11 +559,20 @@ def wateringSummaryDataEvent(wateringSummaryData) {
 }
 
 def nextEventDataEvent(nextEventData) {
-    sendEvent(name: 'nextEvent', value: nextEventData?.entry?.summary)
-    if (nextEventData?.entry?.timestamp) sendEvent(name: 'nextEventTime', value: formatUtcDt(nextEventData?.entry?.timestamp))
-    sendEvent(name: 'nextEventType', value: nextEventData?.entry?.type)
-    sendEvent(name: 'nextEventWeatherIntelligence', value: nextEventData?.entry?.weatherIntelligenceInfo)
-    sendEvent(name: 'nextEventThresholdInfo', value: nextEventData?.entry?.thresholdInfo)
+    if (nextEventData != null && nextEventData.entry != null) {
+        sendEvent(name: 'nextEvent', value: nextEventData?.entry?.summary)
+        if (nextEventData?.entry?.timestamp) sendEvent(name: 'nextEventTime', value: formatUtcDt(nextEventData?.entry?.timestamp))
+        sendEvent(name: 'nextEventType', value: nextEventData?.entry?.type)
+        sendEvent(name: 'nextEventWeatherIntelligence', value: nextEventData?.entry?.weatherIntelligenceInfo)
+        sendEvent(name: 'nextEventThresholdInfo', value: nextEventData?.entry?.thresholdInfo)
+    }
+    else {
+        sendEvent(name: 'nextEvent', value: "None")
+        sendEvent(name: 'nextEventTime', value: "None")
+        sendEvent(name: 'nextEventType', value: "None")
+        sendEvent(name: 'nextEventWeatherIntelligence', value: "None")
+        sendEvent(name: 'nextEventThresholdInfo', value: "None")
+    }
 }
 
 
