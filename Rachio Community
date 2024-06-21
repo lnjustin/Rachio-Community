@@ -61,7 +61,8 @@
 * V3.1.6 Bug fix
 * V3.1.7 API call count bug fix; device deletion bug fix
 * V3.1.8 More bug fixes; Error protection
-* V3.1.9 Hose Timer Polling Improvements and Fixes
+* V3.1.9 Hose Timer Polling Improvements and Fixes; Irrigation controller weather intelligence attribute fix
+* V3.1.10 Improve nextEventType attribute of controller device; clarify rain delay is a manual rain delay with rainDelayStr; Clear nextEventWeatherIntelligence if not applicable
  */
 
 import groovy.json.*

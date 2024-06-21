@@ -527,9 +527,9 @@ def rainDelayExpirationEvent(val) {
 }
 
 def setRainDelayExpirationString(val) {
-    def rainDelayExpirationStr = "No Rain Delay";
+    def rainDelayExpirationStr = "No Manual Rain Delay";
     def rainDelayLeft = device?.currentState("rainDelay")?.value.toString()
-    if(val > 0) rainDelayExpirationStr = rainDelayLeft + " Day Rain Delay Remaining. Expires " + epochToDt(val)
+    if(val > 0) rainDelayExpirationStr = rainDelayLeft + " Day Manual Rain Delay Remaining. Expires " + epochToDt(val)
     sendEvent( name: "rainDelayExpirationStr", value: rainDelayExpirationStr, isStateChange: true)
 }
 
@@ -562,9 +562,40 @@ def nextEventDataEvent(nextEventData) {
     if (nextEventData != null && nextEventData.entry != null) {
         sendEvent(name: 'nextEvent', value: nextEventData?.entry?.summary)
         if (nextEventData?.entry?.timestamp) sendEvent(name: 'nextEventTime', value: formatUtcDt(nextEventData?.entry?.timestamp))
-        sendEvent(name: 'nextEventType', value: nextEventData?.entry?.type)
-        sendEvent(name: 'nextEventWeatherIntelligence', value: nextEventData?.entry?.weatherIntelligenceInfo)
+        
+        def nextEventTypeVal = ""
+        switch(nextEventData?.entry?.type) {
+            case "FUTURE_FEED_SCHEDULE_EVENT":
+                nextEventTypeVal = "Scheduled Run"
+                break
+            case "RAIN_FUTURE_FEED_SKIP_EVENT":
+                nextEventTypeVal = "Predicted Rain Skip"
+                break
+            case "WIND_FUTURE_FEED_SKIP_EVENT":
+                nextEventTypeVal = "Wind Skip"
+                break
+            case "FREEZE_FUTURE_FEED_SKIP_EVENT":
+                nextEventTypeVal = "Freeze Skip"
+                break
+            case "CLIMATE_FUTURE_FEED_SKIP_EVENT":
+                nextEventTypeVal = "Soil Saturated Skip"
+                break
+            case "MANUAL_FUTURE_FEED_SKIP_EVENT":
+                nextEventTypeVal = "Manual Skip"
+                break
+            default:
+                nextEventTypeVal = nextEventData?.entry?.type
+        }
+        sendEvent(name: 'nextEventType', value: nextEventTypeVal)
+        sendEvent(name: 'nextEventWeatherIntelligence', value: nextEventData?.entry?.weatherIntelligenceInfo ?: "None")
         sendEvent(name: 'nextEventThresholdInfo', value: nextEventData?.entry?.thresholdInfo)
+
+        if (!state.nextEventTypes) state.nextEventTypes = []
+        if (!state.nextEventTypes.contains(nextEventData?.entry?.type)) state.nextEventTypes.add(nextEventData?.entry?.type)
+
+        if (!state.nextEventWeatherIntel) state.nextEventWeatherIntel = []
+        if (!state.nextEventWeatherIntel.contains(nextEventData?.entry?.weatherIntelligenceInfo)) state.nextEventWeatherIntel.add(nextEventData?.entry?.weatherIntelligenceInfo)
+
     }
     else {
         sendEvent(name: 'nextEvent', value: "None")
@@ -665,9 +696,9 @@ def setDashboard() {
 }
 
 def setRainDelayString(rainDelay) {
-    def rainDelayStr = "No Rain Delay";
+    def rainDelayStr = "No Manual Rain Delay";
     if( rainDelay > 0) {
-        rainDelayStr = "Rain Delayed";
+        rainDelayStr = "Manually Rain Delayed";
     }
     sendEvent( name: "rainDelayStr", value: rainDelayStr, isStateChange: true)
 }
