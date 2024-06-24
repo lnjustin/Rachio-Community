@@ -63,6 +63,7 @@
 * V3.1.8 More bug fixes; Error protection
 * V3.1.9 Hose Timer Polling Improvements and Fixes; Irrigation controller weather intelligence attribute fix
 * V3.1.10 Improve nextEventType attribute of controller device; clarify rain delay is a manual rain delay with rainDelayStr; Clear nextEventWeatherIntelligence if not applicable
+* V3.1.11 Bug fix 
  */
 
 import groovy.json.*
@@ -1814,8 +1815,6 @@ def pollChild(childDev, type, parentData = null) {
                             childDev?.label = newLabel
                             LOG("Controller Label has changed from (${devLabel}) to [${newLabel}]", 5, "info")
                         }
-
-                        if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
                         
                         data = [data: devData, pauseInStandby: pauseInStandby, stateData: devState, detailsData: devDetails, wateringSummaryData: devMonthlyWateringSummary, nextEvent: devNextEvent]
                     } else {
@@ -1870,7 +1869,6 @@ def pollChild(childDev, type, parentData = null) {
                         // pass base station data to child hose timers to reduce API calls
                         returnData = [baseStationValves: baseStationValves?.valves, dayViewData: dayViewData]
 
-                        if(!childDev?.getDataValue("HealthEnrolled")) { childDev.updated() }
                         data = [baseStationData: baseStationData]
                     } else {
                         baseStation?.value?.valves?.each { valve ->
