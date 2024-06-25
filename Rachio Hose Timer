@@ -16,6 +16,9 @@
  */
 
 import java.text.SimpleDateFormat
+import java.time.*
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeFormatterBuilder
 
 Integer statusRefresh() { return 60 }
 
@@ -136,7 +139,7 @@ def generateEvent(Map results) {
 
         if (state?.valveId) parent?.setDashboard(state?.valveId, "hoseTimer")
     }
-    return "hello from zone"
+    return "hello from hose timer"
 }
 
 def getDurationDesc(long secondsCnt) {
@@ -232,7 +235,7 @@ def valveStateEvent(stateData) {
     }
     setWatchDogStatus()
 
-    if (reportedState?.lastSeen) sendEvent(name:'lastSeen', value: formatUtcDt(reportedState?.lastSeen))
+    if (reportedState?.lastSeen) sendEvent(name:'lastSeen', value: formatUtcDtMicrosecs(reportedState?.lastSeen))
     if (reportedState?.batteryStatus) sendEvent(name:'batteryStatus', value: reportedState?.batteryStatus)
     if (reportedState?.firmwareVersion) sendEvent(name:'firmwareVersion', value: reportedState?.firmwareVersion)
 
@@ -300,6 +303,7 @@ def valveStateEvent(stateData) {
 
         sendEvent(name:'currentAction', value: actionStr ?: "None")
 
+        
         if (currentAction.start) {
             sendEvent(name:'currentActionTimeStr', value: formatUtcDt(currentAction.start))
             sendEvent(name:'currentActionTime', value: getUnixDtFromUTCDt(currentAction.start) )
@@ -407,7 +411,6 @@ def dayViewEvent(dayViewData) {
         }
         else unschedule(nextActionStartPoll)
         if (nextAction.durationSeconds) {
-            LOG("next action duration seconds = ${nextAction.durationSeconds}")
             sendEvent(name:'nextActionSecsDuration', value: nextAction.durationSeconds.toInteger())
 
             /*
@@ -798,6 +801,24 @@ def formatUtcDt(utcDt, mdy = true) {
     }
 
 	return outFormat.format(parsedInFormat)
+}
+
+def formatUtcDtMicrosecs(utcDt, mdy = true) {
+    LOG("formatDt($utcDt, $mdy)...", 5, "trace")
+
+    if (utcDt == null) return
+
+    DateTimeFormatter inFormatter  = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'").withZone(ZoneId.of("UTC"))
+    ZonedDateTime inZonedDate = ZonedDateTime.parse(utcDt, inFormatter)
+    ZonedDateTime inLocalDate = inZonedDate.withZoneSameInstant(ZoneId.of(location?.timeZone?.ID))
+
+    def outFormatVal = mdy ? "MMM d, yyyy - h:mm:ss a" : "E MMM dd HH:mm:ss z yyyy"
+    DateTimeFormatter outFormatter  = DateTimeFormatter.ofPattern(outFormatVal)
+    String outLocalDate = inLocalDate.format(outFormatter)
+
+    LOG("Converted $utcDt to $outLocalDate", 3, "debug")
+
+    return outLocalDate
 }
 
 def adjustDateBySecs(Date date, Integer secs) {

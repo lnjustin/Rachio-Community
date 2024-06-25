@@ -64,6 +64,7 @@
 * V3.1.9 Hose Timer Polling Improvements and Fixes; Irrigation controller weather intelligence attribute fix
 * V3.1.10 Improve nextEventType attribute of controller device; clarify rain delay is a manual rain delay with rainDelayStr; Clear nextEventWeatherIntelligence if not applicable
 * V3.1.11 Bug fix 
+* V3.1.12 Hose timer lastSeen date formatting fix
  */
 
 import groovy.json.*
@@ -2180,7 +2181,6 @@ def formatDateToUtc(date) {
     LOG("formatDateToUtc()...", 5, "trace")
     def outFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
     outFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
-  //  if(location?.timeZone) { outFormat.setTimeZone(location?.timeZone) }
        
     def formattedDate = outFormat.format(date)
     LOG("formatted date = ${formattedDate}", 3, "debug")
