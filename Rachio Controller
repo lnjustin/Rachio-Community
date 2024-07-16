@@ -381,7 +381,7 @@ def isWateringEvent(status, zoneId) {
     def curState = device?.currentState("watering")?.value.toString()
     def isOn = (status == "PROCESSING") ? true : false
     def newState = isOn ? "on" : "off"
-    def valveState = isOn ? "open" : "close"
+    def valveState = isOn ? "open" : "closed"
     parent?.setWateringDeviceState(device?.deviceNetworkId, isOn)
     if(isStateChange(device, "watering", newState.toString())) {
         LOG("UPDATED: Watering (${newState}) | Previous: (${curState})", 3, "debug")
