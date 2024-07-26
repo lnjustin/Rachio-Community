@@ -68,6 +68,7 @@
 * V3.1.13 Fixed bug that valve state was "close" instead of "closed"
 * V3.1.14 Bug fix for File Manager
 * V3.1.15 Guard against unexpected File Manager null
+* V3.1.16 File Manager filenames fix
  */
 
 import groovy.json.*
@@ -373,7 +374,7 @@ def devicePage() {
                     if (fileManagerDevice) {
                         fileManagerDevice.listFiles()
                         def fileList = fileManagerDevice.currentValue("fileList")
-                        def fileOptions = fileList.replaceAll("\\[","").replaceAll("]","").split(",")
+                        def fileOptions = fileList.replaceAll("\\[","").replaceAll("]","").replaceAll(" ","").split(",")
                         input(name: "fName", type: "enum", title: "Select a File", options: fileOptions, multiple:false, submitOnChange:true, required: true, width: 4)
 			            input(name: "logTypesToFile", title:"Types of Logs to Write to File", type: 'enum', required:false, multiple:true, options:["error", "warn", "debug", "info", "trace", "API Calls"], width: 4)
                         input(name: "stopFileLoggingMins", title: "Minutes for which to log to file", type: "number", description: "Tap to Modify", required: false, defaultValue: 60, submitOnChange: false)
