@@ -67,6 +67,7 @@
 * V3.1.12 Hose timer lastSeen date formatting fix
 * V3.1.13 Fixed bug that valve state was "close" instead of "closed"
 * V3.1.14 Bug fix for File Manager
+* V3.1.15 Guard against unexpected File Manager null
  */
 
 import groovy.json.*
@@ -3558,7 +3559,7 @@ void LOG(String message, Integer level=3, String logType="debug") {
     else if (logType == "trace") log.trace(message)
     else if (logType == "warn") log.warn(message)
 
-    if (logToFile && logTypesToFile && logTypesToFile.contains(logType)) {
+    if (logToFile && logTypesToFile && logTypesToFile.contains(logType) && fileManagerDevice) {
         String a=getTimestamp()
         if (purgeFile) {
             fileManagerDevice.writeFile(fName, a + ": " + message)
@@ -3569,7 +3570,7 @@ void LOG(String message, Integer level=3, String logType="debug") {
 }
 
 def logAPICall(apiCall, endpoint) {
-    if (logToFile && logTypesToFile && logTypesToFile.contains("API Calls")) {
+    if (logToFile && logTypesToFile && logTypesToFile.contains("API Calls") && fileManagerDevice) {
         String a=getTimestamp()
 
         def apiCountStr = ""
