@@ -1788,7 +1788,7 @@ def pollChild(childDev, type, parentData = null) {
     LOG("pollChild()...", 5, "trace")
     LOG("updating child device ${childDev} of type ${type}", 3, "debug")
     def returnData = null
-    try {
+ //   try {
         if(childDev && type) {
             String dni = childDev?.device?.deviceNetworkId
             String devLabel = childDev?.label
@@ -1912,9 +1912,9 @@ def pollChild(childDev, type, parentData = null) {
             else { LOG("pollChild cannot update child because there was a problem generating data for the update...", 1, "warn") }
         } else { LOG("pollChild cannot update child because it is missing the required parameters...", 1, "warn") }
         
-    } catch (e) {
-        LOG("exception polling child: ${e}", 1, "error")
-    }
+ //   } catch (e) {
+ //       LOG("exception polling child: ${e}", 1, "error")
+ //   }
     return returnData
 }
 
