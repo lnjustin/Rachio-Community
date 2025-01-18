@@ -70,6 +70,7 @@
 * V3.1.15 Guard against unexpected File Manager null
 * V3.1.16 File Manager filenames fix
 * V3.1.17 Bug fixes
+* V3.2.0 Added support for Rachio's new webhook service
  */
 
 import groovy.json.*
@@ -79,6 +80,12 @@ import groovy.transform.Field
 import java.math.*
 import java.time.ZoneId
 import java.time.ZoneOffset
+
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+import java.io.UnsupportedEncodingException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
 
 definition(
     name: "Rachio Community",
@@ -105,11 +112,20 @@ preferences {
 }
 
 mappings {
-    path("/rachioIrrigationWebookReceiver") { action: [ POST: "rachioIrrigationReceiveHandler" ] }
-    path("/rachioHoseTimerReceiver") { action: [ POST: "rachioHoseTimerReceiveHandler" ] }
+    path("/rachioIrrigationControllerWebookReceiver") { action: [ POST: "rachioIrrigationReceiveHandler" ] }
+    path("/rachioHoseTimerWebhookReceiver") { action: [ POST: "rachioHoseTimerReceiveHandler" ] }
+    path("/rachioHoseTimerProgramWebhookReceiver") { action: [ POST: "rachioHoseTimerProgramReceiveHandler" ] }
     path("/rachioDashboard/irrigation/:controllerID") { action: [ GET: "buildDashboard"] }
     path("/rachioDashboard/hoseTimer/:hoseTimerValveID") { action: [ GET: "buildDashboard"] }
     path("/rachioDashboard") { action: [ GET: "buildDashboard"] }
+}
+
+def getWebhookEndpointUrl(resourceType) {
+    def endpoint = ""
+    if (resourceType == "IRRIGATION_CONTROLLER") endpoint = "rachioIrrigationControllerWebookReceiver"
+    else if (resourceType == "VALVE") endpoint = "rachioHoseTimerWebhookReceiver"
+    else if (resourceType == "PROGRAM") endpoint = "rachioHoseTimerProgramWebhookReceiver"
+    return endpoint
 }
 
 String appVer() { return "2.3.0" }
@@ -1097,31 +1113,63 @@ def resetAllAPICountStats() {
 
 void initWebhooks() {
     LOG("initWebhooks()", 5, "trace")
-    settings?.controllers?.each { c->
-        if(c) { 
-            initWebhook(c)
-            LOG("webhooks($c): ${getWebhookIdsForDev(c)}", 4, "debug")
+
+    _depricated_removeAllWebhooks() // remove legacy webhooks that have been depricated
+
+    def selectedDevices = atomicState?.selectedDevices
+    selectedDevices.controllers?.each { controller ->
+        def controllerId = controller?.key
+        if(controllerId) { 
+            initWebhook(controllerId, "IRRIGATION_CONTROLLER")
+            def webhooks = getWebhookIdsForResource(controllerId, "IRRIGATION_CONTROLLER")
+            LOG("webhooks($controllerId): ${webhooks}", 3, "debug")
+        }
+    }
+    selectedDevices?.baseStations.each { baseStation ->
+        baseStation?.value?.valves?.each { valve ->
+            def valveId = valve?.key
+            if(valveId) { 
+                initWebhook(valveId, "VALVE")
+                def webhooks = getWebhookIdsForResource(valveId, "VALVE")
+                LOG("webhooks($valveId): ${webhooks}", 3, "debug")
+
+                def valvePrograms = getValvePrograms(valve?.key)
+                valvePrograms.each { program ->
+                    def programId = program?.id
+                    initWebhook(programId, "PROGRAM")
+                    def programWebhooks = getWebhookIdsForResource(programId, "PROGRAM")
+                    LOG("webhooks($programId): ${programWebhooks}", 3, "debug")
+                }
+            }        
         }
     }
 }
 
-//Subscribes to the selected controllers API events that will be used to trigger a poll
-def initWebhook(controlId) {
+//Subscribes to the selected API events that will be used to trigger a poll
+def initWebhook(resourceId, resourceType) {
     LOG("initWebhook...", 5, "trace")
     def result = false
-    def webhookIds = getWebhookIdsForDev(controlId)
-    def cmdType = (webhookIds == null || webhookIds == []) ? "post" : "put" // changed first option to "post" from "put" because seems to require post if creating a new webhookS
-    def apiWebhookUrl = "${rootApiUrl()}/notification/webhook"
-    def endpointUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/rachioIrrigationWebookReceiver?access_token=${atomicState?.accessToken}"
+    def webhookIds = getWebhookIdsForResource(resourceId, resourceType)
+    def apiWebhookUrl
+    def cmdType
+    def endpointUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/" + getWebhookEndpointUrl(resourceType) + "?access_token=${atomicState?.accessToken}"
     def bodyData
     if(!webhookIds) { 
-        bodyData = new JsonOutput().toJson([device:[id: controlId], externalId: app.name, url: endpointUrl, eventTypes: webhookEvtTypes()])
+        apiWebhookUrl = "${getClosedApiEndpoint()}/webhook/createWebhook"
+        cmdType = "post"
+        if (resourceType == "IRRIGATION_CONTROLLER") bodyData = new JsonOutput().toJson([resource_id:[irrigation_controller_id: resourceId], external_id: app.name, url: endpointUrl, event_types: webhookEvtTypes(resourceType)])
+        else if (resourceType == "VALVE") bodyData = new JsonOutput().toJson([resource_id:[valve_id: resourceId], external_id: app.name, url: endpointUrl, event_types: webhookEvtTypes(resourceType)])
+        else if (resourceType == "PROGRAM") bodyData = new JsonOutput().toJson([resource_id:[program_id: resourceId], external_id: app.name, url: endpointUrl, event_types: webhookEvtTypes(resourceType)])
     } else { 
-        bodyData = new JsonOutput().toJson([id: webhookIds[0], externalId: app.name, url: endpointUrl, eventTypes: webhookEvtTypes()])
+        apiWebhookUrl = "${getClosedApiEndpoint()}/webhook/updateWebhook"
+        cmdType = "put"
+        if (resourceType == "IRRIGATION_CONTROLLER") bodyData = new JsonOutput().toJson([id: webhookIds[0], resource_id:[irrigation_controller_id: resourceId], external_id: [data: app.name], url: endpointUrl, event_types:[event_types: webhookEvtTypes(resourceType)]])
+        else if (resourceType == "VALVE") bodyData = new JsonOutput().toJson([id: webhookIds[0], resource_id:[valve_id: resourceId], external_id: [data: app.name], url: endpointUrl, event_types:[event_types: webhookEvtTypes(resourceType)]])
+        else if (resourceType == "PROGRAM") bodyData = new JsonOutput().toJson([id: webhookIds[0], resource_id:[program_id: resourceId], external_id: [data: app.name], url: endpointUrl, event_types:[event_types: webhookEvtTypes(resourceType)]])
     }
     try {
-        if(webhookHttp(apiWebhookUrl, bodyData, cmdType, controlId)) {
-            LOG("Successfully ${cmdType == "post" ? "Created" : "Updated"} API Webhook Subscription for Controller (${controlId})", 5, "trace")
+        if(webhookHttp(apiWebhookUrl, bodyData, cmdType, resourceId)) {
+            LOG("Successfully ${cmdType == "post" ? "Created" : "Updated"} API Webhook Subscription for Resource (${resourceId})", 5, "trace")
             result = true
         }
     } catch(ex) {
@@ -1130,21 +1178,26 @@ def initWebhook(controlId) {
     return result
 }
 
-def getWebhookIdsForDev(devId) {
+def getWebhookIdsForResource(resourceId, resourceType) {
     LOG("getWebhooksIdsForDev()", 5, "trace")
-    if(!devId) { return null }
-    def data = _httpGet("notification/${devId}/webhook", "open", "notification/deviceID/webhook/")
+    if(!resourceId) { return null }
+    def queryParam
+    if (resourceType == "IRRIGATION_CONTROLLER") queryParam = "?resource_id.irrigation_controller_id=" + resourceId
+    else if (resourceType == "VALVE") queryParam = "?resource_id.valve_id=" + resourceId
+    else if (resourceType == "PROGRAM") queryParam = "?resource_id.program_id=" + resourceId
+    def data = _httpGet("webhook/listWebhooks" + queryParam, "closed", "webhook/listWebhooks" + queryParam)
     def res = null
-    if(data) { res = data?.findAll { it?.externalId == app?.name }?.collect { it?.id } }
-    LOG("Get webhookIdsForDevice received data: ${data}. Webhook IDs for Device ${devId} for ${app?.name} include: ${res}", 3, "debug")
+    LOG("Get webhookIdsForResource received data: ${data} for Resource ${resourceId}", 3, "debug")
+    if(data && data.webhooks) { res = data?.webhooks?.findAll { it?.externalId == app?.name }?.collect { it?.id } }
+    LOG("Webhook IDs for Resource ${resourceId} for ${app?.name} include: ${res}", 3, "debug")
     return res
 }
 
-void removeWebhookByDevId(devId) {
-    LOG("removeWebhookByDevId()", 5, "trace")
-    def webhookIds = getWebhookIdsForDev(devId)
+void removeWebhookByResourceId(resourceId, resourceType) {
+    LOG("removeWebhookByResourceId()", 5, "trace")
+    def webhookIds = getWebhookIdsForResource(resourceId, resourceType)
     for (webhookId in webhookIds) {
-        if(webhookHttp("${rootApiUrl()}/notification/webhook/${webhookId}", "", "delete", devId)) {
+        if(webhookHttp("${getClosedApiEndpoint()}/webhook/deleteWebhook/${webhookId}", "", "delete", resourceId)) {
             LOG("Removed API Webhook Subscription for (${webhookId})", 2, "warn")
         }
         else {
@@ -1156,32 +1209,45 @@ void removeWebhookByDevId(devId) {
 //Removes the webhook subscription for the device.
 void removeAllWebhooks() {
     LOG("removeAllWebhooks()", 5, "trace")
-    if(settings?.controllers) {
-        settings?.controllers?.each { c->
-            if(c) {
-                removeWebhookByDevId(c)
-            }
+    def selectedDevices = atomicState?.selectedDevices
+    selectedDevices.controllers?.each { controller ->
+        def controllerId = controller?.key
+        if(controllerId) { 
+            removeWebhookByResourceId(controllerId, "IRRIGATION_CONTROLLER")
+        }
+    }
+    selectedDevices?.baseStations.each { baseStation ->
+        baseStation?.value?.valves?.each { valve ->
+        def valveId = valve?.key
+            if(valveId) { 
+                removeWebhookByResourceId(valveId, "VALVE")
+
+                def valvePrograms = getValvePrograms(valve?.key)
+                valvePrograms.each { program ->
+                    def programId = program?.id
+                    removeWebhookByResourceId(programId, "PROGRAM")
+                }
+            }        
         }
     }
 }
 
 //Returns the available event types to subscribe to.
-def webhookEvtTypes() {
+def webhookEvtTypes(type) {  // type = "VALVE", "PROGRAM", or "IRRIGATION_CONTROLLER"
     LOG("webhookEvtTypes()", 5, "trace")
-    def typeIds = []
-    //  def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT", "RAIN_DELAY_EVENT", "WEATHER_INTELLIGENCE_EVENT"] 
-    def okTypes = ["DEVICE_STATUS_EVENT", "ZONE_STATUS_EVENT", "SCHEDULE_STATUS_EVENT"] 
-    def data = _httpGet("notification/webhook_event_type", "open", "notification/webhook_event_type/")
-    if(data) {
-        typeIds = data?.findAll { it?.name in okTypes }.collect { ["id":it?.id?.toString()] }
+    def evtTypes = []
+    def data = _httpGet("webhook/listWebhookEventTypes", "closed", "webhook/listWebhookEventTypes/")
+    if(data && data.eventTypes) {
+        def evtTypesObject = data?.eventTypes?.find { it?.resourceType == type }
+        if (evtTypesObject?.eventTypes) evtTypes = evtTypesObject.eventTypes
     }
-    return typeIds
+    return evtTypes
 }
 
 //Handles the http requests for the webhook methods
-def webhookHttp(url, jsonBody, type=null, ctrlId) {
+def webhookHttp(url, jsonBody, type=null, resourceId) {
     LOG("webhookHttp()", 5, "trace")
-    LOG("webhookHttp($url, $jsonBody, $type, $ctrlId)", 3, "debug")
+    LOG("webhookHttp($url, $jsonBody, $type, $resourceId)", 3, "debug")
     def returnStatus = false
     def response = null
     def cmdParams = [
@@ -1228,6 +1294,40 @@ def webhookHttp(url, jsonBody, type=null, ctrlId) {
         LOG("webhookHttp Exception Error: ${e.message}", 1, "error")
     }
     return returnStatus
+}
+
+def _depricated_getWebhookIdsForDev(devId) {
+    LOG("_depricated_getWebhooksIdsForDev()", 5, "trace")
+    if(!devId) { return null }
+    def data = _httpGet("notification/${devId}/webhook", "open", "notification/deviceID/webhook/")
+    def res = null
+    if(data) { res = data?.findAll { it?.externalId == app?.name }?.collect { it?.id } }
+    LOG("Get _depricated_webhookIdsForDevice received data: ${data}. Webhook IDs for Device ${devId} for ${app?.name} include: ${res}", 3, "debug")
+    return res
+}
+
+void _depricated_removeWebhookByDevId(devId) {
+    LOG("_depricated_removeWebhookByDevId()", 5, "trace")
+    def webhookIds = _depricated_getWebhookIdsForDev(devId)
+    for (webhookId in webhookIds) {
+        if(webhookHttp("${rootApiUrl()}/notification/webhook/${webhookId}", "", "delete", devId)) {
+            LOG("Removed legacy API Webhook Subscription for (${webhookId})", 2, "warn")
+        }
+        else {
+            LOG("Failed to remove legacy API Webhook Subscription for (${webhookId})", 1, "error")
+        }
+    }
+}
+
+void _depricated_removeAllWebhooks() {
+    LOG("_depricated_removeAllWebhooks()", 5, "trace")
+    if(settings?.controllers) {
+        settings?.controllers?.each { c->
+            if(c) {
+                _depricated_removeWebhookByDevId(c)
+            }
+        }
+    }
 }
 
 void updateDeviceStates() {
@@ -1475,11 +1575,11 @@ def getBaseStationDayViews(baseStationId, Date start, Date end) {
     return res
 }
 
-def cleanupObjects(id){
-    LOG("cleanupObjects()...", 5, "trace")
-    if(settings?."${id}_zones") { settingRemove("${id}_zones") }
-    if(settings?."${id}_valves") { settingRemove("${id}_valves") }
-    removeWebhookByDevId(id)
+def cleanupResources(resourceId, resourceType){
+    LOG("cleanupResources()...", 5, "trace")
+    if(settings?."${resourceId}_zones") { settingRemove("${resourceId}_zones") }
+    if(settings?."${resourceId}_valves") { settingRemove("${resourceId}_valves") }
+    if (resourceType == "IRRIGATION_CONTROLLER" || resourceType == "VALVE") removeWebhookByResourceId(resourceId, resourceType)
 }
 
 def isWatering() {
@@ -1555,6 +1655,7 @@ def addRemoveDevices(uninst=false) {
                 } else {
                     LOG("found ${d?.displayName} with dni: ${contDev?.key} already exists", 3, "debug")
                 }
+                d.updateDataValue("deviceType", "IRRIGATION_CONTROLLER")
                 devsInUse += contDev.key
                 contDev?.value?.zones?.each { zoneDni ->
                     //Check if the discovered sprinklers are already initiated with corresponding device types.
@@ -1565,6 +1666,7 @@ def addRemoveDevices(uninst=false) {
                     } else {
                         LOG("found ${d2?.displayName} with dni: ${zoneDni?.key} already exists", 3, "debug")
                     }
+                    d2.updateDataValue("deviceType", "ZONE")
                     devsInUse += zoneDni?.key
                 }
             }
@@ -1578,6 +1680,7 @@ def addRemoveDevices(uninst=false) {
                 } else {
                     LOG("found ${d?.displayName} with dni: ${baseStation?.key} already exists", 3, "debug")
                 }
+                d.updateDataValue("deviceType", "BASE_STATION")
                 devsInUse += baseStation?.key
                 baseStation?.value?.valves?.each { valve ->
                     //Check if the discovered valves are already initiated with corresponding device types.
@@ -1589,6 +1692,7 @@ def addRemoveDevices(uninst=false) {
                     } else {
                         LOG("found ${d2?.displayName} with dni: ${valve?.key} already exists", 3, "debug")
                     }
+                    d2.updateDataValue("deviceType", "VALVE")
                     devsInUse += valve?.key
                 }
             }
@@ -1605,7 +1709,7 @@ def addRemoveDevices(uninst=false) {
         if(delete?.size() > 0) {
             LOG("Delete Devices: ${delete} | Removing (${delete?.size()}) Devices...", 1, "warn")
             delete?.each {
-                cleanupObjects(it?.deviceNetworkId)
+                cleanupResources(it?.deviceNetworkId, it?.getDataValue("deviceType"))
                 deleteChildDevice(it?.deviceNetworkId)
                 LOG("Deleted the Device: ${it?.displayName}", 1, "warn")
             }
@@ -1636,31 +1740,149 @@ def getTimeSinceInSeconds(time) {
     return (int) (now() - time)/1000
 }
 
-// This is the endpoint the webhook sends the events to...
+// This is the endpoint the controller webhook sends the events to...
 def rachioIrrigationReceiveHandler() {
     LOG("rachioIrrigationReceiveHandler()...", 5, "trace")
     def reqData = request.JSON
-    if(reqData?.size() || reqData == [:]) {
-       LOG("eventDatas: ${reqData?.summary}", 3, "debug")
-       LOG("Rachio Irrigation Device Event | Summary: (${reqData?.summary}) | Requesting Latest Data from API | DeviceID: ${reqData?.deviceId}", 3, "debug")
-        if(reqData?.deviceId) {
-            def dev = getChildDevice(reqData?.deviceId)
-            poll(dev, "irrigationDevice")
-        } else { poll(null, "irrigationDevice") }
+    def reqSignature = request.headers["X-signature"][0]
+    LOG("Webhook signature: " + reqSignature, 3, "debug")
+    if (isWebhookSignatureValid(reqData, reqSignature)) {
+        if(reqData?.size() || reqData == [:]) {
+        LOG("eventDatas: ${reqData?.eventType}", 3, "debug")
+        LOG("Rachio Irrigation Device Event | Event Type: (${reqData?.eventType}) | Requesting Latest Data from API | controllerID: ${reqData?.resourceId}", 3, "debug")
+
+            if (!state.controllerWebhookEvents) state.controllerWebhookEvents = []
+            if (reqData?.eventId && !(reqData?.eventId in state.controllerWebhookEvents)) {
+                if (state.controllerWebhookEvents.size() > 20) state.controllerWebhookEvents = state.controllerWebhookEvents.tail()
+                state.controllerWebhookEvents.push(reqData?.eventId)
+
+                if(reqData?.resourceId) {
+                    def dev = getChildDevice(reqData?.resourceId)
+                    poll(dev, "irrigationDevice")
+                } else { poll(null, "irrigationDevice") }
+            }
+            else LOG("Ignoring duplicate webhook eventId ${reqData?.eventId}", 1, "warn")
+        }
     }
+    else LOG("Invalid Signature on received webhook. Ignoring. Received data: ${reqData}", 1, "warn")
 }
 
+// This is the endpoint the hose timer webhook sends the events to...
 def rachioHoseTimerReceiveHandler() {
     LOG("rachioHoseTimerReceiveHandler()...", 5, "trace")
     def reqData = request.JSON
-    if(reqData?.size() || reqData == [:]) {
-       LOG("eventDatas: ${reqData?.summary}", 3, "debug")
-       LOG("Rachio Hose Timer Device Event | Summary: (${reqData?.summary}) | Requesting Latest Data from API | DeviceID: ${reqData?.deviceId}", 3, "debug")
-        if(reqData?.deviceId) {
-            def dev = getChildDevice(reqData?.deviceId)
-            poll(dev, "hoseTimerDevice")
-        } else { poll(null, "hoseTimerDevice") }
+    LOG("request: " + request, 3, "debug")
+    def reqSignature = request.headers["X-signature"][0]
+    LOG("Webhook signature: " + reqSignature, 3, "debug")
+    if (isWebhookSignatureValid(reqData, reqSignature)) {
+        if(reqData?.size() || reqData == [:]) {
+        LOG("eventDatas: ${reqData?.eventType}", 3, "debug")
+        LOG("Rachio Hose Timer Device Event | Event Type: (${reqData?.eventType}) | Requesting Latest Data from API | valveID: ${reqData?.resourceId}", 3, "debug")
+            
+            if (!state.hoseTimerWebhookEvents) state.hoseTimerWebhookEvents = []
+            if (reqData?.eventId && !(reqData?.eventId in state.hoseTimerWebhookEvents)) {
+                if (state.hoseTimerWebhookEvents.size() > 20) state.hoseTimerWebhookEvents = state.hoseTimerWebhookEvents.tail()
+                state.hoseTimerWebhookEvents.push(reqData?.eventId)
+
+                if(reqData?.resourceId) {
+                    def dev = getChildDevice(reqData?.resourceeId)
+                    poll(dev, "hoseTimerDevice")
+                } else { poll(null, "hoseTimerDevice") }
+            }
+            else LOG("Ignoring duplicate webhook eventId ${reqData?.eventId}", 1, "warn")
+        }
     }
+    else LOG("Invalid Signature on received webhook. Ignoring. Received data: ${reqData}", 1, "warn")
+}
+
+// This is the endpoint the hose timer program webhook sends the events to...
+def rachioHoseTimerProgramReceiveHandler() {
+    LOG("rachioHoseTimerProgramReceiveHandler()...", 5, "trace")
+    def reqData = request.JSON
+    LOG("request: " + request, 3, "debug")
+    def reqSignature = request.headers["X-signature"][0]
+    LOG("Webhook signature: " + reqSignature, 3, "debug")
+    if (isWebhookSignatureValid(request.JSON, reqSignature)) {
+        if(reqData?.size() || reqData == [:]) {
+        LOG("eventDatas: ${reqData?.eventType}", 3, "debug")
+        LOG("Rachio Hose Timer Program Event | Event Type: (${reqData?.eventType}) | Requesting Latest Data from API | programID: ${reqData?.resourceId}", 3, "debug")
+            
+            if (!state.programWebhookEvents) state.programWebhookEvents = []
+            if (reqData?.eventId && !(reqData?.eventId in state.programWebhookEvents)) {
+                if (state.programWebhookEvents.size() > 20) state.programWebhookEvents = state.programWebhookEvents.tail()
+                state.programWebhookEvents.push(reqData?.eventId)
+
+                if(reqData?.resourceId) {
+                    def foundValve = false
+                    def selectedDevices = atomicState?.selectedDevices
+                    selectedDevices?.baseStations.each { baseStation ->
+                        baseStation?.value?.valves?.each { valve ->
+                            def valveId = valve?.key
+                            def valvePrograms = getValvePrograms(valveId)
+                            valvePrograms.each { program ->
+                                def programId = program.id
+                                if (programId == reqData?.resourceId) {
+                                    foundValve = true
+                                    def dev = getChildDevice(valveId)
+                                    poll(dev, "hoseTimerDevice")
+                                }
+                            }
+                        }
+                    }
+                    if (!foundValve) poll(null, "hoseTimerDevice")
+                }
+
+            }
+            else LOG("Ignoring duplicate webhook eventId ${reqData?.eventId}", 1, "warn")
+        }
+    }
+    else LOG("Invalid Signature on received webhook. Ignoring. Received data: ${reqData}", 1, "warn")
+}
+
+def recursiveSortByKey(object) {
+    if (!object || !(object instanceof Map)) return object
+    object.sort()
+    object.each { key, value ->
+        object[key] = recursiveSortByKey(value)
+    }
+    return object
+}
+
+def isWebhookSignatureValid(responseBody, responseSignature) {
+    def isValid = false
+
+    def sortedBody = recursiveSortByKey(responseBody)
+    def jsonString = new JsonBuilder( sortedBody ).toString()
+   // jsonString = jsonString.replaceAll("\\s","")
+
+    String message = jsonString
+    LOG("Message to Hash is " + message, 3, "debug")
+    String key = atomicState?.authToken
+    LOG("Key for Hash is " + key, 3, "debug")
+    String algorithm = "HmacSHA256"  // OPTIONS= HmacSHA512, HmacSHA256, HmacSHA1, HmacMD5
+
+    try {
+        Mac sha256_hmac = Mac.getInstance(algorithm)
+        SecretKeySpec secret_key = new SecretKeySpec(key.getBytes("UTF-8"), algorithm)
+        sha256_hmac.init(secret_key)
+        byte[] rawHmac = sha256_hmac.doFinal(message.getBytes("UTF-8"))
+        String hash = rawHmac.encodeHex()
+
+        if (hash == responseSignature) isValid = true
+
+        LOG("Webhook signature is " + (isValid ? "valid" : "invalid"), 3, "debug")
+        LOG("Webhook signature: " + responseSignature, 3, "debug")
+        LOG("Hash of response: " + hash, 3, "debug")
+
+    } catch (NoSuchAlgorithmException e) {
+        LOG("Cannot validate webhook signature with algorith: ${algorithm}", 1, "error")
+    } catch (UnsupportedEncodingException e) {
+        LOG("UnsupportedEncodingException when attempting to validate webhook signature", 1, "error")
+    } catch (InvalidKeyException e) {
+        LOG("InvalidKeyException when attempting to validate webhook signature with key: ${key}", 1, "error")
+    }
+
+    return isValid
 }
 
 def delayedPoll(data) {
