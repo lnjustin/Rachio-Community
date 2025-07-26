@@ -5,7 +5,7 @@
  *  Copyright\u00A9 2024 JustinL
  *
  *  V1.1.1 written by Anthony Santilli (@tonesto7)
- *  Ported to Hubitat and Enhanced to V2.0+ by @lnjustin
+ *  Ported to Hubitat and Enhanced to V2.0+ by JustinL
  *
  * Many thanks to @tomw for high-level consultation on architecture and functionality for enhancing the native Rachio app/drivers.
  * Thanks also to Josh Lyon (@josh) for proof of concept for generating an SVG for output at an Oath endpoint
@@ -71,6 +71,7 @@
 * V3.1.16 File Manager filenames fix
 * V3.1.17 Bug fixes
 * V3.2.0 Added support for Rachio's new webhook service
+* V3.2.1 Bug fix
  */
 
 import groovy.json.*
@@ -208,7 +209,7 @@ def authPage()  {
        section() {
             header()
             paragraph authPara
-            href url: "https://app.rach.io", style: "external", required: (!oauthTokenProvided), state: (oauthTokenProvided ? "complete" : ""), title: "Rachio", description: description
+            href url: getAppEndpoint(), style: "external", required: (!oauthTokenProvided), state: (oauthTokenProvided ? "complete" : ""), title: "Rachio", description: description
             href "apiKeyPage", title: "Enter your API Key", description: (authKey ? "API Key Entered" : "Tap to Enter API Key"), state: (authKey ? "complete" : null), required: true
            footer()
        }
@@ -384,8 +385,15 @@ def devicePage() {
                 input(name: "debugLevel", title:"Debug Log Level", type: 'enum', required:false, multiple:false, defaultValue:"2", description: "2", options:["5", "4", "3", "2", "1", "0"], width: 4, submitOnChange: true)
                 paragraph getInterface("note", "Higher levels send more information to IDE Live Logging. Level 2 or less is recommended for normal operations")
 			    if(settings.debugLevel == null){ app.updateSetting('debugLevel', "2") }
+                input(name: "logAPICallCountToState", title: "Log API Call Types Count To State?", type: "bool", required: true, defaultValue: false, submitOnChange: true)
+                if (logAPICallCountToState) {
+                    input(name: "purgeAPICallCountInState", title: "Purge existing API Call Type Count in State?", type: "bool", required: true, defaultValue: false, submitOnChange: false)
+                }
+            }
+            section(getInterface("redHeader","Danger Zone")) {
+                input(name: "resetAllAPICountStats", title: "Reset all API Count Stats?", type: "bool", defaultValue: false)
                 input(name: "logToFile", title: "Write Log to file?", type: "bool", required: true, defaultValue: false, submitOnChange: true)
-                paragraph getInterface("note", "Warning: use only temporarily and sparingly for issues that cannot be resolved with live logging.")
+                paragraph getInterface("note", "Danger: use only temporarily and sparingly for issues that cannot be resolved with live logging. There is a risk of this locking up your hub.")
                 if (logToFile) {
                     input(name: "fileManagerDevice", title: "Select File Manager Device", type: "device.FileManagerDevice", required: true, submitOnChange: true, width: 4)
                     if (fileManagerDevice) {
@@ -398,13 +406,6 @@ def devicePage() {
                         input(name: "purgeFile", title: "Purge existing file?", type: "bool", required: true, defaultValue: false, submitOnChange: false)
                     }
                 }
-                input(name: "logAPICallCountToState", title: "Log API Call Types Count To State?", type: "bool", required: true, defaultValue: false, submitOnChange: true)
-                if (logAPICallCountToState) {
-                    input(name: "purgeAPICallCountInState", title: "Purge existing API Call Type Count in State?", type: "bool", required: true, defaultValue: false, submitOnChange: false)
-                }
-            }
-            section(getInterface("header","Re-Initialization")) {
-                input(name: "resetAllAPICountStats", title: "Reset all API Count Stats?", type: "bool", defaultValue: false)
 		    }
             
             if (orphanedDevices.controllerNames || orphanedDevices.baseStationNames) {
@@ -754,12 +755,12 @@ def getControllerInputEnum(controllers) {
 
 def getUserInfo(userId) {
     LOG("getUserInfo ${userId}", 5, "trace")
-    return _httpGet("person/${userId}", "open", "person");
+    return _httpGet("person/${userId}", "apiRachio", "person");
 }
 
 def getUserId() {
     LOG("getUserId()", 5, "trace")
-    def res = _httpGet("person/info", "open", "person/info");
+    def res = _httpGet("person/info", "apiRachio", "person/info");
     LOG("person Info: ${res}", 3, "debug")
     if (res) {
         return res?.id;
@@ -776,7 +777,7 @@ def getBaseStations() {
     }
     def userId = atomicState?.userId
 
-    def baseStationData = _httpGet("valve/listBaseStations/${userId}", "closed", "valve/listBaseStations/")
+    def baseStationData = _httpGet("valve/listBaseStations/${userId}", "cloudRestRachio", "valve/listBaseStations/")
     if (baseStationData != null) {
         return baseStationData?.baseStations
     }
@@ -785,7 +786,7 @@ def getBaseStations() {
 
 def getHoseTimerValves(baseStationId) {
     LOG("getHoseTimerValves())", 5, "trace")
-    def valveData = _httpGet("valve/listValves/${baseStationId}", "closed", "valve/listValves/")
+    def valveData = _httpGet("valve/listValves/${baseStationId}", "cloudRestRachio", "valve/listValves/")
     LOG("Retrieved valve data for ${baseStationId}: ${valveData}", 3, "debug")
     if (valveData) {
         return valveData.valves
@@ -886,19 +887,23 @@ def getBaseStationHardwareInfo(val) {
 
 def getAppImg(imgName)	{ return "https://raw.githubusercontent.com/lnjustin/Rachio-Community/master/Images/$imgName" }
 
-def updateAPICount(endpoint) {
+def updateAPICount() {
     LOG("updateAPICount()", 5, "trace")
-    state.dailyAPICount[endpoint]++
+    if (!state.dailyAPICount || state.dailyAPICount instanceof Map) {
+        LOG("Initializing dailyAPICount.", 2, "warn")
+        state.dailyAPICount = 0
+    }
+    state.dailyAPICount++
 }
 
-def _httpGet(subUri, endpoint="open", stringToLog = null) {
+def _httpGet(subUri, endpoint="apiRachio", stringToLog = null) {
     LOG("_httpGet()", 5, "trace")
     LOG("_httpGet($subUri)", 3, "debug")
 
-    logAPICall(stringToLog, endpoint)
-    updateAPICount(endpoint)
+    logAPICall(stringToLog)
+    updateAPICount()
     try {
-        def baseURI = (endpoint == "open") ? getApiEndpoint() + "/1/public" : getClosedApiEndpoint()
+        def baseURI = getRachioEndpoint(endpoint)
         LOG("URL: ${baseURI}/${subUri}", 3, "debug")
         
         def params = [
@@ -911,8 +916,8 @@ def _httpGet(subUri, endpoint="open", stringToLog = null) {
                 def headers = resp?.getAllHeaders()
                 def limitRemaining = headers?.find { it.getName() == 'X-RateLimit-Remaining' }
                 if (headers && limitRemaining) {
-                    if (!state.apiCallsLeft) state.apiCallsLeft = [closed: 1700, open: 1700]
-                    state.apiCallsLeft[endpoint] = limitRemaining.value
+                    if (!state.apiCallsLeft || state.apiCallsLeft instanceof Map) state.apiCallsLeft = 3500
+                    if (limitRemaining?.value != null) state.apiCallsLeft = limitRemaining.value
                 }
                 return resp?.data
             } else {
@@ -1068,17 +1073,17 @@ def hoseTimerExtraPolling() {
 
 def initializeAPICountState() {
     LOG("Initializing API Count State if needed....", 5, "trace")
-    if (!(state.avgAPICallsPerDay instanceof Map)) {
+    if (!state.avgAPICallsPerDay || state.avgAPICallsPerDay instanceof Map) {
         LOG("Initializing avgAPICallsPerDay.", 2, "warn")
-        state.avgAPICallsPerDay = [open:0, closed:0]
+        state.avgAPICallsPerDay = 0
     }
-    if (!(state.dailyAPICount instanceof Map)) {
+    if (!state.dailyAPICount || state.dailyAPICount instanceof Map) {
         LOG("Initializing dailyAPICount.", 2, "warn")
-        state.dailyAPICount = [open:0, closed:0]
+        state.dailyAPICount = 0
     }
-    if (state.maxAPICallsPerDay == null) {
+    if (state.maxAPICallsPerDay == null || state.maxAPICallsPerDay instanceof Map) {
         LOG("Initializing maxAPICallsPerDay.", 2, "warn")
-        state.maxAPICallsPerDay = [open:0, closed:0]
+        state.maxAPICallsPerDay = 0
     }
     state.dailyAPICountResetDate = new Date().getTime()
 }
@@ -1088,27 +1093,26 @@ def tallyDailyAPICount() {
     initializeAPICountState()
     if (!state.numDaysInstalled) state.numDaysInstalled = 1
     else state.numDaysInstalled++
-    state.avgAPICallsPerDay.open = ( (double) state.avgAPICallsPerDay.open + ((state.dailyAPICount.open - state.avgAPICallsPerDay.open) / state.numDaysInstalled)).round()
-    state.avgAPICallsPerDay.closed = ( (double) state.avgAPICallsPerDay.closed + ((state.dailyAPICount.closed - state.avgAPICallsPerDay.closed) / state.numDaysInstalled)).round()
-    if (state.dailyAPICount.open > state.maxAPICallsPerDay.open) state.maxAPICallsPerDay.open = state.dailyAPICount.open
-    if (state.dailyAPICount.closed > state.maxAPICallsPerDay.closed) state.maxAPICallsPerDay.closed = state.dailyAPICount.closed
-    state.dailyAPICount = [open:0, closed:0]
+    state.avgAPICallsPerDay = ( (double) state.avgAPICallsPerDay + ((state.dailyAPICount - state.avgAPICallsPerDay) / state.numDaysInstalled)).round()
+    if (state.dailyAPICount > state.maxAPICallsPerDay) state.maxAPICallsPerDay = state.dailyAPICount
+    state.dailyAPICount = 0
     state.dailyAPICountResetDate = new Date().getTime()
-    LOG("Tallied avg = ${state.avgAPICallsPerDay.open}, ${state.avgAPICallsPerDay.closed}, tallied max = ${state.maxAPICallsPerDay.open}, ${state.maxAPICallsPerDay.closed}.", 4, "info")
+    LOG("Tallied avg = ${state.avgAPICallsPerDay}, tallied max = ${state.maxAPICallsPerDay}.", 4, "info")
 }
 
 def resetAllAPICountStats() {
     LOG("resetAllAPICountStats()...", 5, "trace")
     LOG("Resetting ALL API Count stats...", 2, "warn")
-    state.avgAPICallsPerDay = [open:0, closed:0]
-    state.maxAPICallsPerDay = [open:0, closed:0]
-    state.dailyAPICount = [open:0, closed:0]
+    state.avgAPICallsPerDay = 0
+    state.maxAPICallsPerDay = 0
+    state.dailyAPICount = 0
     state.dailyAPICountResetDate = new Date().getTime()
     state.numDaysInstalled = null
 
     state.methodTrace = null
-    state.apiCalls = null
+    state.apiCalls = [:]
     state.sortedMethodTrace = null
+    state.apiCallsLeft = 3500
 }
 
 void initWebhooks() {
@@ -1155,13 +1159,13 @@ def initWebhook(resourceId, resourceType) {
     def endpointUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/" + getWebhookEndpointUrl(resourceType) + "?access_token=${atomicState?.accessToken}"
     def bodyData
     if(!webhookIds) { 
-        apiWebhookUrl = "${getClosedApiEndpoint()}/webhook/createWebhook"
+        apiWebhookUrl = getRachioEndpoint("cloudRestRachio") + "/webhook/createWebhook"
         cmdType = "post"
         if (resourceType == "IRRIGATION_CONTROLLER") bodyData = new JsonOutput().toJson([resource_id:[irrigation_controller_id: resourceId], external_id: app.name, url: endpointUrl, event_types: webhookEvtTypes(resourceType)])
         else if (resourceType == "VALVE") bodyData = new JsonOutput().toJson([resource_id:[valve_id: resourceId], external_id: app.name, url: endpointUrl, event_types: webhookEvtTypes(resourceType)])
         else if (resourceType == "PROGRAM") bodyData = new JsonOutput().toJson([resource_id:[program_id: resourceId], external_id: app.name, url: endpointUrl, event_types: webhookEvtTypes(resourceType)])
     } else { 
-        apiWebhookUrl = "${getClosedApiEndpoint()}/webhook/updateWebhook"
+        apiWebhookUrl = getRachioEndpoint("cloudRestRachio") + "/webhook/updateWebhook"
         cmdType = "put"
         if (resourceType == "IRRIGATION_CONTROLLER") bodyData = new JsonOutput().toJson([id: webhookIds[0], resource_id:[irrigation_controller_id: resourceId], external_id: [data: app.name], url: endpointUrl, event_types:[event_types: webhookEvtTypes(resourceType)]])
         else if (resourceType == "VALVE") bodyData = new JsonOutput().toJson([id: webhookIds[0], resource_id:[valve_id: resourceId], external_id: [data: app.name], url: endpointUrl, event_types:[event_types: webhookEvtTypes(resourceType)]])
@@ -1185,7 +1189,7 @@ def getWebhookIdsForResource(resourceId, resourceType) {
     if (resourceType == "IRRIGATION_CONTROLLER") queryParam = "?resource_id.irrigation_controller_id=" + resourceId
     else if (resourceType == "VALVE") queryParam = "?resource_id.valve_id=" + resourceId
     else if (resourceType == "PROGRAM") queryParam = "?resource_id.program_id=" + resourceId
-    def data = _httpGet("webhook/listWebhooks" + queryParam, "closed", "webhook/listWebhooks" + queryParam)
+    def data = _httpGet("webhook/listWebhooks" + queryParam, "cloudRestRachio", "webhook/listWebhooks")
     def res = null
     LOG("Get webhookIdsForResource received data: ${data} for Resource ${resourceId}", 3, "debug")
     if(data && data.webhooks) { res = data?.webhooks?.findAll { it?.externalId == app?.name }?.collect { it?.id } }
@@ -1197,7 +1201,7 @@ void removeWebhookByResourceId(resourceId, resourceType) {
     LOG("removeWebhookByResourceId()", 5, "trace")
     def webhookIds = getWebhookIdsForResource(resourceId, resourceType)
     for (webhookId in webhookIds) {
-        if(webhookHttp("${getClosedApiEndpoint()}/webhook/deleteWebhook/${webhookId}", "", "delete", resourceId)) {
+        if(webhookHttp(getRachioEndpoint("cloudRestRachio") + "/webhook/deleteWebhook/${webhookId}", "", "delete", resourceId)) {
             LOG("Removed API Webhook Subscription for (${webhookId})", 2, "warn")
         }
         else {
@@ -1236,7 +1240,7 @@ void removeAllWebhooks() {
 def webhookEvtTypes(type) {  // type = "VALVE", "PROGRAM", or "IRRIGATION_CONTROLLER"
     LOG("webhookEvtTypes()", 5, "trace")
     def evtTypes = []
-    def data = _httpGet("webhook/listWebhookEventTypes", "closed", "webhook/listWebhookEventTypes/")
+    def data = _httpGet("webhook/listWebhookEventTypes", "cloudRestRachio", "webhook/listWebhookEventTypes/")
     if(data && data.eventTypes) {
         def evtTypesObject = data?.eventTypes?.find { it?.resourceType == type }
         if (evtTypesObject?.eventTypes) evtTypes = evtTypesObject.eventTypes
@@ -1299,7 +1303,7 @@ def webhookHttp(url, jsonBody, type=null, resourceId) {
 def _depricated_getWebhookIdsForDev(devId) {
     LOG("_depricated_getWebhooksIdsForDev()", 5, "trace")
     if(!devId) { return null }
-    def data = _httpGet("notification/${devId}/webhook", "open", "notification/deviceID/webhook/")
+    def data = _httpGet("notification/${devId}/webhook", "apiRachio", "notification/deviceID/webhook/")
     def res = null
     if(data) { res = data?.findAll { it?.externalId == app?.name }?.collect { it?.id } }
     LOG("Get _depricated_webhookIdsForDevice received data: ${data}. Webhook IDs for Device ${devId} for ${app?.name} include: ${res}", 3, "debug")
@@ -1407,17 +1411,17 @@ def getBaseStationFromValve(valveId) {
 
 def getCurSchedule(controllerId) {
     LOG("getCurSchedule...", 5, "trace")
-    return _httpGet("device/${controllerId}/current_schedule", "open", "device/controllerID/current_schedule/")
+    return _httpGet("device/${controllerId}/current_schedule", "apiRachio", "device/controllerID/current_schedule/")
 }
 
 def getDeviceData(devId, type="controller") {
     LOG("getDeviceData()...", 5, "trace")
     def result = null
     if (type == "controller") {
-        result = _httpGet("device_with_current_schedule/${devId}", "open", "device_with_current_schedule/deviceID")
+        result = _httpGet("device_with_current_schedule/${devId}", "apiRachio", "device_with_current_schedule/deviceID")
     }
     else if (type == "baseStation") {
-        result = _httpGet("valve/getBaseStation/${devId}", "closed", "valve/getBaseStation/deviceID")
+        result = _httpGet("valve/getBaseStation/${devId}", "cloudRestRachio", "valve/getBaseStation/deviceID")
     }
     LOG("getDeviceData: ${result}", 3, "debug")
     return result
@@ -1425,7 +1429,7 @@ def getDeviceData(devId, type="controller") {
 
 def getDeviceState(devId) {
     LOG("getDeviceState()...", 5, "trace")
-    def result = _httpGet("device/getDeviceState/${devId}", "closed", "device/getDeviceState/deviceID")
+    def result = _httpGet("device/getDeviceState/${devId}", "cloudRestRachio", "device/getDeviceState/deviceID")
     LOG("getDeviceState: ${result}", 3, "debug")
     return result
 }
@@ -1433,14 +1437,14 @@ def getDeviceState(devId) {
 // Gets location id for device
 def getDeviceDetails(devId) {
     LOG("getDeviceDetails()...", 5, "trace")
-    def result = _httpGet("device/getDeviceDetails/${devId}", "closed", "device/getDeviceDetails/deviceID")
+    def result = _httpGet("device/getDeviceDetails/${devId}", "cloudRestRachio", "device/getDeviceDetails/deviceID")
     LOG("getDeviceDetails: ${result}", 3, "debug")
     return result
 }
 
 def getZoneDetails(devId) {
     LOG("getZoneDetails()...", 5, "trace")
-    def result = _httpGet("device/listZones/${devId}", "closed", "device/listZones/deviceID")
+    def result = _httpGet("device/listZones/${devId}", "cloudRestRachio", "device/listZones/deviceID")
     LOG("getZoneDetails: ${result}", 3, "debug")
     return result
 }
@@ -1448,7 +1452,7 @@ def getZoneDetails(devId) {
 def getDevicePastEvents(devId, start_time, end_time) {
     // start_time and end_time are Date objects
     LOG("getDevicePastEvents()...", 5, "trace")
-    def result = _httpGet("device/${devId}/event?startTime=${start_time.getTime()}&endTime=${end_time.getTime()}", "open", "getDevicePastEvents")
+    def result = _httpGet("device/${devId}/event?startTime=${start_time.getTime()}&endTime=${end_time.getTime()}", "apiRachio", "getDevicePastEvents")
     LOG("getDeviceEvents: ${result}", 3, "debug")
     return result
 }
@@ -1457,7 +1461,7 @@ def getDeviceFutureEvents(devId, end_time) {
     // end_time is a Date object
     LOG( "getDeviceUpcomingEvents()...", 5, "trace")
     def jsonData = new JsonBuilder("device_id":devId, "hours_ahead":GetHoursUntilDate(end_time))
-    def result = sendJsonGetResponse("events/upcoming", jsonData?.toString(), "closed", "post")
+    def result = sendJsonGetResponse("events/upcoming", jsonData?.toString(), "cloudRestRachio", "post")
     LOG("Upcoming Events: ${result})", 3, "debug")
     return result
 }
@@ -1465,7 +1469,7 @@ def getDeviceFutureEvents(devId, end_time) {
 def getDeviceNextEvent(devId) {
     LOG("getDeviceNextEvent()...", 5, "trace")
     def jsonData = new JsonBuilder("device_id":devId)
-    def result = sendJsonGetResponse("events/next", jsonData?.toString(), "closed", "post")
+    def result = sendJsonGetResponse("events/next", jsonData?.toString(), "cloudRestRachio", "post")
      LOG("Next Event: ${result})", 3, "debug")
     return result
 }
@@ -1473,7 +1477,7 @@ def getDeviceNextEvent(devId) {
 def getDeviceAlerts(devId) {
     LOG("getDeviceAlerts()...", 5, "trace")
     def jsonData = new JsonBuilder("device_id":devId)
-    def result = sendJsonGetResponse("device/getActiveAlerts", jsonData?.toString(), "closed", "post")
+    def result = sendJsonGetResponse("device/getActiveAlerts", jsonData?.toString(), "cloudRestRachio", "post")
     LOG("Active Alerts: ${result})", 3, "debug")
     return result
 }
@@ -1481,8 +1485,10 @@ def getDeviceAlerts(devId) {
 def getDeviceWateringSummary(devId, start_date, end_date) {
     // start_date and end_date are Date objects
     LOG("getDeviceWateringSummary()...", 5, "trace")
-    def jsonData = new JsonBuilder("device_id":devId, "start_date":getDateMap(start_date), "end_date":getDateMap(end_date))
-    def result = sendJsonGetResponse("events/getWateringSummaryByInterval", jsonData?.toString(), "closed", "put")
+    def startMap = [year: start_date[Calendar.YEAR], month: start_date[Calendar.MONTH]+1, day: start_date[Calendar.DATE]]
+    def endMap = [year: end_date[Calendar.YEAR], month: end_date[Calendar.MONTH]+1, day: end_date[Calendar.DATE]]
+    def jsonData = new JsonBuilder("device_id":devId, "start_date":startMap, "end_date":endMap)
+    def result = sendJsonGetResponse("events/getWateringSummaryByInterval", jsonData?.toString(), "cloudRestRachio", "put")
     LOG("Watering Summary: ${result})", 3, "debug")
     return result
 }
@@ -1491,7 +1497,7 @@ def getCalendar(locId, start_time, end_time) {
     // start_date and end_date are Date objects
     LOG("getCalendar()...", 5, "trace")
     def jsonData = new JsonBuilder("location_id":locId, "start_time":formatDateToUtc(start_time), "end_time":formatDateToUtc(end_time))
-    def result = sendJsonGetResponse("location/getCalendarForTimeRange", jsonData?.toString(), "closed", "post")
+    def result = sendJsonGetResponse("location/getCalendarForTimeRange", jsonData?.toString(), "cloudRestRachio", "post")
     LOG("Calendar: ${result})", 3, "debug")
     return result
 }
@@ -1500,8 +1506,10 @@ def getWeather(locId, start_date, end_date) {
     // currently unknown how to get the locId if user only has hose timer, not irrigation controller
     // start_date and end_date are Date objects
     LOG("getWeather()...", 5, "trace")
-    def jsonData = new JsonBuilder("location_id":locId, "start_date":getDateMap(start_date), "end_date":getDateMap(end_date))
-    def result = sendJsonGetResponse("location/getWeatherByLocation", jsonData?.toString(), "closed", "post")
+    def startMap = [year: start_date[Calendar.YEAR], month: start_date[Calendar.MONTH]+1, day: start_date[Calendar.DATE]]
+    def endMap = [year: end_date[Calendar.YEAR], month: end_date[Calendar.MONTH]+1, day: end_date[Calendar.DATE]]
+    def jsonData = new JsonBuilder("location_id":locId, "start_date":startMap, "end_date":endMap)
+    def result = sendJsonGetResponse("location/getWeatherByLocation", jsonData?.toString(), "cloudRestRachio", "post")
     LOG("Weather: ${result})", 3, "debug")
     return result
 }
@@ -1531,7 +1539,7 @@ def getGeopoint(devId, detailsData) {
 def getValveListData(baseStationId) {
     LOG("getValveListData()...", 5, "trace")
     LOG("getValveListData($baseStationId)...", 3, "debug")
-    def result = _httpGet("valve/listValves/${baseStationId}", "closed", "valve/listValves/baseStationID")
+    def result = _httpGet("valve/listValves/${baseStationId}", "cloudRestRachio", "valve/listValves/baseStationID")
     LOG("getValveListData: ${result}", 3, "debug")
     return result  
 }
@@ -1539,7 +1547,7 @@ def getValveListData(baseStationId) {
 def getValveData(valveId) {
     LOG("getValveData()...", 5, "trace")
     LOG("getValveData($valveId)...", 3, "debug")
-    def result = _httpGet("valve/getValve/${valveId}", "closed", "valve/getValve/valveID")
+    def result = _httpGet("valve/getValve/${valveId}", "cloudRestRachio", "valve/getValve/valveID")
     LOG("getValveData: ${result}", 3, "debug")
     return result?.valve
 }
@@ -1547,7 +1555,7 @@ def getValveData(valveId) {
 def getBaseStationValves(baseStationId) {
     LOG("getBaseStationValves()...", 5, "trace")
     LOG("getBaseStationValves($baseStationId)...", 3, "debug")
-    def result = _httpGet("valve/listValves/${baseStationId}", "closed", "valve/listValves/baseStationID")
+    def result = _httpGet("valve/listValves/${baseStationId}", "cloudRestRachio", "valve/listValves/baseStationID")
     LOG("getBaseStationValves: ${result}", 3, "debug")
     return result      
 }
@@ -1555,23 +1563,23 @@ def getBaseStationValves(baseStationId) {
 def getValvePrograms(valveId) {
     LOG("getValvePrograms()...", 5, "trace")
     LOG("getValvePrograms($valveId)...", 3, "debug")
-    def result = _httpGet("program/listPrograms/${valveId}", "closed", "program/listPrograms/valveID")?.programs
+    def result = _httpGet("program/listPrograms/${valveId}", "cloudRestRachio", "program/listPrograms/valveID")?.programs
     LOG("getValvePrograms: ${result}", 3, "debug")
     return result
 }
 
-def getBaseStationDayViews(baseStationId, Date start, Date end) {
+def getBaseStationDayViews(baseStationId, Date start_date, Date end_date) {
     LOG(" getValveDayViews()...", 5, "trace")
     LOG(" getValveDayViews($baseStationId)...", 3, "debug")
     def res = null
-    if (baseStationId && start && end) {
+    if (baseStationId && start_date && end_date) {
         def id = [baseStationId:baseStationId]
-        def startMap = getDateMap(start)
-        def endMap = getDateMap(end)
+        def startMap = [year: start_date[Calendar.YEAR], month: start_date[Calendar.MONTH]+1, day: start_date[Calendar.DATE]]
+        def endMap = [year: end_date[Calendar.YEAR], month: end_date[Calendar.MONTH]+1, day: end_date[Calendar.DATE]]
         def jsonData = new JsonBuilder("start":startMap, "end":endMap, "resourceId":id)
         LOG("getValveDayViews jsonData: ${jsonData}", 3, "debug")
-        res = sendJsonGetResponse("summary/getValveDayViews", jsonData?.toString(), "closed", "post")
-    } else { LOG("getValveDayViews Missing baseStationId, start date, or end date... ${baseStationId} | ${start} | ${end}", 1, "error") }
+        res = sendJsonGetResponse("summary/getValveDayViews", jsonData?.toString(), "cloudRestRachio", "post")
+    } else { LOG("getValveDayViews Missing baseStationId, start date, or end date... ${baseStationId} | ${start_date} | ${end_date}", 1, "error") }
     return res
 }
 
@@ -1761,7 +1769,7 @@ def rachioIrrigationReceiveHandler() {
                     poll(dev, "irrigationDevice")
                 } else { poll(null, "irrigationDevice") }
             }
-            else LOG("Ignoring duplicate webhook eventId ${reqData?.eventId}", 1, "warn")
+            else LOG("Ignoring duplicate webhook eventId ${reqData?.eventId}", 4, "info")
         }
     }
     else LOG("Invalid Signature on received webhook. Ignoring. Received data: ${reqData}", 1, "warn")
@@ -1789,7 +1797,7 @@ def rachioHoseTimerReceiveHandler() {
                     poll(dev, "hoseTimerDevice")
                 } else { poll(null, "hoseTimerDevice") }
             }
-            else LOG("Ignoring duplicate webhook eventId ${reqData?.eventId}", 1, "warn")
+            else LOG("Ignoring duplicate webhook eventId ${reqData?.eventId}", 4, "info")
         }
     }
     else LOG("Invalid Signature on received webhook. Ignoring. Received data: ${reqData}", 1, "warn")
@@ -1833,7 +1841,7 @@ def rachioHoseTimerProgramReceiveHandler() {
                 }
 
             }
-            else LOG("Ignoring duplicate webhook eventId ${reqData?.eventId}", 1, "warn")
+            else LOG("Ignoring duplicate webhook eventId ${reqData?.eventId}", 4, "info")
         }
     }
     else LOG("Invalid Signature on received webhook. Ignoring. Received data: ${reqData}", 1, "warn")
@@ -1887,21 +1895,28 @@ def isWebhookSignatureValid(responseBody, responseSignature) {
 
 def delayedPoll(data) {
     LOG("delayedPoll...", 5, "trace")
-    poll(data.child, data.type)
+    def child = getChildDevice(data.childDni)
+    poll(child, data.type)
 }
+
 
 //Section4: polling device info methods
 void poll(child=null, type=null) {
     LOG("poll()...", 5, "trace")
     def lastPollSec = getTimeSinceInSeconds(atomicState?.lastPollDt)
-    LOG("${app.label} -- Polling API for Latest Data -- Last Update was ($lastPollSec seconds ago)${type ? " | Reason: [$type]" : ""}${state.apiCallsLeft ? " | API Calls Left Last Reported by Rachio: api.rach.io (" + state.apiCallsLeft.open + ") cloud-rest.rach.io (" + state.apiCallsLeft.closed + ")" : ""}", 4, "info")
+    LOG("${app.label} -- Polling API for Latest Data -- Last Update was ($lastPollSec seconds ago)${type ? " | Reason: [$type]" : ""}${state.apiCallsLeft ?: " | API Calls Left Last Reported by Rachio: " + state.apiCallsLeft}", 4, "info")
     if(lastPollSec < 2) {
-        runIn(3, "delayedPoll", [overwrite: true, data: [child:child, type:type]])
+        runIn(3, "delayedPoll", [overwrite: true, data: [childDni: child?.deviceNetworkId ?: null, type: type]])
         LOG("Delaying poll... It's too soon to request new data", 3, "debug")
         return
     }
 
     def selectedDevices = atomicState?.selectedDevices
+
+    if (child && !child?.hasProperty("deviceNetworkId")) {
+        def tryDni = child?.key ?: child?.id ?: child?.label
+        child = getChildDevice(tryDni)
+    }
 
     // poll a specific device and all children of that specific device
     if (child != null && type != null) {
@@ -2001,16 +2016,43 @@ void poll(child=null, type=null) {
     atomicState?.lastPollDt = now()
 }
 
+/*
 def delayedPollChild(data) {
     LOG("delayedPollChild()...", 5, "trace")
     pollChild(data.childDev, data.type, data.parentData)
 }
+*/
 
 def pollChild(childDev, type, parentData = null) {
     LOG("pollChild()...", 5, "trace")
     LOG("updating child device ${childDev} of type ${type}", 3, "debug")
+
+        // Log basic child device info
+    LOG("→ childDev = ${childDev}", 3, "debug")
+    def className = getObjectClassName(childDev)
+    LOG("childDev class name: ${className}", 4, "debug")
+    LOG("→ childDev DNI = ${childDev?.deviceNetworkId}", 3, "debug")
+    
+    // Log type
+    LOG("→ type = ${type}", 3, "debug")
+
+    // Log parentData if available
+    if (parentData != null) {
+        LOG("→ parentData = ${parentData}", 4, "debug")
+    } else {
+        LOG("→ parentData = null", 4, "debug")
+    }
+    
     def returnData = null
     try {
+        if (!childDev?.hasProperty("deviceNetworkId")) {
+            def tryDni = childDev?.key ?: childDev?.id ?: childDev?.label
+            childDev = getChildDevice(tryDni)
+        }
+        if (!childDev) {
+            LOG("pollChild: Could not resolve child device", 2, "warn")
+            return
+        }
         if(childDev && type) {
             String dni = childDev?.device?.deviceNetworkId
             String devLabel = childDev?.label
@@ -2083,8 +2125,12 @@ def pollChild(childDev, type, parentData = null) {
             }
             else if (type == "hoseTimerDevice") {
                 def today = new Date()
-                def startDate = offsetDateByNumDays(today, -10)
-                def endDate = offsetDateByNumDays(today, 10)
+                def startDate = new Date()
+                startDate.set(hourOfDay: 0, minute: 0, second: 0)
+                startDate = startDate - 10
+                def endDate = new Date()
+                endDate.set(hourOfDay: 23, minute: 59, second: 59)
+                endDate = endDate + 10
                 selectedDevices?.baseStations.each { baseStation ->
                     if(dni == baseStation?.key) {
                         LOG("Polling Wifi Hub ${baseStation?.key}", 3, "debug")
@@ -2129,8 +2175,25 @@ def pollChild(childDev, type, parentData = null) {
 
             }
             if (childDev && data != []) {
-                childDev?.generateEvent(data)
+                def actualChild = null
+
+                // Handle if childDev is a map instead of a real device
+                if (childDev?.hasProperty("deviceNetworkId")) {
+                    actualChild = childDev
+                } else {
+                    def tryDni = childDev?.device?.deviceNetworkId ?: childDev?.key ?: childDev?.id
+                    actualChild = getChildDevice(tryDni)
+                }
+
+                if (actualChild != null && actualChild.hasProperty("deviceNetworkId")) {
+                    actualChild.generateEvent(data)
+                } else {
+                    LOG("No valid child device or generateEvent() missing. childDev = ${childDev}", 1, "warn")
+                    LOG("childDev keys: ${childDev instanceof Map ? childDev?.keySet() : 'not a Map'}", 5, "trace")
+                    LOG("actualChild toString(): ${actualChild?.toString()}", 5, "trace")
+                }
             }
+
             else { LOG("pollChild cannot update child because there was a problem generating data for the update...", 1, "warn") }
         } else { LOG("pollChild cannot update child because it is missing the required parameters...", 1, "warn") }
         
@@ -2206,12 +2269,12 @@ def setValue(child, deviceId, newValue) {
     return result
 }
 
-def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", standyByDevice = true) {
+def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="apiRachio", standyByDevice = true) {
     LOG("SendJson()...)", 5, "trace")
     LOG("SendJson: ${jsonBody}", 3, "debug")
     def returnStatus = false
     
-    def baseURI = (endpoint == "open") ? getApiEndpoint() + "/1/public" : getClosedApiEndpoint()
+    def baseURI = getRachioEndpoint(endpoint)
     LOG("sendJson URL: ${baseURI}/${subUri}", 3, "debug")
     def cmdParams = [
         uri: "${baseURI}/${subUri}",
@@ -2220,8 +2283,8 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", stan
         body: jsonBody
     ]
 
-    updateAPICount(endpoint)
-    logAPICall(subUri, endpoint)
+    updateAPICount()
+    logAPICall(subUri)
 
     try{
         if(standyByDevice && !standbyCmd && settings?.pauseInStandby == true && deviceId && atomicState?.inStandbyModeMap[deviceId] == true) {
@@ -2235,8 +2298,8 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", stan
                 def headers = resp?.getAllHeaders()
                 def limitRemaining = headers?.find { it.getName() == 'X-RateLimit-Remaining' }
                 if (headers && limitRemaining) {
-                    if (!state.apiCallsLeft) state.apiCallsLeft = [closed: 1700, open: 1700]
-                    state.apiCallsLeft[endpoint] = limitRemaining.value
+                    if (!state.apiCallsLeft || state.apiCallsLeft instanceof Map) state.apiCallsLeft = 3500
+                    if (limitRemaining?.value != null) state.apiCallsLeft = limitRemaining.value
                 }
                 returnStatus = true
                 //runIn(4, "poll", [overwrite: true])
@@ -2258,13 +2321,13 @@ def sendJson(subUri, jsonBody, deviceId, standbyCmd=false, endpoint="open", stan
     return returnStatus
 }
 
-def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
+def sendJsonGetResponse(subUri, jsonBody, endpoint="apiRachio", type=null) {
     LOG("SendJsonGetResponse()...", 5, "trace")
     LOG("Send JSON With Response: ${jsonBody}", 3, "debug")
     def returnStatus = false
     def returnData = null
     def response = null
-    def baseURI = (endpoint == "open") ? getApiEndpoint() + "/1/public" : getClosedApiEndpoint()
+    def baseURI = getRachioEndpoint(endpoint)
     def cmdParams = [
         uri: "${baseURI}/${subUri}",
         requestContentType: "application/x-www-form-urlencoded; charset=utf-8",
@@ -2273,8 +2336,8 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
         timeout: 30
     ]
 
-    updateAPICount(endpoint)
-    logAPICall(subUri, endpoint)
+    updateAPICount()
+    logAPICall(subUri)
 
     try{
         if(type == "post") {
@@ -2293,8 +2356,8 @@ def sendJsonGetResponse(subUri, jsonBody, endpoint="open", type=null) {
                 def headers = resp?.getAllHeaders()
                 def limitRemaining = headers?.find { it.getName() == 'X-RateLimit-Remaining' }
                 if (headers && limitRemaining) {
-                    if (!state.apiCallsLeft) state.apiCallsLeft = [closed: 1700, open: 1700]
-                    state.apiCallsLeft[endpoint] = limitRemaining.value
+                    if (!state.apiCallsLeft || state.apiCallsLeft instanceof Map) state.apiCallsLeft = 3500
+                    if (limitRemaining?.value != null) state.apiCallsLeft = limitRemaining.value
                 }
                 returnStatus = true
                 //runIn(4, "poll", [overwrite: true])
@@ -2322,10 +2385,8 @@ def dailyAPINotification() {
     def lastResetDate = null
     if (state.dailyAPICountResetDate) lastResetDate = new Date(state.dailyAPICountResetDate)
     if (lastResetDate && lastResetDate.after(yesterday)) {   // if reset within the last 24 hours    
-        if (state.dailyAPICount.open && state.dailyAPICount.open > 1600) LOG("Approaching daily API Limit of 1700 for Open endpoint. Averaging ${state.avgAPICallsPerDay.open} API calls per day.", 1, "warn")
-        else if (state.dailyAPICount.open && state.dailyAPICount.open >= 1700) LOG("Daily API Limit of 1700 reached for Open endpoint.  Averaging ${state.avgAPICallsPerDay.open} API calls per day.", 1, "error")
-        if (state.dailyAPICount.closed && state.dailyAPICount.closed > 1600) LOG("Approaching daily API Limit of 1700 for Open endpoint. Averaging ${state.avgAPICallsPerDay.closed} API calls per day.", 1, "warn")
-        else if (state.dailyAPICount.closed && state.dailyAPICount.closed >= 1700) LOG("Daily API Limit of 1700 reached for Open endpoint.  Averaging ${state.avgAPICallsPerDay.closed} API calls per day.", 1, "error")
+        if (state.dailyAPICount && state.dailyAPICount > 3400) LOG("Approaching daily API Limit of 3500. Averaging ${state.avgAPICallsPerDay} API calls per day.", 1, "warn")
+        else if (state.dailyAPICount && state.dailyAPICount >= 3500) LOG("Daily API Limit of 3500 reached.  Averaging ${state.avgAPICallsPerDay} API calls per day.", 1, "error")
     }
 }
 
@@ -2456,11 +2517,17 @@ def getChildValveName()	{ return "Rachio Hose Timer" }
 // def getServerUrl()		{ return "https://graph.api.smartthings.com" }    // commented out in port - doesn't seem to be needed?
 def getShardUrl()		{ return getApiServerUrl() }
 def getAppEndpoint()	{ return "https://app.rach.io" }
-def getApiEndpoint()	{ return "https://api.rach.io" }
-def getClosedApiEndpoint()	{ return "https://cloud-rest.rach.io" }
+
 def getSupportUrl() 	{ return "http://support.rachio.com/" }
 def getCommunityUrl() 	{ return "http://community.rachio.com/" }
 def rootApiUrl() { return "https://api.rach.io/1/public" }
+
+def getRachioEndpoint(endpoint) {
+    def result = null
+    if (endpoint == "cloudRestRachio") result = "https://cloud-rest.rach.io"
+    else if (endpoint == "apiRachio") result = "https://api.rach.io/1/public"
+    return result
+}
 
 def debugEventFromParent(child, message) {
     child.sendEvent("name":"debugEventFromParent", "value":message, "description":message, displayed: true, isStateChange: true)
@@ -2547,13 +2614,13 @@ def setRainDelay(child, deviceId, delayVal) {
 
 def isWatering(devId) {
     LOG("isWatering()...", 5, "trace")
-    def res = _httpGet("device/${devId}/current_schedule", "open", "device/deviceID/current_schedule");
+    def res = _httpGet("device/${devId}/current_schedule", "apiRachio", "device/deviceID/current_schedule");
     def result = (res && res?.status) ? true : false
     return result
 }
 
 def getDeviceStatus(devId) {
-    def result = _httpGet("device/${devId}", "open", "device/deviceID")
+    def result = _httpGet("device/${devId}", "apiRachio", "device/deviceID")
     return result
 }
 
@@ -2617,13 +2684,13 @@ def resumeZoneRun(child, devId) {
 //Required by child devices
 def getZones(device) {
     LOG("getZones(${device.label})...", 5, "trace")
-    def res = _httpGet("device/${device?.deviceNetworkId}", "open", "device/deviceID")
+    def res = _httpGet("device/${device?.deviceNetworkId}", "apiRachio", "device/deviceID")
     return (!res) ? null : res?.zones
 }
 
 def getScheduleRuleInfo(schedId) {
     LOG("getScheduleRuleInfo...", 5, "trace")
-    def result = _httpGet("schedulerule/${schedId}", "open", "schedulerule/scheduleID")
+    def result = _httpGet("schedulerule/${schedId}", "apiRachio", "schedulerule/scheduleID")
     return result
 }
 
@@ -2704,7 +2771,7 @@ def startValve(child, secs) {
     if (valveId && secs) {
         def jsonData = new JsonBuilder("valveId":valveId, "durationSeconds":secs)
         LOG("startValve jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("valve/startWatering", jsonData?.toString(), valveId, false, "closed", false)
+        res = sendJson("valve/startWatering", jsonData?.toString(), valveId, false, "cloudRestRachio", false)
     } else { LOG("startValve Missing valveId or duration... ${valveId} | ${secs}", 1, "error") }
     return res
 }
@@ -2738,7 +2805,7 @@ def stopValve(child) {
     if (valveId) {
         def jsonData = new JsonBuilder("valveId":valveId)
         LOG("stopValve jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("valve/stopWatering", jsonData?.toString(), valveId, false, "closed", false)
+        res = sendJson("valve/stopWatering", jsonData?.toString(), valveId, false, "cloudRestRachio", false)
     } else { LOG("stopValve Missing valveId... ${valveId}", 1, "error") }
     return res
 }
@@ -2805,7 +2872,7 @@ def setValveDefaultRunTime(child, secs) {
     if (valveId && secs) {
         def jsonData = new JsonBuilder("valveId":valveId, "defaultRuntimeSeconds":secs)
         LOG("setValveDefaultRunTime jsonData: ${jsonData}", 3, "debug")
-        res = sendJson("valve/setDefaultRuntime", jsonData?.toString(), valveId, false, "closed", false)
+        res = sendJson("valve/setDefaultRuntime", jsonData?.toString(), valveId, false, "cloudRestRachio", false)
     } else { LOG("setValveDefaultRunTime Missing valveId or duration... ${valveId} | ${secs}", 1, "error") }
     return res
 }
@@ -2817,7 +2884,7 @@ def createHoseTimerProgramSkip(programId, timestamp) {
     if (programId && timestamp) {
         def jsonData = new JsonBuilder("programId":programId, "timestamp":timestamp)
         LOG("createHoseTimerProgramSkip jsonData: ${jsonData}", 3, "debug")
-        res = sendJsonGetResponse("program/createSkipOverrides", jsonData?.toString(), "closed", "post")
+        res = sendJsonGetResponse("program/createSkipOverrides", jsonData?.toString(), "cloudRestRachio", "post")
     } else { LOG("createHoseTimerProgramSkip Missing programId or timestamp... ${programId} | ${timestamp}", 1, "error") }
     return res
 }
@@ -2829,7 +2896,7 @@ def deleteHoseTimerProgramSkip(programId, timestamp) {
     if (programId && timestamp) {
         def jsonData = new JsonBuilder("programId":programId, "timestamp":timestamp)
         LOG("deleteHoseTimerProgramSkip jsonData: ${jsonData}", 3, "debug")
-        res = sendJsonGetResponse("program/deleteSkipOverrides", jsonData?.toString(), "closed", "post")
+        res = sendJsonGetResponse("program/deleteSkipOverrides", jsonData?.toString(), "cloudRestRachio", "post")
     } else { LOG("deleteHoseTimerProgramSkip Missing programId or timestamp... ${programId} | ${timestamp}", 1, "error") }
     return res
 }
@@ -2915,8 +2982,18 @@ def getDashboardParameters(inputDate, today, yesterday, sevenDaysLater) {
 
 def buildDashboard() {
     LOG("buildDashboard()...", 5, "trace")
-    Date startDate = getDashboardStartDate()
-    Date endDate = getDashboardEndDate()
+
+    Date startDate = new Date()
+    startDate.set(hourOfDay: 0, minute: 0, second: 0)
+    def numPastDaysDashboardSetting = (numPastDaysDashboard == null) ? numPastDaysDashboardDefault : numPastDaysDashboard
+    def intDays = (int) numPastDaysDashboardSetting
+    startDate = startDate - intDays
+
+    Date endDate = new Date()
+    endDate.set(hourOfDay: 23, minute: 59, second: 59)
+    def numFutureDaysDashboardSetting = (numFutureDaysDashboard == null) ? numFutureDaysDashboardDefault : numFutureDaysDashboard
+    intDays = (int) numFutureDaysDashboardSetting
+    endDate = endDate + intDays
 
     def today = new Date()
     today = today.clearTime()
@@ -2930,7 +3007,7 @@ def buildDashboard() {
 
     // set up parameters for dashboard days
     for (date in startDate..endDate) {
-        def dateIndex = getDateIndex(date)
+        def dateIndex = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
         contentMap[dateIndex] = [:]
         contentMap[dateIndex].parameters = getDashboardParameters(date, today, yesterday, sevenDaysLater)
         contentMap[dateIndex].rachioIcons = []
@@ -2959,8 +3036,8 @@ def buildDashboard() {
             def weatherData = getWeather(locationId, startDate, endDate)?.weatherReadings
 
             for (date in startDate..endDate) {
-                def dateIndex = getDateIndex(date)
-                def dateMap = getDateMap(date)
+                def dateIndex = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
+                def dateMap = [year: date[Calendar.YEAR], month: date[Calendar.MONTH]+1, day: date[Calendar.DATE]]
                 def weather = weatherData?.find { it?.date == dateMap }
                 if (weather.precipProbability > 0) {
                     contentMap[dateIndex].precipPercent = ((int) (weather.precipProbability * 100)).toString() + "%"
@@ -3027,7 +3104,7 @@ def buildDashboard() {
                     LOG("Got Open-Meteo Weather response: ${resp?.data}", 3, "debug")
                     def weatherIndex = 0
                     for (date in startDate..endDate) {
-                        def dateIndex = getDateIndex(date)
+                        def dateIndex = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
                         def weather = [precipPercent: resp?.data.daily.precipitation_probability_max[weatherIndex], precipAmount: resp?.data.daily.precipitation_sum[weatherIndex], highTemp: resp?.data.daily.temperature_2m_max[weatherIndex], lowTemp: resp?.data.daily.temperature_2m_min[weatherIndex], code: resp?.data.daily.weathercode[weatherIndex]]
                         LOG("Got Open-Meteo Weather for day ${date}: ${weather}", 3, "debug")
                         if (weather.precipPercent > 0) {
@@ -3065,8 +3142,8 @@ def buildDashboard() {
         def futureEventsData = getDeviceFutureEvents(devId, endDate)?.entries
 
         for (date in startDate..endDate) {
-            def dateIndex = getDateIndex(date)
-            def dateMap = getDateMap(date)
+            def dateIndex = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
+            def dateMap = [year: date[Calendar.YEAR], month: date[Calendar.MONTH]+1, day: date[Calendar.DATE]]
             
             def pastEvents = pastEventsData?.findAll { getDateMap(new Date(it?.eventDate)) == dateMap }
             LOG("Past Events for ${date} are: ${pastEvents}", 4, "debug")
@@ -3085,8 +3162,8 @@ def buildDashboard() {
         LOG("Base Station Day View for valve ${hoseTimerValveID} = ${baseStationDayView}", 4, "debug")
 
         for (date in startDate..endDate) {
-            def dateIndex = getDateIndex(date)
-            def dateMap = getDateMap(date)
+            def dateIndex = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
+            def dateMap = [year: date[Calendar.YEAR], month: date[Calendar.MONTH]+1, day: date[Calendar.DATE]]
             contentMap[dateIndex].rachioIcons = getHoseTimerIcons(baseStationDayViews, dateMap, hoseTimerValveID)
             if (contentMap[dateIndex].rachioIcons != null && contentMap[dateIndex].rachioIcons != []) anyRachioIcons = true
         }
@@ -3106,8 +3183,8 @@ def buildDashboard() {
                 def futureEventsData = getDeviceFutureEvents(devId, endDate)?.entries
 
                 for (date in startDate..endDate) {
-                    def dateIndex = getDateIndex(date)
-                    def dateMap = getDateMap(date)
+                    def dateIndex = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
+                    def dateMap = [year: date[Calendar.YEAR], month: date[Calendar.MONTH]+1, day: date[Calendar.DATE]]
                     
                     def pastEvents = pastEventsData?.findAll { getDateMap(new Date(it?.eventDate)) == dateMap }
                     LOG("Past Events for ${date} are: ${pastEvents}", 4, "debug")
@@ -3124,8 +3201,8 @@ def buildDashboard() {
                 def baseStationDayViews = getBaseStationDayViews(baseStation?.key, startDate, endDate)?.valveDayViews
 
                 for (date in startDate..endDate) {
-                    def dateIndex = getDateIndex(date)
-                    def dateMap = getDateMap(date)
+                    def dateIndex = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
+                    def dateMap = [year: date[Calendar.YEAR], month: date[Calendar.MONTH]+1, day: date[Calendar.DATE]]
                     contentMap[dateIndex].rachioIcons.addAll(getHoseTimerIcons(baseStationDayViews, dateMap))
                     if (contentMap[dateIndex].rachioIcons != null && contentMap[dateIndex].rachioIcons != []) anyRachioIcons = true
                 }        
@@ -3135,8 +3212,6 @@ def buildDashboard() {
 
     LOG("Dashboard ContentMap = ${contentMap}", 3, "debug")
     
-    def numPastDaysDashboardSetting = (numPastDaysDashboard == null) ? numPastDaysDashboardDefault : numPastDaysDashboard
-    def numFutureDaysDashboardSetting = (numFutureDaysDashboard == null) ? numFutureDaysDashboardDefault : numFutureDaysDashboard
     def showPrecipPercentSetting = (showPrecipPercent == null) ? showPrecipPercentDefault : showPrecipPercent
     def showPrecipAmountSetting = (showPrecipAmount == null) ? showPrecipAmountDefault : showPrecipAmount
     def showTempSetting = (showTemp == null) ? showTempDefault : showTemp
@@ -3149,7 +3224,7 @@ def buildDashboard() {
     def extraHorizontalSpaceSetting = 0
 
     colorScheme = getColorScheme(colorSchemeSelectionSetting)
-    def iconPack = getIconPreference()
+    def iconPack = (settings["iconSchemeSelection"] != null) ? settings["iconSchemeSelection"] : "Filled"
     def voffset = iconPack == "Outline" ? '-2' : '0'
     def rachioIconLocation = getRachioIconLocation()
 
@@ -3173,7 +3248,7 @@ def buildDashboard() {
     svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:' + colorScheme.skipStrikethroughColor + '} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} . cloudPredicted:{fill:' + colorScheme.cloudPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip{fill:' + colorScheme.freezeSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:10px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style>'
 
     for (date in startDate..endDate) {
-        def dateIndex = getDateIndex(date)
+        def dateIndex = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
         contentMap[dateIndex].rachioIcons.each { 
             if (it.style) { svg += it.style }
         }
@@ -3186,8 +3261,8 @@ def buildDashboard() {
     
     def i = 0
     for (date in startDate..endDate) {
-        def dateIndex = getDateIndex(date)
-        def dateMap = getDateMap(date)
+        def dateIndex = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
+        def dateMap = [year: date[Calendar.YEAR], month: date[Calendar.MONTH]+1, day: date[Calendar.DATE]]
         
         // Build SVG Body      
         Integer halfColumnWidth = Math.ceil(columnWidth / 2)
@@ -3283,16 +3358,10 @@ def buildDashboard() {
     render contentType: "image/svg+xml", data: svg, status: 200
 }
 
-
-def getIconPreference() {
-    LOG("getIconPreference()...", 5, "trace")
-    return (settings["iconSchemeSelection"] != null) ? settings["iconSchemeSelection"] : "Filled"
-}
-
 def getWeatherIcon(weatherIconText) {
     LOG("getWeatherIcon(}", 5, "trace")
     def weatherIcon = null
-    def iconPack = getIconPreference()
+    def iconPack = (settings["iconSchemeSelection"] != null) ? settings["iconSchemeSelection"] : "Filled"
     if (iconPack == "Filled") {
         if (weatherIconText == 'CHANCE_FLURRIES') { weatherIcon = chanceflurries }
         else if (weatherIconText == 'CHANCE_RAIN') { weatherIcon = chancerain }
@@ -3344,7 +3413,7 @@ def getWeatherIcon(weatherIconText) {
 def getWeatherIconFromOpenMeteo(weatherCode) {
 LOG("getWeatherIconFromOpenMeteo()", 5, "trace")
     def weatherIcon = null
-    def iconPack = getIconPreference()
+    def iconPack = (settings["iconSchemeSelection"] != null) ? settings["iconSchemeSelection"] : "Filled"
     if (iconPack == "Filled") {
         if (weatherCode == 77 || weatherCode == 71 || weatherCode == 85) { weatherIcon = iconPack == "Filled" ? chanceflurries : chanceflurries2 }
         else if (weatherCode == 51 || weatherCode == 61 || weatherCode == 80 || weatherCode == 53) { weatherIcon = iconPack == "Filled" ? chancerain : chancerain2 }
@@ -3391,7 +3460,7 @@ def getIrrigationIcons(pastEvents, futureEvents, rainSensorState, schedules) {
     LOG("getIrrigationIcons()...", 5, "trace")
     def irrigationIcons = []
     def eventsList = []
-    def iconPack = getIconPreference()
+    def iconPack = (settings["iconSchemeSelection"] != null) ? settings["iconSchemeSelection"] : "Filled"
 
     
     if (pastEvents && !pastEvents.isEmpty()) {
@@ -3553,7 +3622,7 @@ def getHoseTimerIcons(baseStationDayViews, dateMap, valveIdFilter = null) {
     LOG("getHoseTimerIcons()...", 5, "trace")
     LOG("getHoseTimerIcons(${baseStationDayViews}, {dateMap}, {valveIdFilter})....", 3, "debug")
     def hoseTimerIcons = []
-    def iconPack = getIconPreference()
+    def iconPack = (settings["iconSchemeSelection"] != null) ? settings["iconSchemeSelection"] : "Filled"
 
     if (!baseStationDayViews?.isEmpty()) {
         baseStationDayViews.each { day ->
@@ -3754,7 +3823,7 @@ void LOG(String message, Integer level=3, String logType="debug") {
     String dbg=settings.debugLevel == null ? "2" : settings.debugLevel
 	Integer dbgLevel = dbg.toInteger()
 	if (logType == "error") {
-		String a=getTimestamp()
+		String a = new Date().format("yyyy-MM-dd HH:mm:ss z")
 		atomicState.lastLOGerror="${message} @ "+a
 		atomicState.LastLOGerrorDate=a
 	} 
@@ -3784,7 +3853,7 @@ void LOG(String message, Integer level=3, String logType="debug") {
     else if (logType == "warn") log.warn(message)
 
     if (logToFile && logTypesToFile && logTypesToFile.contains(logType) && fileManagerDevice) {
-        String a=getTimestamp()
+        String a = new Date().format("yyyy-MM-dd HH:mm:ss z")
         if (purgeFile) {
             fileManagerDevice.writeFile(fName, a + ": " + message)
             app.updateSetting('purgeFile', false)
@@ -3793,17 +3862,17 @@ void LOG(String message, Integer level=3, String logType="debug") {
     }
 }
 
-def logAPICall(apiCall, endpoint) {
+def logAPICall(apiCall) {
     if (logToFile && logTypesToFile && logTypesToFile.contains("API Calls") && fileManagerDevice) {
-        String a=getTimestamp()
+        String a = new Date().format("yyyy-MM-dd HH:mm:ss z")
 
         def apiCountStr = ""
-        if (state.apiCallsLeft && state.apiCallsLeft[endpoint]) {
-            String leftStr = state.apiCallsLeft[endpoint].toString()
+        if (state.apiCallsLeft != null) {
+            String leftStr = state.apiCallsLeft.toString()
            def formattedCount = leftStr.padLeft(4,"0")
             apiCountStr = " (" + formattedCount + " calls left) "
         }
-        def logMsg = a + ": " + "[" + (endpoint == 'closed' ? 'closed' : 'open  ') + "]" + apiCountStr + apiCall
+        def logMsg = a + ": " + apiCountStr + apiCall
         if (purgeFile) {
             fileManagerDevice.writeFile(fName, logMsg)
             app.updateSetting('purgeFile', false)
@@ -3812,14 +3881,13 @@ def logAPICall(apiCall, endpoint) {
     }    
     if (logAPICallCountToState) {
         if (purgeAPICallCountInState) {
-            state.apiCalls = null
+            state.apiCalls = [:]
             app.updateSetting('purgeAPICallCountInState', false)
         }
-        if (!state.apiCalls) state.apiCalls = [closed: null, open: null]
-        if (!state.apiCalls[endpoint]) state.apiCalls[endpoint] = [:]
+        if (!state.apiCalls || state.apiCalls.containsKey("closed")) state.apiCalls = [:]
         if (apiCall) {
-            if (!state.apiCalls[endpoint][apiCall]) state.apiCalls[endpoint][apiCall] = 1
-            else state.apiCalls[endpoint][apiCall]++
+            if (!state.apiCalls[apiCall]) state.apiCalls[apiCall] = 1
+            else state.apiCalls[apiCall]++
         }
     }
 }
