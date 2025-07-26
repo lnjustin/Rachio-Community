@@ -5,7 +5,7 @@
  *  Copyright\u00A9 2024 JustinL
  *
  *  V1.1.1 written by Anthony Santilli (@tonesto7)
- *  Ported to Hubitat and Enhanced to V2.0 by Justin Leonard (@JustinL)
+ *  Ported to Hubitat and Enhanced to V2.0 by JustinL
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -554,7 +554,9 @@ def refresh() {
 
 void poll() {
     LOG("Requested Parent Poll...", 5, "trace");
-    parent?.poll(this, "irrigationDevice")
+    devId = device?.deviceNetworkId.toString()
+    childDevice = getChildDevice(devId)
+    parent?.poll(childDevice, "irrigationDevice")
 }
 
 def incZoneWaterTime() {
