@@ -3245,7 +3245,7 @@ def buildDashboard() {
 
     svg = '<svg version="1.1" id="weather" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="100%" viewBox="0 0 ' + Integer.toString(svgWidth) + ' ' + Integer.toString(svgHeight) + '"  xml:space="preserve">'
     
-    svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:' + colorScheme.skipStrikethroughColor + '} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} . cloudPredicted:{fill:' + colorScheme.cloudPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip{fill:' + colorScheme.freezeSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:100%;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:10px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style>'
+    svg += '<style type="text/css"> .cloud{fill:' + colorScheme.cloudColor + ';} .light{fill:' + colorScheme.lightColor + ';} .precip{fill:' + colorScheme.precipColor + ';} .frozenPrecip{fill:' + colorScheme.frozenPrecipColor + ';} .rainDropWatering{fill:' + colorScheme.rainDropWateringColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropSkip{fill:' + colorScheme.rainDropSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .skipStrikethrough{fill:' + colorScheme.skipStrikethroughColor + '} .saturatedSoil{fill:' + colorScheme.saturatedSoilColor + ';stroke:' + colorScheme.strokeColor + ';} .rainDropsPredicted{fill:' + colorScheme.rainDropsPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} . cloudPredicted:{fill:' + colorScheme.cloudPredictedColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip{fill:' + colorScheme.freezeSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .freezeSkip1{fill:' + colorScheme.freezeSkip1Color + ';stroke:' + colorScheme.strokeColor + ';} .windSkip{fill:' + colorScheme.windSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .dayText{fill:' + colorScheme.dayTextColor + ';} .rainSensorSkip{fill:' + colorScheme.rainSensorSkipColor + ';stroke:' + colorScheme.strokeColor + ';} .precipText{fill:' + colorScheme.precipTextColor + '; word-spacing:110%;} .tempText{fill:url(#bicolored); word-spacing:normal;} .largeFontClass {font-family: "Oswald", sans-serif; text-transform: uppercase; font-size:12px;} .smallFontClass {font-family:"Oswald", sans-serif;font-size:10px;} .fontWeightClass {font-weight:' + fontWeightSetting + ';} </style>'
 
     for (date in startDate..endDate) {
         def dateIndex = "year" + date[Calendar.YEAR] + "month" + (date[Calendar.MONTH]+1) + "day" + date[Calendar.DATE]
@@ -3316,7 +3316,7 @@ def buildDashboard() {
         
         if (showTempSetting) {  // only show % for dates that are on or after today
             tempBaseY = 68
-            def tempText = (settings["tempFormat"] && settings["tempFormat"] == "lohi") ? (contentMap[dateIndex].lowTemp + ' | ' +  contentMap[dateIndex].highTemp) : (contentMap[dateIndex].highTemp + ' | ' +  contentMap[dateIndex].lowTemp)
+            def tempText = (settings["tempFormat"] && settings["tempFormat"] == "lohi") ? (contentMap[dateIndex].lowTemp + '° | ' +  contentMap[dateIndex].highTemp + '°') : (contentMap[dateIndex].highTemp + '° | ' +  contentMap[dateIndex].lowTemp + '°')
             svg += '<text x="' + Integer.toString(halfColumnWidth) + '" y="' + Long.toString(tempBaseY + extraVerticalSpaceSetting) + '" text-anchor="middle" class="tempText largeFontClass fontWeightClass">' + tempText + '</text>'
 
         }
@@ -3422,7 +3422,7 @@ LOG("getWeatherIconFromOpenMeteo()", 5, "trace")
         else if (weatherCode == 1) { weatherIcon = iconPack == "Filled" ? clear : clear2 }
         else if (weatherCode == 3) { weatherIcon = iconPack == "Filled" ? cloudy : cloudy2}
         else if (weatherCode == 45 || weatherCode == 48) { weatherIcon = iconPack == "Filled" ? fog : fog2 }
-        else if (weatherCode == 55 || weatherCode == 63 || weatherCode == 65 || weaherCode == 81 || weatherCode == 82) { weatherIcon = iconPack == "Filled" ? rain : rain2 }
+        else if (weatherCode == 55 || weatherCode == 63 || weatherCode == 65 || weatherCode == 81 || weatherCode == 82) { weatherIcon = iconPack == "Filled" ? rain : rain2 }
         else if (weatherCode == 57 || weatherCode == 67) { weatherIcon = iconPack == "Filled" ? sleet : sleet2 }
         else if (weatherCode == 73 || weatherCode == 75 || weatherCode == 86) { weatherIcon = iconPack == "Filled" ? snow : snow2 }
         else if (weatherCode == 95 || weatherCode == 96 || weatherCode == 99) { weatherIcon = iconPack == "Filled" ? tstorms : tstorms2 }
@@ -4034,3 +4034,4 @@ genericSkip2 = '<g transform="translate(0,0)"><path   id="path2"   d="M 14.98437
 
     
     
+
